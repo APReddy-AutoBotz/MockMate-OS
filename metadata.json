@@ -1,0 +1,7 @@
+{
+  "name": "Copy of MockMate: AI Interview Coach Before Backend",
+  "description": "A voice-first mock interview application that provides live, AI-driven feedback and rubric-based scoring to help users improve their communication and technical skills.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

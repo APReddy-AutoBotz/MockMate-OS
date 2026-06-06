@@ -1,0 +1,54 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Local credentials and generated diagnostics
+backend/service-account.json
+backend/build_log.txt
+backend/push_log.txt
+verify_output*.txt
+.agent/
+test-results/
+_skill-sources/
+status_output.txt
+git_status.txt
+branch_output.txt
+v.txt
+*.tsbuildinfo
+
+# Mobile build output
+mobile/.expo/
+mobile/dist/
+mobile/build/
+mobile/android/
+mobile/ios/
+mobile/*.aab
+mobile/*.apk
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

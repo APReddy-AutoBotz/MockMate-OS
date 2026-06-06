@@ -1,0 +1,70 @@
+name: MockMate Production Readiness
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  web-and-api-build:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: npm ci
+
+      - name: Frontend typecheck
+        run: npm run typecheck
+
+      - name: Supabase migration checks
+        run: npm run verify:supabase
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Backend build
+        working-directory: backend
+        run: npm run build
+
+      - name: Production smoke checks
+        run: npm run smoke:production
+
+      - name: Production dependency audits
+        run: npm run audit:production
+
+      - name: Mobile typecheck
+        run: npm run mobile:typecheck
+
+      - name: Mobile lint
+        run: npm run mobile:lint
+
+      - name: Production config smoke check
+        shell: bash
+        run: |
+          test -f vercel.json
+          test -f supabase/migrations/001_initial_schema.sql
+          test -f public/manifest.json
+          test -f mobile/eas.json
+          grep -q '"/api/(.*)"' vercel.json
+          grep -q '"/api/index"' vercel.json
+          grep -q '"display": "standalone"' public/manifest.json
+          grep -q '"package": "com.mockmate.app"' mobile/app.json

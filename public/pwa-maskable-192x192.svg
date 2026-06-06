@@ -1,0 +1,24 @@
+<svg width="192" height="192" viewBox="0 0 192 192" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Maskable icons need content within the safe zone (innermost 80% circle) -->
+  <rect width="192" height="192" fill="#002C4B"/>
+  <circle cx="96" cy="96" r="96" fill="#002C4B"/>
+  <circle cx="96" cy="84" r="60" fill="#FFBC03" fill-opacity="0.06"/>
+  <defs>
+    <linearGradient id="lw" x1="50%" y1="0%" x2="10%" y2="100%">
+      <stop offset="0%" stop-color="#FFBC03"/>
+      <stop offset="100%" stop-color="#1B4F72" stop-opacity="0.9"/>
+    </linearGradient>
+    <linearGradient id="rw" x1="50%" y1="0%" x2="90%" y2="100%">
+      <stop offset="0%" stop-color="#FFBC03"/>
+      <stop offset="100%" stop-color="#1B4F72" stop-opacity="0.9"/>
+    </linearGradient>
+    <filter id="sh">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#001A2D" flood-opacity="0.8"/>
+    </filter>
+  </defs>
+  <g filter="url(#sh)">
+    <path d="M 50,154 L 50,58 L 96,118" fill="none" stroke="url(#lw)" stroke-width="25" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 96,118 L 142,58 L 142,154" fill="none" stroke="url(#rw)" stroke-width="25" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <circle cx="96" cy="120" r="6" fill="#FFBC03"/>
+</svg>

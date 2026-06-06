@@ -1,0 +1,273 @@
+
+/* ============================================
+   DESIGN SYSTEM - BRAND COLORS & MODES
+   ============================================ */
+
+:root {
+  /* Brand Colors */
+  --color-brand-dark: #001A2D;        /* Ultra Deep Navy — darkest surfaces */
+  --color-brand-primary: #FFBC03;     /* Amber Yellow — primary brand color, key CTAs */
+  --color-brand-accent: #1B4F72;      /* Steel Blue — structural depth */
+  --color-brand-tint: #A8C5DA;        /* Sky Tint — highlights and accents */
+
+  /* Neutrals */
+  --color-ink: #002C4B;               /* Deep Navy — main background */
+  --color-obsidian: #00365C;          /* Card Background */
+  --color-midnight: #004270;          /* Border/Structural */
+  --color-paper: #F2F5F7;             /* Off-white light surface */
+  --color-paper-card: #FFFFFF;
+  --color-paper-border: #D9E3EA;
+  --color-paper-text: #123B56;
+  --color-paper-muted: #557187;
+
+  /* Typography Scale */
+  --font-size-h1: 32px;
+  --font-size-h2: 24px;
+  --font-size-h3: 18px;
+  --font-size-body: 16px;
+  --font-size-caption: 13px;
+
+  --font-weight-body: 400;
+  --font-weight-heading: 500;
+
+  /* Surface Mode: Dark (Default) */
+  --color-background-page: var(--color-ink);
+  --color-background-card: rgba(0, 54, 92, 0.4);
+  --color-border: rgba(168, 197, 218, 0.1);
+  --color-text-primary: #FFFFFF;
+  --color-text-secondary: var(--color-brand-tint);
+  --color-text-muted: rgba(168, 197, 218, 0.4);
+}
+
+.mode-dark {
+  --color-background-page: var(--color-ink);
+  --color-background-card: rgba(0, 54, 92, 0.42);
+  --color-border: rgba(168, 197, 218, 0.16);
+  --color-text-primary: #FFFFFF;
+  --color-text-secondary: var(--color-brand-tint);
+  --color-text-muted: rgba(168, 197, 218, 0.72);
+}
+
+.mode-light {
+  --color-background-page: var(--color-paper);
+  --color-background-card: var(--color-paper-card);
+  --color-border: var(--color-paper-border);
+  --color-text-primary: var(--color-paper-text);
+  --color-text-secondary: var(--color-paper-muted);
+  --color-text-muted: #6D8393;
+  color: var(--color-text-primary);
+}
+
+/* ============================================
+   BASE TYPOGRAPHY
+   ============================================ */
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: var(--font-size-body);
+  line-height: 1.6;
+  font-weight: var(--font-weight-body);
+  color: var(--color-text-primary);
+  background-color: var(--color-background-page);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Styled scrollbar — brand-aligned */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 188, 3, 0.2) transparent;
+}
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 188, 3, 0.2);
+  border-radius: 4px;
+}
+
+/* ============================================
+   BASE COMPONENTS
+   ============================================ */
+
+.btn-primary {
+  background: var(--color-brand-primary);
+  color: var(--color-brand-dark);
+  border-radius: 12px;
+  padding: 12px 24px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow: 0 10px 25px -5px rgba(255, 188, 3, 0.3);
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 15px 35px -5px rgba(255, 188, 3, 0.4);
+}
+
+.focus-ring,
+button,
+a,
+input,
+textarea,
+select,
+[role="button"] {
+  outline-offset: 3px;
+}
+
+.focus-ring:focus-visible,
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--color-brand-primary);
+  box-shadow: 0 0 0 5px rgba(0, 26, 45, 0.75);
+}
+
+.glass-card {
+  background: rgba(0, 54, 92, 0.4);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(168, 197, 218, 0.08);
+  border-radius: 24px;
+}
+
+/* ============================================
+   PWA & MOBILE OPTIMIZATIONS
+   ============================================ */
+
+/* Safe-area spacing is applied inside the React app shell so browser and PWA
+   layouts do not double-pad the page body. */
+
+/* Touch targets — Minimum 48px */
+button, a, [role="button"] {
+  min-height: 44px;
+  touch-action: manipulation;
+}
+
+input, textarea, select {
+  min-height: 48px;
+  font-size: 16px !important; /* Prevents auto-zoom on iOS */
+}
+
+/* ============================================
+   ANIMATIONS
+   ============================================ */
+
+@keyframes pulse-amber {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(0.95); }
+}
+
+.animate-pulse-amber {
+  animation: pulse-amber 2s infinite ease-in-out;
+}
+
+/* Shimmer Effect */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 188, 3, 0.05) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.5s infinite linear;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ============================================
+   PREMIUM AGENCY DESIGN UTILITIES (HYBRID CALM COACH)
+   ============================================ */
+
+.font-heading {
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.font-mono {
+  font-family: 'Geist Mono', monospace;
+}
+
+/* Outer/Inner Bezel Hardware design */
+.bezel-outer {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(168, 197, 218, 0.07);
+  padding: 6px;
+  border-radius: 28px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  transition: all 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.bezel-outer:hover {
+  border-color: rgba(255, 188, 3, 0.15);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.bezel-inner {
+  background: rgba(0, 36, 62, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.08);
+  border-radius: 22px; /* Mathematically calculated: 28px outer - 6px padding */
+}
+
+/* Noise overlay for cinematic texture */
+.noise-texture {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.018;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+}
+
+/* Custom premium transitions */
+.transition-premium {
+  transition: all 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Glow effects */
+.glow-orb {
+  filter: blur(100px);
+  pointer-events: none;
+  opacity: 0.12;
+}
+
+/* Custom scrollbar override */
+.custom-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(168, 197, 218, 0.2) transparent;
+}
+.custom-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+.custom-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scroll::-webkit-scrollbar-thumb {
+  background: rgba(168, 197, 218, 0.25);
+  border-radius: 10px;
+}
+.custom-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--color-brand-primary);
+}
