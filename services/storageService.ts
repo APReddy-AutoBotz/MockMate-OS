@@ -1,5 +1,5 @@
 
-import { SessionHistoryRecord, FinalReport, QuestionHistoryItem } from '../types';
+import { SessionHistoryRecord, FinalReport, QuestionHistoryItem } from 'mockmate-shared';
 
 const HISTORY_KEY = 'mockmate_session_history';
 const QUESTION_TRACKER_KEY = 'mockmate_question_usage';

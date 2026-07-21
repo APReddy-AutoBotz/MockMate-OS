@@ -1,12 +1,12 @@
 
 import React, { useMemo, useCallback } from 'react';
-import { FinalReport, QuestionPerformance, AdvisorAssessment } from '../types';
+import { FinalReport, QuestionPerformance, AdvisorAssessment } from 'mockmate-shared';
 import { generatePdf } from '../services/pdfGenerator';
 import { motion } from 'framer-motion';
 import { PERSONAS_CONFIG } from '../personas.config';
 import { useIsMobile } from '../hooks/useIsMobile';
 import PilotFeedbackCard from './PilotFeedbackCard';
-import { UserProfile } from '../types';
+import { UserProfile } from 'mockmate-shared';
 
 const sectionAnimation = {
     initial: { opacity: 0, y: 20 },
@@ -61,17 +61,25 @@ const PersonaScoreCard: React.FC<{ advisory: AdvisorAssessment[] }> = React.memo
 
 /* ─── Main Scorecard ────────────────────────────────────────────────────── */
 const Scorecard: React.FC<{ report: FinalReport; userProfile?: UserProfile | null }> = ({ report, userProfile }) => {
-    const overallScore = report.simplifiedScore
-        || report.quantitativeAnalysis?.dimension_scores?.find(d => d.normalized_score !== null)?.normalized_score
-        || report.quantitativeAnalysis?.competency_scores?.[0]?.score
-        || 85;
-    const tier = overallScore >= 90 ? 'Very strong' : overallScore >= 80 ? 'Solid progress' : 'Keep practicing';
+    const rawScore = report.simplifiedScore
+        ?? report.quantitativeAnalysis?.dimension_scores?.find(d => d.normalized_score !== null)?.normalized_score
+        ?? report.quantitativeAnalysis?.competency_scores?.[0]?.score;
+        
+    const hasValidScore = rawScore !== undefined && rawScore !== null;
+    const overallScore = rawScore ?? 0;
+    
+    const tier = !hasValidScore ? 'INCOMPLETE' : overallScore >= 90 ? 'Very strong' : overallScore >= 80 ? 'Solid progress' : 'Keep practicing';
+
+    const getDimensionScore = (term: string) => {
+        const found = report.quantitativeAnalysis?.dimension_scores?.find(d => d.dimension.toLowerCase().includes(term));
+        return found?.normalized_score;
+    };
 
     const dimensions = [
-        { name: 'Communication', score: report.quantitativeAnalysis?.dimension_scores?.find(d => d.dimension.toLowerCase().includes('comm'))?.normalized_score || 88 },
-        { name: 'Role knowledge', score: report.quantitativeAnalysis?.dimension_scores?.find(d => d.dimension.toLowerCase().includes('tech'))?.normalized_score || 82 },
-        { name: 'Confidence', score: report.quantitativeAnalysis?.dimension_scores?.find(d => d.dimension.toLowerCase().includes('conf'))?.normalized_score || 90 },
-        { name: 'Structure', score: report.quantitativeAnalysis?.dimension_scores?.find(d => d.dimension.toLowerCase().includes('struct'))?.normalized_score || 85 },
+        { name: 'Communication', score: getDimensionScore('comm') },
+        { name: 'Role knowledge', score: getDimensionScore('tech') },
+        { name: 'Confidence', score: getDimensionScore('conf') },
+        { name: 'Structure', score: getDimensionScore('struct') },
     ];
 
     return (
@@ -81,9 +89,11 @@ const Scorecard: React.FC<{ report: FinalReport; userProfile?: UserProfile | nul
             <div className="flex flex-col lg:flex-row justify-between items-center gap-10 relative z-10">
                 <div className="text-center md:text-left space-y-4">
                     <div className="flex items-center justify-center md:justify-start gap-6">
-                        <span className="text-6xl md:text-8xl font-black text-white tracking-tight leading-none drop-shadow-lg">{overallScore}</span>
+                        <span className="text-6xl md:text-8xl font-black text-white tracking-tight leading-none drop-shadow-lg">
+                            {hasValidScore ? overallScore : 'N/A'}
+                        </span>
                         <div className="flex flex-col items-start gap-2">
-                            <span className="text-xl text-white/10 font-bold">/ 100</span>
+                            {hasValidScore && <span className="text-xl text-white/10 font-bold">/ 100</span>}
                             <span className="bg-brand-primary text-brand-dark px-3 py-1 rounded-lg font-black text-[9px] tracking-[0.2em] uppercase">{tier}</span>
                         </div>
                     </div>
@@ -96,9 +106,11 @@ const Scorecard: React.FC<{ report: FinalReport; userProfile?: UserProfile | nul
                             <span className="text-[9px] text-brand-tint font-bold tracking-[0.12em] uppercase">{d.name}</span>
                             <div className="flex items-center gap-4">
                                 <div className="w-32 md:w-48 h-1 bg-white/5 rounded-full overflow-hidden">
-                                    <div className="h-full bg-brand-primary" style={{ width: `${d.score}%` }}></div>
+                                    <div className="h-full bg-brand-primary" style={{ width: `${d.score ?? 0}%` }}></div>
                                 </div>
-                                <span className="text-xs font-bold text-white">{d.score}%</span>
+                                <span className="text-xs text-white/50 font-medium tracking-wide">
+                                    {d.score !== undefined && d.score !== null ? d.score : 'N/A'}
+                                </span>
                             </div>
                         </div>
                     ))}

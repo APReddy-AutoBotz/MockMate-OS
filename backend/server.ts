@@ -9,6 +9,22 @@ import compression from 'compression';
 import morgan from 'morgan';
 import { isSupabaseConfigured } from './supabaseAdmin';
 
+// ---- Phase 8: Strict Production Env Guards ----
+if (process.env.NODE_ENV === 'production') {
+  const requiredEnvVars = [
+    'SUPABASE_URL',
+    'SUPABASE_SERVICE_KEY',
+    'GROQ_API_KEY',
+    'GOOGLE_API_KEY'
+  ];
+  
+  const missing = requiredEnvVars.filter(v => !process.env[v]);
+  if (missing.length > 0) {
+    console.error(`[CRITICAL] Missing required production environment variables: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+}
+
 // ---- tiny in-memory rate limiter (no external deps) ----
 type Bucket = { tokens: number; ts: number };
 const buckets = new Map<string, Bucket>();
@@ -126,22 +142,18 @@ app.get('/api/auth/test', verifyAuthToken, (req, res) => {
 
 // ---------- Optional: mount your existing routes if present ----------
 try {
-  // If you have backend/routes/index.ts exporting a router as default
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const aiRoutes = require('./routes/aiRoutes').default;
   const userRoutes = require('./routes/userRoutes').default;
   const resumeRoutes = require('./routes/resumeRoutes').default;
   const meRoutes = require('./routes/meRoutes').default;
   const interviewRoutes = require('./routes/interviewRoutes').default;
   const adminRoutes = require('./routes/adminRoutes').default;
 
-  app.use('/api/ai', aiRoutes);
   app.use('/api/user', userRoutes);
   app.use('/api/resume', resumeRoutes);
   app.use('/api/me', meRoutes);
   app.use('/api/interview', interviewRoutes);
   app.use('/api/admin', adminRoutes);
-  console.log('Mounted AI, User, Resume, Interview, Me, and Admin routes');
+  console.log('Mounted User, Resume, Interview, Me, and Admin routes');
 } catch (e) {
   console.error("Failed to mount routes", e);
   // No custom routes found — ignore

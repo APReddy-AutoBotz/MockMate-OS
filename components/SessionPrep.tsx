@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { SessionContext, InterviewPlan, SessionControls } from '../types';
+import { InterviewSessionContext, InterviewPlan, SessionControls } from 'mockmate-shared';
 import * as mockGeminiService from '../services/mockGeminiService';
 import PanelSelector from './PanelSelector';
 import SessionBuilder from './SessionBuilder';
@@ -9,8 +9,8 @@ import { UploadIcon } from './icons/UploadIcon';
 import { audioService } from '../services/audioService';
 
 interface SessionPrepProps {
-    onContextReady: (context: SessionContext) => void;
-    context: SessionContext;
+    onContextReady: (context: InterviewSessionContext) => void;
+    context: InterviewSessionContext;
     onGoBack: () => void;
 }
 
@@ -20,7 +20,7 @@ const defaultControls: SessionControls = {
     includeBehavioral: true,
     includeCoding: false,
     timePerQuestion: '90s',
-    sessionMode: 'exam',
+    deliveryMode: 'exam', reasoningMode: 'classic_behavioral',
     sourceMode: 'job_description',
 };
 
@@ -332,7 +332,7 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, context, onGo
             ...currentContext,
             selectedPanelIDs,
             interviewPlan: plan,
-            competencyWeights: weightsArray,
+            competencyWeights: weights as Record<string, number>,
             jdInsights: plan.jdInsights,
         });
     };

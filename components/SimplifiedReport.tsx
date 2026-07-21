@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback } from 'react';
-import { FinalReport, PrioritizedAction } from '../types';
+import { FinalReport, PrioritizedAction } from 'mockmate-shared';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { generatePdf } from '../services/pdfGenerator';

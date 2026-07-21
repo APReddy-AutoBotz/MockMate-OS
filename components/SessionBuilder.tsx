@@ -1,6 +1,6 @@
 
 import { motion } from 'framer-motion';
-import { JDInsights, CompetencyWeight, QuestionBlueprint } from '../types';
+import { JDInsights, CompetencyWeight, QuestionBlueprint } from 'mockmate-shared';
 import React from 'react';
 
 interface SessionBuilderProps {

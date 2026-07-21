@@ -52,6 +52,10 @@ async function run() {
       PORT: String(apiPort),
       NODE_ENV: 'production',
       ENABLE_DEV_AUTH: 'false',
+      SUPABASE_URL: 'https://test.supabase.co',
+      SUPABASE_SERVICE_KEY: 'test-service-key',
+      GROQ_API_KEY: 'test-groq-key',
+      GOOGLE_API_KEY: 'test-google-key'
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -74,6 +78,18 @@ async function run() {
       })).status,
       401,
     );
+
+    await expectStatus('GET /api/interview/sessions without auth', (await request('/api/interview/sessions')).status, 401);
+    await expectStatus('POST /api/interview/plan without auth', (await request('/api/interview/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+    })).status, 401);
+    await expectStatus('POST /api/interview/sessions/test-session-id/answers without auth', (await request('/api/interview/sessions/test-session-id/answers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+    })).status, 401);
 
     const devTokenStatus = (await request('/api/me/usage', {
       headers: { Authorization: 'Bearer test-token' },

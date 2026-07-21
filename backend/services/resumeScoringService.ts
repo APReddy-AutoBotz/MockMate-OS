@@ -1,4 +1,4 @@
-import { ResumeData } from '../types';
+import { ResumeData } from 'mockmate-shared';
 import Groq from "groq-sdk";
 
 const apiKey = process.env.GROQ_API_KEY || 'dummy';

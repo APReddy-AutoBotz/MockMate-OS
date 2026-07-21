@@ -1,7 +1,7 @@
 // --- API Client Helpers ---
 import { API_BASE } from './apiBase';
 import { ValidationError } from '../utils/errorHandler';
-import { SessionContext, FinalReport, InterviewTurn, QuestionBlueprint, InterviewPlan, SessionControls } from '../types';
+import { InterviewSessionContext, FinalReport, InterviewTurn, QuestionBlueprint, InterviewPlan, SessionControls } from 'mockmate-shared';
 
 const authHeader = async () => {
     const { auth } = await import('./supabaseClient');
@@ -87,13 +87,13 @@ const DEFAULT_CONTROLS: SessionControls = {
     includeBehavioral: true,
     includeCoding: false,
     timePerQuestion: '90s',
-    sessionMode: 'exam',
+    deliveryMode: 'exam', reasoningMode: 'classic_behavioral',
     sourceMode: 'job_description'
 };
 
 export const startInterviewSession = async (
-    context: SessionContext
-): Promise<{ firstQuestion: string; personaId: string; updatedContext: SessionContext }> => {
+    context: InterviewSessionContext
+): Promise<{ firstQuestion: string; personaId: string; updatedContext: InterviewSessionContext }> => {
     // Call backend
     const { sessionId, firstMessage } = await postToBackend('start-session', { context });
 
@@ -107,7 +107,7 @@ export const startInterviewSession = async (
 
 export const submitAnswerAndGetNext = async (
     history: InterviewTurn[],
-    context: SessionContext,
+    context: InterviewSessionContext,
     personaId: string
 ): Promise<{ nextQuestion: string; isLastQuestion: boolean }> => {
     // Phase 3: Use Backend Persistence
@@ -190,7 +190,7 @@ export const transcribeAudio = async (blob: Blob): Promise<string> => {
 
 export const generateFinalReport = async (
     history: InterviewTurn[],
-    context: SessionContext
+    context: InterviewSessionContext
 ): Promise<FinalReport> => {
     try {
         return await postToBackend('generate-report', { history, context });
@@ -199,7 +199,7 @@ export const generateFinalReport = async (
     }
 };
 
-const buildFallbackFinalReport = (history: InterviewTurn[], context: SessionContext): FinalReport => {
+const buildFallbackFinalReport = (history: InterviewTurn[], context: InterviewSessionContext): FinalReport => {
     const answeredTurns = history.filter(turn => turn.candidateResponse && turn.candidateResponse !== '[SKIPPED]');
     const skippedTurns = history.length - answeredTurns.length;
     const baseScore = Math.max(45, Math.min(78, 55 + answeredTurns.length * 8 - skippedTurns * 5));

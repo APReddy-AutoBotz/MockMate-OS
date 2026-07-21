@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { UserProfile } from '../types';
+import { UserProfile } from 'mockmate-shared';
 
 interface RoleCaptureProps {
     userProfile: UserProfile | null;

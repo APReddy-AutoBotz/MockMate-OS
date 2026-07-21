@@ -1,6 +1,6 @@
 
 import { PDFDocument, rgb, StandardFonts, PDFFont } from 'pdf-lib';
-import { FinalReport, AdvisorAssessment, QuestionPerformance } from '../types';
+import { FinalReport, AdvisorAssessment, QuestionPerformance } from 'mockmate-shared';
 
 // Exact Brand Colors
 const colors = {

@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { PilotFeedback } from '../types';
+import { PilotFeedback } from 'mockmate-shared';
 
 interface PilotFeedbackCardProps {
     sessionId: string;

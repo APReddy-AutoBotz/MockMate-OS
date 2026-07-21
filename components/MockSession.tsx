@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { SessionContext, FinalReport, InterviewTurn, QuestionBlueprint } from '../types';
+import { InterviewSessionContext, FinalReport, InterviewTurn, QuestionBlueprint } from 'mockmate-shared';
 import * as mockGeminiService from '../services/mockGeminiService';
 import PushToTalkInput from './PushToTalkInput';
 import CodeEditor from './CodeEditor';
@@ -11,7 +11,7 @@ import { trackQuestionUsage } from '../services/storageService';
 import { useIsMobile } from '../hooks/useIsMobile';
 
 interface MockSessionProps {
-    sessionContext: SessionContext;
+    sessionContext: InterviewSessionContext;
     onReportGenerated: (report: FinalReport) => void;
     onCancel: () => void;
 }

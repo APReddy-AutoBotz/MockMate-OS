@@ -2,7 +2,7 @@
 import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
 import { PERSONAS_CONFIG } from '../config/personas';
-import { InterviewTurn, SessionContext, FinalReport, SessionControls, InterviewPlan, DimensionScore, TrajectoryPoint, AuditFinding } from '../types';
+import { InterviewTurn, InterviewSessionContext as SessionContext, FinalReport, SessionControls, InterviewPlan, DimensionScore } from 'mockmate-shared';
 import * as sessionService from './sessionService';
 import { APPROVED_DIMENSIONS, ACTIVE_DIMENSIONS_BY_MODE, DEFAULT_WEIGHTS_BY_MODE } from '../config/evaluationConfig';
 
@@ -238,7 +238,7 @@ export const generateInterviewPlan = async (
         ? `MANDATORY: Include 2-3 coding questions. Assign 'language' (e.g., 'python').`
         : "Do not include coding questions.";
 
-    const sessionMode = sessionControls.sessionMode || 'coach';
+    const sessionMode = sessionControls.deliveryMode || 'coach';
     const activeDimensions = ACTIVE_DIMENSIONS_BY_MODE[sessionMode] || ACTIVE_DIMENSIONS_BY_MODE['classic_behavioral'];
     const dimensionWeights = DEFAULT_WEIGHTS_BY_MODE[sessionMode] || DEFAULT_WEIGHTS_BY_MODE['classic_behavioral'];
 
@@ -332,7 +332,7 @@ export const generateFinalReport = async (
     Candidate: "${turn.candidateResponse}"
     `).join('\n');
 
-    const sessionMode = context.controls?.sessionMode || 'coach';
+    const sessionMode = context.controls?.deliveryMode || 'coach';
     const activeDimensions = ACTIVE_DIMENSIONS_BY_MODE[sessionMode] || ACTIVE_DIMENSIONS_BY_MODE['classic_behavioral'];
 
     const masterPrompt = `You are a world-class Interview Bar Raiser. Analyze this mock interview session and generate a "Hiring Committee" report.
@@ -514,7 +514,7 @@ export const generateFinalReport = async (
                 provider_used: providerUsed,
                 model_name: modelName,
                 fallback_triggered: fallbackTriggered,
-                session_mode: context.controls?.sessionMode || 'unknown',
+                session_mode: context.controls?.deliveryMode || 'unknown',
                 role_family: context.candidateRole || 'unknown',
                 active_dimensions: dimensionScores.map((d: any) => d.dimension),
                 status_counts: {
@@ -563,7 +563,8 @@ export const startInterviewSession = async (
     }
 
     // 2. Create session record in Supabase when persistence is enabled.
-    const session = await sessionService.createSession(userId, context);
+    const dummyFirstQuestion = { id: 'q1', text: firstMessage, type: 'intro', expectedSignals: [], relatedCompetency: '', difficulty: 'medium' } as any;
+    const session = await sessionService.createSession(userId, context, dummyFirstQuestion);
 
     // 3. Save first AI turn (optional, or just return it. Let's save it as a "system" or "interviewer" init turn if we want, but usually history starts with Q1)
     // Actually, usually the welcome is just intro. The first REAL question comes next. 
@@ -633,7 +634,8 @@ export const submitAnswer = async (
         timestamp: Date.now()
     };
 
-    await sessionService.updateSessionHistory(sessionId, turn);
+    let nextQuestion: any = null;
+    await sessionService.updateSessionHistory(sessionId, turn, nextQuestion, history.length + 1);
 
     // Now generate Q(next)
     const newHistoryLength = history.length + 1;

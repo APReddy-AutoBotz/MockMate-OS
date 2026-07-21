@@ -23,6 +23,7 @@
     "expo-system-ui": "~56.0.5",
     "expo-web-browser": "~56.0.5",
     "lucide-react-native": "^1.16.0",
+    "mockmate-shared": "file:../shared",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.85.3",

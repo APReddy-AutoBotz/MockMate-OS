@@ -30,7 +30,7 @@ import {
   saveProfileToStore,
   getProfileFromStore,
 } from './supabaseStoreService';
-import type { ClearSpeakProfile } from './types';
+import type { ClearSpeakProfile } from 'mockmate-shared';
 
 const router = Router();
 

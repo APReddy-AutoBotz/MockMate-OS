@@ -13,7 +13,7 @@ import AppContainer from './components/AppContainer';
 import SplashScreen from './components/SplashScreen';
 import SimplifiedReport from './components/SimplifiedReport';
 import InterviewOrbit from './components/InterviewOrbit';
-import { FinalReport, SessionContext, UserProfile } from './types';
+import { FinalReport, SessionContext, UserProfile } from 'mockmate-shared';
 import { Logo } from './components/icons/Logo';
 import LandingPage from './components/LandingPage';
 import Login from './components/Login';
@@ -149,7 +149,7 @@ const App: React.FC = () => {
             intentText: intent,
             selectedPanelIDs: [],
             sessionType: sessionType,
-            sessionMode: 'exam',
+            
             companyName: companyData?.name,
             companyUrl: companyData?.url
         };
@@ -269,7 +269,7 @@ const App: React.FC = () => {
             intentText: payload.bridgeQuestion,
             selectedPanelIDs: [],
             sessionType: 'structured',
-            sessionMode: 'coach',
+            
             // MVP analytics: replace companyBrief string packing with a
             // dedicated Supabase bridge_sessions record containing typed fields:
             //   { userId, sessionId, source, topicTag, practicedWords, recentScores, bridgeQuestion, triggeredAt }
@@ -311,7 +311,7 @@ const App: React.FC = () => {
             intentText: jdText || 'General interview based on my resume.',
             selectedPanelIDs: [],
             sessionType: 'structured',
-            sessionMode: 'exam',
+            
             companyBrief: JSON.stringify(resumeData), // Pass parsed resume into companyBrief as an MVP hack to give AI context
             targetStarBullets: targetStarBullets // Pass bullets downward to fuel advanced drill scenarios if Interview Agent supports it
         };

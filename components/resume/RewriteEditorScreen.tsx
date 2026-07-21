@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Check, ChevronRight, Loader2, Mic, Plus, RotateCcw, Sparkles, Trash2, Wand2, X } from 'lucide-react';
-import { ResumeData } from '../../types';
+import { ResumeData } from 'mockmate-shared';
 import { getAccessToken } from '../../services/supabaseClient';
 import { API_ORIGIN } from '../../services/apiBase';
 

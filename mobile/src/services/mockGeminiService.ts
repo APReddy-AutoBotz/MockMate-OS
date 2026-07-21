@@ -6,13 +6,13 @@ const authHeader = async (): Promise<Record<string, string>> => {
   return token ? { 'Authorization': `Bearer ${token}` } : {};
 };
 
-const postToBackend = async (endpoint: string, body: any) => {
+const postToInterviewAPI = async (endpoint: string, body: any = {}) => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(await authHeader()),
   };
 
-  const response = await fetch(`${API_BASE}/ai/${endpoint}`, {
+  const response = await fetch(`${API_BASE}/interview/${endpoint}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -29,7 +29,7 @@ export const calibrateIntent = async (
   intentText: string,
   additionalContext?: string
 ): Promise<{ recommendedPanelIDs: string[]; recommendedRole: string; matchReasons?: Record<string, string> }> => {
-  return postToBackend('calibrate-intent', { intent: intentText, context: additionalContext });
+  return postToInterviewAPI('calibrate', { intentText, additionalContext });
 };
 
 export const generateInterviewPlan = async (
@@ -38,60 +38,55 @@ export const generateInterviewPlan = async (
   sessionControls: any,
   selectedPanelIDs: string[]
 ): Promise<any> => {
-  return postToBackend('generate-plan', {
-    intent: intentText,
+  return postToInterviewAPI('plan', {
+    intentText,
     jdText,
     controls: sessionControls,
-    panelIDs: selectedPanelIDs,
+    selectedPanelIDs,
   });
 };
 
 export const startInterviewSession = async (
   context: any
-): Promise<{ firstQuestion: string; personaId: string; updatedContext: any }> => {
-  const { sessionId, firstMessage } = await postToBackend('start-session', { context });
+): Promise<{ firstQuestion: string; pendingQuestion: any; personaId: string; updatedContext: any }> => {
+  const data = await postToInterviewAPI('sessions', { context });
+  
   return {
-    firstQuestion: firstMessage,
+    firstQuestion: data.openingMessage || data.firstQuestion?.question || "Hello, let's begin.",
+    pendingQuestion: data.firstQuestion,
     personaId: context.selectedPanelIDs?.[0] || 'p1',
-    updatedContext: { ...context, sessionId },
+    updatedContext: { ...context, sessionId: data.sessionId },
   };
 };
 
 export const submitAnswerAndGetNext = async (
-  history: any[],
   context: any,
-  personaId: string
-): Promise<{ nextQuestion: string; isLastQuestion: boolean }> => {
+  questionId: string,
+  answerText: string
+): Promise<{ nextQuestion: string; pendingQuestion: any; isLastQuestion: boolean }> => {
   if (context.sessionId) {
-    try {
-      const { nextMessage, isLastQuestion } = await postToBackend('submit-answer', {
-        sessionId: context.sessionId,
-        answer: history[history.length - 1].candidateResponse,
-      });
+    const data = await postToInterviewAPI(`sessions/${context.sessionId}/answers`, {
+      questionId,
+      answerText,
+    });
 
-      return {
-        nextQuestion: nextMessage,
-        isLastQuestion: isLastQuestion,
-      };
-    } catch (error) {
-      console.error('Backend submit failed, falling back locally', error);
-    }
+    return {
+      nextQuestion: data.nextQuestion?.question || "That concludes our interview.",
+      pendingQuestion: data.nextQuestion,
+      isLastQuestion: data.isLastQuestion,
+    };
   }
 
-  const totalExpected = context.interviewPlan?.meta?.controls?.totalQuestions || 5;
-  const isLastQuestion = history.length >= totalExpected;
-  if (isLastQuestion) {
-    return { nextQuestion: '', isLastQuestion: true };
-  }
-
+  // Fallback if somehow sessionId is missing (should not happen with server-authoritative flow)
   return {
-    nextQuestion: `Thank you. For the next question: Describe a challenging technical problem you solved recently.`,
-    isLastQuestion: false,
+    nextQuestion: `Session error. Please restart the interview.`,
+    pendingQuestion: null,
+    isLastQuestion: true,
   };
 };
 
 export const getHintForQuestion = async (question: string): Promise<string> => {
-  const data = await postToBackend('get-hint', { question });
+  const data = await postToInterviewAPI('hint', { question });
   return data.hint;
 };
 
@@ -100,8 +95,8 @@ export const generateIdealAnswer = async (
   blueprint: any | null,
   userAnswer: string
 ): Promise<string> => {
-  const data = await postToBackend('generate-ideal', { question, blueprint, userAnswer });
-  return data.idealAnswer;
+  const data = await postToInterviewAPI('ideal-response', { question, blueprint, userAnswer });
+  return data.idealResponse;
 };
 
 // Helper to convert Local File URI to Base64 using standard FileReader
@@ -112,7 +107,6 @@ const uriToBase64 = async (uri: string): Promise<string> => {
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64data = reader.result as string;
-      // split to remove the "data:*/*;base64," prefix
       resolve(base64data.split(',')[1]);
     };
     reader.onerror = reject;
@@ -123,7 +117,7 @@ const uriToBase64 = async (uri: string): Promise<string> => {
 export const transcribeAudio = async (uri: string, mimeType: string): Promise<string> => {
   try {
     const base64Audio = await uriToBase64(uri);
-    const data = await postToBackend('transcribe', { audioData: base64Audio, mimeType });
+    const data = await postToInterviewAPI('transcribe', { audioBase64: base64Audio, mimeType });
     return data.transcript;
   } catch (error) {
     console.error('Transcription failed', error);
@@ -132,10 +126,9 @@ export const transcribeAudio = async (uri: string, mimeType: string): Promise<st
 };
 
 export const generateFinalReport = async (
-  history: any[],
-  context: any
+  sessionId: string
 ): Promise<any> => {
-  return postToBackend('generate-report', { history, context });
+  return postToInterviewAPI(`sessions/${sessionId}/report`);
 };
 
 export default {

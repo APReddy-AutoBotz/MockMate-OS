@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { UploadCloud, PenTool, Loader2, FileText, X, Plus, Trash2 } from 'lucide-react';
-import { ResumeData } from '../../types';
+import { ResumeData } from 'mockmate-shared';
 import { getAccessToken } from '../../services/supabaseClient';
 import { API_ORIGIN } from '../../services/apiBase';
 

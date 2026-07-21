@@ -2,7 +2,7 @@ import React, { useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { getSessionHistory } from '../services/storageService';
-import { FinalReport } from '../types';
+import { FinalReport } from 'mockmate-shared';
 import { useIsMobile } from '../hooks/useIsMobile';
 
 interface GrowthDashboardProps {

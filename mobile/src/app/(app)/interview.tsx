@@ -33,6 +33,7 @@ export default function InterviewScreen() {
   // Active session states
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<string | null>(null);
+  const [pendingQuestionId, setPendingQuestionId] = useState<string | null>(null);
   const [response, setResponse] = useState('');
   const [hint, setHint] = useState<string | null>(null);
   const [isHintLoading, setIsHintLoading] = useState(false);
@@ -91,12 +92,13 @@ export default function InterviewScreen() {
         intentText: `Practice interview for ${role.trim()}`,
         selectedPanelIDs: ['p1'],
         sessionType: mode,
-        sessionMode: 'exam',
+        deliveryMode: 'exam', reasoningMode: 'classic_behavioral',
       };
 
       const result = await mockGeminiService.startInterviewSession(context);
       setSessionId(result.updatedContext.sessionId);
       setCurrentQuestion(result.firstQuestion);
+      setPendingQuestionId(result.pendingQuestion?.id || 'q1');
       setQuestionNumber(1);
       sessionHistory.current = [];
       await storageService.trackQuestionUsage(result.firstQuestion, role.trim());
@@ -207,14 +209,12 @@ export default function InterviewScreen() {
     try {
       const context = {
         sessionId,
-        selectedPanelIDs: ['p1'],
-        interviewPlan: { meta: { controls: { totalQuestions } } },
       };
 
       const result = await mockGeminiService.submitAnswerAndGetNext(
-        sessionHistory.current,
         context,
-        'p1'
+        pendingQuestionId || 'q1',
+        sessionHistory.current[sessionHistory.current.length - 1].candidateResponse
       );
 
       if (result.isLastQuestion || !result.nextQuestion) {
@@ -222,6 +222,7 @@ export default function InterviewScreen() {
       } else {
         setQuestionNumber((current) => current + 1);
         setCurrentQuestion(result.nextQuestion);
+        setPendingQuestionId(result.pendingQuestion?.id || 'q' + (questionNumber + 1));
         await storageService.trackQuestionUsage(result.nextQuestion, role);
         setPhase('ASKING');
       }
@@ -233,15 +234,9 @@ export default function InterviewScreen() {
   const handleGenerateReport = async () => {
     setPhase('LOADING');
     try {
-      const context = {
-        candidateRole: role,
-        sessionId,
-      };
-
-      const results = await mockGeminiService.generateFinalReport(
-        sessionHistory.current,
-        context
-      );
+      if (!sessionId) throw new Error("No active session");
+      
+      const results = await mockGeminiService.generateFinalReport(sessionId);
       await storageService.saveSessionToHistory(results, role, mode);
       setReport(results);
       setPhase('REPORT');
@@ -451,8 +446,9 @@ export default function InterviewScreen() {
   }
 
   if (phase === 'REPORT' && report) {
-    // Composite advisor score average
-    const score = report.overallScore ?? report.score ?? 82;
+    // Phase 6: Result Truthfulness - Never display fabricated scores
+    const score = report.simplifiedScore ?? report.quantitativeAnalysis?.dimension_scores?.[0]?.normalized_score;
+    const hasValidScore = score !== undefined && score !== null;
 
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.scrollContainer}>
@@ -460,10 +456,17 @@ export default function InterviewScreen() {
         <Text style={styles.subtitle}>Clear feedback on your interview practice.</Text>
 
         <View style={styles.reportHeader}>
-          <View style={styles.scoreCircle}>
-            <Text style={styles.scoreCircleText}>{score}%</Text>
-            <Text style={styles.scoreCircleLabel}>SCORE</Text>
-          </View>
+          {hasValidScore ? (
+            <View style={styles.scoreCircle}>
+              <Text style={styles.scoreCircleText}>{score}%</Text>
+              <Text style={styles.scoreCircleLabel}>SCORE</Text>
+            </View>
+          ) : (
+            <View style={[styles.scoreCircle, { backgroundColor: '#334155', borderColor: '#475569' }]}>
+              <Text style={[styles.scoreCircleText, { color: '#94a3b8', fontSize: 18 }]}>N/A</Text>
+              <Text style={styles.scoreCircleLabel}>INCOMPLETE</Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.card}>
