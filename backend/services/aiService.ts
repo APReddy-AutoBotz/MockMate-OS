@@ -238,7 +238,7 @@ export const generateInterviewPlan = async (
         ? `MANDATORY: Include 2-3 coding questions. Assign 'language' (e.g., 'python').`
         : "Do not include coding questions.";
 
-    const sessionMode = sessionControls.deliveryMode || 'coach';
+    const sessionMode = sessionControls.reasoningMode || 'classic_behavioral';
     const activeDimensions = ACTIVE_DIMENSIONS_BY_MODE[sessionMode] || ACTIVE_DIMENSIONS_BY_MODE['classic_behavioral'];
     const dimensionWeights = DEFAULT_WEIGHTS_BY_MODE[sessionMode] || DEFAULT_WEIGHTS_BY_MODE['classic_behavioral'];
 
@@ -332,7 +332,7 @@ export const generateFinalReport = async (
     Candidate: "${turn.candidateResponse}"
     `).join('\n');
 
-    const sessionMode = context.controls?.deliveryMode || 'coach';
+    const sessionMode = context.controls?.reasoningMode || 'classic_behavioral';
     const activeDimensions = ACTIVE_DIMENSIONS_BY_MODE[sessionMode] || ACTIVE_DIMENSIONS_BY_MODE['classic_behavioral'];
 
     const masterPrompt = `You are a world-class Interview Bar Raiser. Analyze this mock interview session and generate a "Hiring Committee" report.
@@ -564,7 +564,7 @@ export const startInterviewSession = async (
 
     // 2. Create session record in Supabase when persistence is enabled.
     const dummyFirstQuestion = { id: 'q1', text: firstMessage, type: 'intro', expectedSignals: [], relatedCompetency: '', difficulty: 'medium' } as any;
-    const session = await sessionService.createSession(userId, context, dummyFirstQuestion);
+    const session = await sessionService.createSession(userId, context);
 
     // 3. Save first AI turn (optional, or just return it. Let's save it as a "system" or "interviewer" init turn if we want, but usually history starts with Q1)
     // Actually, usually the welcome is just intro. The first REAL question comes next. 
@@ -581,77 +581,27 @@ export const startInterviewSession = async (
     };
 };
 
-export const submitAnswer = async (
-    userId: string,
-    sessionId: string,
-    candidateAnswer: string
-): Promise<{ nextQuestion: string; isLastQuestion: boolean }> => {
 
-    // 1. Fetch Session
-    const session = await sessionService.getSession(sessionId);
-    if (!session) throw new Error("Session not found");
-    if (session.userId !== userId) throw new Error("Unauthorized access to session");
+import { getSession, completeSession, markSessionEvaluationFailed } from './sessionService';
+import { FinalReportSchema } from 'mockmate-shared';
 
-    // 2. Append User Answer to History (if this is a response to a previous question)
-    // Complexity: We need to know WHAT question they answered.
-    // Simpler approach: The frontend sends the *context* or we assume the last question in history is what they answered?
-    // If backend is stateful, we should look at the last turn in history?
-    // Issue: initial history is empty.
-
-    // Let's assume the frontend flow is:
-    // 1. Start -> Get Greeting/Q1.
-    // 2. User answers -> Call Submit -> Get Q2.
-
-    // We need to know what the PREVIOUS question was to save the turn: { Q: prev, A: answer }.
-    // If history is empty, maybe the "firstMessage" from Start was the question?
-
-    // REFACTOR: `startInterviewSession` should probably generate Q1 and save it as a "pending" turn or similar?
-    // OR: `submitAnswer` takes `currentQuestion` as param? 
-    // Trusting client with `currentQuestion` is okay for this stage.
-
-    // BUT, let's look at `mockGeminiService.ts`: `submitAnswerAndGetNext(history, ...)`
-    // It calculates next question based on history length.
-
-    // Let's implement a robust `generateNextQuestion` logic here using Gemini.
+export const generateAuthoritativeReport = async (userId: string, sessionId: string) => {
+    const session = await getSession(userId, sessionId);
+    if (!session) throw new Error('Session not found');
 
     const history = session.history || [];
-    const plan = session.context.interviewPlan;
-    const totalQuestions = session.context.controls?.totalQuestions || 5;
+    if (history.length === 0) throw new Error('No interview history to analyze.');
 
-    // Add the user's answer to the *previous* turn if it exists/pending?
-    // Actually, persistence usually means we append a COMPLETED turn { Q, A }.
-    // So we need the Question that was just answered.
-    // We can re-derive it from Plan if the Plan is deterministic (it is).
-
-    const answeredQuestionIndex = history.length; // If 0 items, we are answering Q1 (index 0).
-
-    const answeredQuestion = (plan as InterviewPlan)?.questionSet?.[answeredQuestionIndex]?.question || "Intro Question";
-
-    const turn: InterviewTurn = {
-        interviewer: (plan as InterviewPlan)?.questionSet?.[answeredQuestionIndex]?.personaFocus || 'Interviewer',
-        question: answeredQuestion,
-        candidateResponse: candidateAnswer,
-        timestamp: Date.now()
-    };
-
-    let nextQuestion: any = null;
-    await sessionService.updateSessionHistory(sessionId, turn, nextQuestion, history.length + 1);
-
-    // Now generate Q(next)
-    const newHistoryLength = history.length + 1;
-    if (newHistoryLength >= totalQuestions) {
-        return { nextQuestion: "That concludes our interview. Thank you.", isLastQuestion: true };
+    try {
+        const report = await generateFinalReport(history, session.context);
+        const parsedReport = FinalReportSchema.parse(report);
+        await completeSession(userId, sessionId, parsedReport);
+        return parsedReport;
+    } catch (err: any) {
+        await markSessionEvaluationFailed(userId, sessionId, 'REPORT_GENERATION_FAILED');
+        throw err;
     }
-
-    const nextQ = (plan as InterviewPlan)?.questionSet?.[newHistoryLength]?.question || "Tell me more.";
-
-    return {
-        nextQuestion: nextQ,
-        isLastQuestion: false
-    };
 };
-
-// --- Code & Hints ---
 
 export const analyzeCode = async (blueprint: any, code: string): Promise<string> => {
     const lang = blueprint.language || 'python';

@@ -4,7 +4,7 @@ export interface SessionHistoryRecord {
   id: string;
   timestamp: number;
   role: string;
-  avgScore: number;
+  avgScore: number | null;
   readinessStatus: string;
   biggestRisk: string;
   sessionType: 'structured' | 'conversational';
@@ -37,13 +37,13 @@ export const saveSessionToHistory = async (
     (report.advisoryPanel || []).forEach((adv: any) => {
       (adv.scores || []).forEach((s: any) => allScores.push(s.score));
     });
-    const avgScore = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : (report.overallScore ?? report.score ?? 80);
+    const avgScore = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : (report.overallScore ?? report.score ?? null);
 
     const newRecord: SessionHistoryRecord = {
       id: `session_${Date.now()}`,
       timestamp: Date.now(),
       role: role || 'Unknown Role',
-      avgScore: parseFloat(avgScore.toFixed(1)),
+      avgScore: avgScore !== null ? parseFloat(avgScore.toFixed(1)) : null,
       readinessStatus: report.readiness?.status || 'NOT_READY',
       biggestRisk: report.biggestRiskArea?.title || 'No major risk identified',
       sessionType: type,

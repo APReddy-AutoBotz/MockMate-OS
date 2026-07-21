@@ -25,10 +25,8 @@
  *   score_feedback_viewed   — score card rendered (user reached this screen)
  */
 
-import { auth } from './supabaseClient';
-import { API_ORIGIN } from './apiBase';
-
-const BASE = API_ORIGIN;
+import { apiClient, getAuthToken } from './apiClient';
+import { API_BASE } from './apiBase';
 
 // ─── Session ID ───────────────────────────────────────────────────────────────
 // Scoped to the browser tab. Not persisted. Used only to correlate events within one session.
@@ -50,26 +48,19 @@ export type CsEvent =
   | 'score_feedback_viewed';
 
 export interface CsEventProperties {
-  // session_started
   topicTag?: string;
   difficultyLevel?: number;
   isFallback?: boolean;
-  // session_completed
   composite?: number;
   clarity?: number;
   pacing?: number;
   rhythm?: number;
   retryUsed?: boolean;
   bridgeAccepted?: boolean;
-  // retry_used
   firstComposite?: number;
-  // low_confidence_error
   errorSource?: 'route_422' | 'frontend_guard';
-  // bridge_triggered / bridge_entered
   role?: string;
-  // score_feedback_viewed
   feedbackTipKey?: string;
-  // fallback_content_used
   fallbackTopic?: string;
 }
 
@@ -85,31 +76,23 @@ export async function csTrack(
   properties: CsEventProperties = {},
 ): Promise<void> {
   try {
-    const token = await auth.currentUser?.getIdToken().catch(() => undefined);
-    const body = JSON.stringify({
+    const payload = {
       event,
       sessionId,
       timestamp: new Date().toISOString(),
       properties,
-    });
+    };
 
-    // Use sendBeacon if available (survives page unload); fallback to fetch
     if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
-      const blob = new Blob([body], { type: 'application/json' });
-      navigator.sendBeacon(`${BASE}/api/clearspeak/beta/event`, blob);
+      const token = await getAuthToken().catch(() => undefined);
+      // sendBeacon doesn't easily support custom Authorization headers, but we can append token to URL if supported,
+      // or just accept we might lose beta events if beacon is used without cookie auth.
+      const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+      navigator.sendBeacon(`${API_BASE}/clearspeak/beta/event`, blob);
     } else {
-      await fetch(`${BASE}/api/clearspeak/beta/event`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body,
-        // keepalive allows the request to outlive the page
-        keepalive: true,
-      });
+      await apiClient.post('clearspeak/beta/event', payload, { keepalive: true });
     }
   } catch {
-    // Analytics loss is acceptable. Never surface to user.
+    // Analytics loss is acceptable.
   }
 }

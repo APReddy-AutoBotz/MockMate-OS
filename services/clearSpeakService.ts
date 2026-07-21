@@ -1,85 +1,40 @@
 /**
  * services/clearSpeakService.ts
- * Mockmate ClearSpeak — frontend API client.
- *
- * Calls the /api/clearspeak/* backend routes.
- * Auth token is read from Supabase via the shared auth pattern.
+ * Mockmate ClearSpeak frontend API client.
  */
-
-import { auth } from './supabaseClient';
-import { API_ORIGIN } from './apiBase';
+import { apiClient, ApiError } from './apiClient';
 import type {
   ClearSpeakProfile,
   ClearSpeakSessionContent,
   ClearSpeakSessionScore,
   ClearSpeakProgress,
   BridgeTriggerState,
-} from '../components/clearspeak/types';
-
-const BASE = API_ORIGIN;
-
-async function authHeaders(): Promise<HeadersInit> {
-  let token: string | undefined;
-  if (auth.currentUser) {
-    if (typeof auth.currentUser.getIdToken === 'function') {
-      token = await auth.currentUser.getIdToken();
-    } else {
-      token = 'test-token';
-    }
-  }
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-}
-
-async function handleResponse<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || 'API error');
-  }
-  return res.json() as Promise<T>;
-}
-
-// ─── Profile ───────────────────────────────────────────────────────────────────
+} from 'mockmate-shared';
 
 export async function saveProfile(
   profile: Omit<ClearSpeakProfile, 'userId' | 'createdAt' | 'updatedAt'>,
 ): Promise<ClearSpeakProfile> {
-  const res = await fetch(`${BASE}/api/clearspeak/profile`, {
-    method: 'POST',
-    headers: await authHeaders(),
-    body: JSON.stringify(profile),
-  });
-  const data = await handleResponse<{ profile: ClearSpeakProfile }>(res);
+  const data = await apiClient.post<{ profile: ClearSpeakProfile }>('clearspeak/profile', profile);
   return data.profile;
 }
 
 export async function getProfile(): Promise<ClearSpeakProfile | null> {
-  const res = await fetch(`${BASE}/api/clearspeak/profile`, {
-    headers: await authHeaders(),
-  });
-  if (res.status === 404) return null;
-  const data = await handleResponse<{ profile: ClearSpeakProfile }>(res);
-  return data.profile;
+  try {
+    const data = await apiClient.get<{ profile: ClearSpeakProfile }>('clearspeak/profile');
+    return data.profile;
+  } catch (err: any) {
+    if (err.status === 404) return null;
+    throw err;
+  }
 }
-
-// ─── Generate Session Content ──────────────────────────────────────────────────
 
 export async function generateSession(
   recentTopics: string[] = [],
   sessionAttemptLength: number = 0,
 ): Promise<ClearSpeakSessionContent> {
-  const res = await fetch(`${BASE}/api/clearspeak/generate`, {
-    method: 'POST',
-    headers: await authHeaders(),
-    body: JSON.stringify({ recentTopics, sessionAttemptLength }),
-  });
-  const data = await handleResponse<{ content: ClearSpeakSessionContent }>(res);
+  const data = await apiClient.post<{ content: ClearSpeakSessionContent }>('clearspeak/generate', { recentTopics, sessionAttemptLength });
   return data.content;
 }
-
-// ─── Score Session ─────────────────────────────────────────────────────────────
 
 export interface ScorePayload {
   audioBlob: Blob;
@@ -93,7 +48,6 @@ export interface ScoreResponse {
   bridgeTrigger: BridgeTriggerState;
 }
 
-/** Thrown when the backend returns 422 low_confidence_transcription. */
 export class LowConfidenceError extends Error {
   constructor(message: string) {
     super(message);
@@ -103,55 +57,27 @@ export class LowConfidenceError extends Error {
 
 export async function scoreSession(payload: ScorePayload): Promise<ScoreResponse> {
   const { audioBlob, content, retryAttempted } = payload;
-
-  // Build multipart form — audio as binary, content as JSON string field.
-  // Do NOT set Content-Type header manually; let the browser set the boundary.
   const form = new FormData();
   form.append('audio', audioBlob, 'recording.webm');
   form.append('content', JSON.stringify(content));
   form.append('retryAttempted', String(retryAttempted));
 
-  let token: string | undefined;
-  if (auth.currentUser) {
-    if (typeof auth.currentUser.getIdToken === 'function') {
-      token = await auth.currentUser.getIdToken();
-    } else {
-      token = 'test-token';
-    }
-  }
-  const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
-
-  const res = await fetch(`${BASE}/api/clearspeak/score`, {
-    method: 'POST',
-    headers,
-    body: form,
-  });
-
-  // 422 = low-confidence transcription (inaudible audio, mic failure, etc.)
-  // Throw a typed error so the caller can surface a targeted UI message.
-  if (res.status === 422) {
-    const body = await res.json().catch(() => ({}));
-    if (body.error === 'low_confidence_transcription') {
+  try {
+    return await apiClient.post<ScoreResponse>('clearspeak/score', form);
+  } catch (err: any) {
+    if (err.status === 422 && err.code === 'low_confidence_transcription') {
       throw new LowConfidenceError(
-        body.message ?? "We couldn't clearly hear your recording. Please check your microphone and try again.",
+        err.message ?? "We couldn't clearly hear your recording. Please check your microphone and try again."
       );
     }
+    throw err;
   }
-
-  return handleResponse<ScoreResponse>(res);
 }
-
-// ─── Progress ──────────────────────────────────────────────────────────────────
 
 export async function getProgress(): Promise<ClearSpeakProgress> {
-  const res = await fetch(`${BASE}/api/clearspeak/progress`, {
-    headers: await authHeaders(),
-  });
-  const data = await handleResponse<{ progress: ClearSpeakProgress }>(res);
+  const data = await apiClient.get<{ progress: ClearSpeakProgress }>('clearspeak/progress');
   return data.progress;
 }
-
-// ─── Beta: Feedback Submission ─────────────────────────────────────────────────
 
 export interface BetaFeedbackPayload {
   sessionId: string;
@@ -160,37 +86,19 @@ export interface BetaFeedbackPayload {
   confidentAfterRetry: boolean | null;
 }
 
-/**
- * Submits beta tester feedback after session completion.
- * Fire-and-forget — callers should not await and should swallow errors.
- */
 export async function submitBetaFeedback(payload: BetaFeedbackPayload): Promise<void> {
-  const res = await fetch(`${BASE}/api/clearspeak/beta/feedback`, {
-    method: 'POST',
-    headers: await authHeaders(),
-    body: JSON.stringify(payload),
-  });
-  await handleResponse<{ ok: boolean }>(res);
+  try {
+    await apiClient.post('clearspeak/beta/feedback', payload);
+  } catch (err) {
+    // Fire-and-forget
+  }
 }
 
-// ─── Beta: Access Check ────────────────────────────────────────────────────────
-
-/**
- * Returns true if the current user is in the beta tester allowlist.
- * Returns false on any network/auth error — fail-closed (beta hidden on error).
- *
- * Beta access is controlled by profiles.clearspeak_beta_enabled in Supabase.
- */
 export async function checkBetaAccess(): Promise<boolean> {
   try {
-    const res = await fetch(`${BASE}/api/clearspeak/beta/access`, {
-      headers: await authHeaders(),
-    });
-    if (!res.ok) return false;
-    const data = await res.json().catch(() => ({ enabled: false }));
+    const data = await apiClient.get<{ enabled: boolean }>('clearspeak/beta/access');
     return data.enabled === true;
   } catch {
     return false;
   }
 }
-

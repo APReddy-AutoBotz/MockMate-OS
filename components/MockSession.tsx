@@ -241,7 +241,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
             } else {
                 const nextIndex = sessionHistory.current.length % localContext.selectedPanelIDs.length;
                 const nextPersonaId = localContext.selectedPanelIDs[nextIndex];
-                const { nextQuestion, isLastQuestion } = await mockGeminiService.submitAnswerAndGetNext(sessionHistory.current, localContext, nextPersonaId);
+                const { nextQuestion, isLastQuestion } = await mockGeminiService.submitAnswerAndGetNext(currentSessionId, currentBlueprint?.id || 'q1', answerText);
 
                 if (isLastQuestion) generateReport();
                 else if (nextQuestion) {
@@ -259,7 +259,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
         setSessionPhase('generating_report');
         setReportError('');
         try {
-            const report = await mockGeminiService.generateFinalReport(sessionHistory.current.slice(), localContext);
+            const report = await mockGeminiService.generateFinalReport(currentSessionId);
             onReportGenerated(report);
         } catch (error) {
             setReportError('Report generation failed. Please try again, or exit without results.');

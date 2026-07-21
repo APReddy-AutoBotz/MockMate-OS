@@ -96,12 +96,12 @@ export default function InterviewScreen() {
       };
 
       const result = await mockGeminiService.startInterviewSession(context);
-      setSessionId(result.updatedContext.sessionId);
-      setCurrentQuestion(result.firstQuestion);
-      setPendingQuestionId(result.pendingQuestion?.id || 'q1');
+      setSessionId(result.sessionId);
+      setCurrentQuestion(result.firstQuestion.question);
+      setPendingQuestionId(result.firstQuestion.id || 'q1');
       setQuestionNumber(1);
       sessionHistory.current = [];
-      await storageService.trackQuestionUsage(result.firstQuestion, role.trim());
+      await storageService.trackQuestionUsage(result.firstQuestion.question, role.trim());
       setPhase('ASKING');
     } catch (error: any) {
       console.error(error);
@@ -207,12 +207,8 @@ export default function InterviewScreen() {
     setHint(null);
 
     try {
-      const context = {
-        sessionId,
-      };
-
       const result = await mockGeminiService.submitAnswerAndGetNext(
-        context,
+        sessionId || 's1',
         pendingQuestionId || 'q1',
         sessionHistory.current[sessionHistory.current.length - 1].candidateResponse
       );
@@ -221,9 +217,9 @@ export default function InterviewScreen() {
         handleGenerateReport();
       } else {
         setQuestionNumber((current) => current + 1);
-        setCurrentQuestion(result.nextQuestion);
-        setPendingQuestionId(result.pendingQuestion?.id || 'q' + (questionNumber + 1));
-        await storageService.trackQuestionUsage(result.nextQuestion, role);
+        setCurrentQuestion(result.nextQuestion.question);
+        setPendingQuestionId(result.nextQuestion.id || 'q' + (questionNumber + 1));
+        await storageService.trackQuestionUsage(result.nextQuestion.question, role);
         setPhase('ASKING');
       }
     } catch {

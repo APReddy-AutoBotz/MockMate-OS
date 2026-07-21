@@ -154,7 +154,9 @@ export default function ResumeScreen() {
         <View style={styles.reportContainer}>
           <View style={styles.scoreHeader}>
             <View style={styles.scoreRing}>
-              <Text style={styles.scoreNumber}>{report.score ?? report.overallScore ?? 80}%</Text>
+              <Text style={styles.scoreNumber}>
+                {(report.score ?? report.overallScore) != null ? `${report.score ?? report.overallScore}%` : 'INCOMPLETE'}
+              </Text>
               <Text style={styles.scoreLabel}>ATS SCORE</Text>
             </View>
           </View>

@@ -1,185 +1,113 @@
 import { z } from 'zod';
 
 // ==========================================
-// COMMON
+// CORE / BASE TYPES
 // ==========================================
-
-export const ApiErrorCodeSchema = z.enum([
-  'UNAUTHORIZED',
-  'FORBIDDEN',
-  'NOT_FOUND',
-  'VALIDATION_ERROR',
-  'CONFLICT',
-  'RATE_LIMITED',
-  'PAYLOAD_TOO_LARGE',
-  'UNSUPPORTED_MEDIA_TYPE',
-  'INTERNAL_ERROR',
-  'SERVICE_UNAVAILABLE',
+export const DimensionKeySchema = z.enum([
+  'problem_solving',
+  'communication',
+  'technical_depth',
+  'collaboration',
+  'leadership',
+  'ambiguity_navigation',
+  'system_design',
+  'code_quality',
+  'adaptability',
+  'delivery'
 ]);
-export type ApiErrorCode = z.infer<typeof ApiErrorCodeSchema>;
+export type DimensionKey = z.infer<typeof DimensionKeySchema>;
 
-export const ApiErrorSchema = z.object({
-  code: ApiErrorCodeSchema,
-  message: z.string(),
-  details: z.any().optional(),
-});
-export type ApiError = z.infer<typeof ApiErrorSchema>;
-
-// Authenticated API result/error envelope
-export const ApiResultSchema = <T extends z.ZodTypeAny>(dataSchema: T) =>
-  z.object({
-    success: z.boolean(),
-    data: dataSchema.optional(),
-    error: ApiErrorSchema.optional(),
-  });
-
-export const EvaluationStatusSchema = z.enum(['scored', 'insufficient_evidence', 'not_tested', 'error']);
+export const EvaluationStatusSchema = z.enum(['not_evaluated', 'insufficient_evidence', 'evaluated']);
 export type EvaluationStatus = z.infer<typeof EvaluationStatusSchema>;
 
 export const EvidenceConfidenceSchema = z.enum(['low', 'medium', 'high']);
 export type EvidenceConfidence = z.infer<typeof EvidenceConfidenceSchema>;
 
 // ==========================================
-// INTERVIEW
+// INTERVIEW CONTROLS & CONTEXT
 // ==========================================
-
-export const InterviewDeliveryModeSchema = z.enum(['exam', 'coach']);
-export type InterviewDeliveryMode = z.infer<typeof InterviewDeliveryModeSchema>;
-
-export const InterviewReasoningModeSchema = z.enum([
-  'classic_behavioral',
-  'classic_technical',
-  'narrative_reasoning',
-  'problem_framing',
-  'tradeoff_decision',
-  'stakeholder_pressure',
-  'ai_collaboration_review',
-  'uncertainty_handling',
-  'adversarial_pushback'
-]);
-export type InterviewReasoningMode = z.infer<typeof InterviewReasoningModeSchema>;
-
 export const SessionControlsSchema = z.object({
-  difficulty: z.enum(['starter', 'intermediate', 'expert']).optional(), // Optional for compat
-  totalQuestions: z.number().optional(),
-  includeBehavioral: z.boolean().optional(),
-  includeCoding: z.boolean().optional(),
-  timePerQuestion: z.enum(['45s', '90s', '120s', 'none']).optional(),
-  deliveryMode: InterviewDeliveryModeSchema,
-  reasoningMode: InterviewReasoningModeSchema,
-  sourceMode: z.enum(['job_description', 'question_bank']).optional(),
+  difficulty: z.enum(['starter', 'intermediate', 'expert']),
+  totalQuestions: z.number(),
+  includeBehavioral: z.boolean(),
+  includeCoding: z.boolean(),
+  timePerQuestion: z.string(),
+  deliveryMode: z.enum(['exam', 'coach']),
+  reasoningMode: z.enum([
+    'classic_behavioral',
+    'classic_technical',
+    'narrative_reasoning',
+    'problem_framing',
+    'tradeoff_decision',
+    'stakeholder_pressure',
+    'ai_collaboration_review',
+    'uncertainty_handling',
+    'adversarial_pushback'
+  ]),
+  sourceMode: z.enum(['job_description', 'question_bank', 'resume']).optional(),
+  targetCompetencies: z.array(z.string()).optional(),
+  targetDimensions: z.array(DimensionKeySchema).optional(),
 });
 export type SessionControls = z.infer<typeof SessionControlsSchema>;
 
-export const DimensionKeySchema = z.string();
-export type DimensionKey = z.infer<typeof DimensionKeySchema>;
-
 export const QuestionBlueprintSchema = z.object({
-  id: z.string().optional(),
-  phase: z.string().optional(),
-  difficulty: z.string().optional(),
-  type: z.string().optional(),
+  id: z.string(),
+  phase: z.string(),
+  difficulty: z.string(),
   question: z.string(),
-  expectedSignals: z.array(z.string()).optional(),
-  failureModes: z.array(z.string()).optional(),
-  evaluationCriteria: z.array(z.string()).optional(),
-  personaFocus: z.string().optional(),
-  rubric: z.record(z.any()).optional(),
-  sourceBullets: z.array(z.string()).optional(),
-  estTimeSec: z.number().optional(),
-  language: z.string().optional(),
-  timeAllocation: z.number().optional(),
+  expectedSignals: z.array(z.string()),
+  personaFocus: z.string(),
+  type: z.string().optional(),
+  relatedCompetency: z.string().optional(),
+  relatedDimensions: z.array(DimensionKeySchema).optional(),
 });
 export type QuestionBlueprint = z.infer<typeof QuestionBlueprintSchema>;
 
-export const JDInsightsSchema = z.object({
-  source: z.string().optional(),
-  role: z.string().optional(),
-  level: z.union([z.literal(1), z.literal(2), z.literal(3), z.string()]).optional(),
-  mustHaveSkills: z.array(z.string()).optional(),
-  niceToHave: z.array(z.string()).optional(),
-  domains: z.array(z.string()).optional(),
-  tools: z.array(z.string()).optional(),
-  softSkills: z.array(z.string()).optional(),
-  competencyWeights: z.record(z.number()).optional(),
-});
-export type JDInsights = z.infer<typeof JDInsightsSchema>;
-
 export const InterviewPlanSchema = z.object({
   meta: z.object({
-    mode: z.string().optional(),
-    candidateRole: z.string().optional(),
-    language: z.string().optional(),
-    controls: SessionControlsSchema.optional(),
-    estimatedDuration: z.string().optional(),
-    focusAreas: z.array(z.string()).optional(),
-  }).optional(),
-  jdInsights: JDInsightsSchema.optional(),
-  questionSet: z.array(QuestionBlueprintSchema),
-  orderingNotes: z.string().optional(),
-  adaptSpec: z.any().optional(),
-  coachPack: z.any().optional(),
-  researchLinks: z.any().optional(),
+    intent: z.string(),
+    controls: SessionControlsSchema,
+  }),
+  jdInsights: z.string(),
+  questionSet: z.array(QuestionBlueprintSchema).min(1),
+  focusAreas: z.array(z.string()).optional(),
+  personas: z.array(z.string()).optional(),
+  adaptiveRules: z.array(z.string()).optional(),
 });
 export type InterviewPlan = z.infer<typeof InterviewPlanSchema>;
 
 export const InterviewSessionContextSchema = z.object({
-  candidateRole: z.string().optional(),
-  intentText: z.string().optional(),
-  selectedPanelIDs: z.array(z.string()).optional(),
-  jdInsights: JDInsightsSchema.optional(),
-  competencyWeights: z.record(z.number()).optional(),
-  interviewPlan: InterviewPlanSchema.optional(),
-  controls: SessionControlsSchema.optional(),
-  companyName: z.string().optional(),
-  companyUrl: z.string().optional(),
-  companyBrief: z.string().optional(),
-  targetStarBullets: z.array(z.string()).optional(),
-  sessionType: z.enum(['structured', 'conversational']).optional(),
-  sessionId: z.string().optional(),
+  candidateRole: z.string(),
+  intentText: z.string(),
+  selectedPanelIDs: z.array(z.string()),
+  controls: SessionControlsSchema,
+  interviewPlan: InterviewPlanSchema,
+  sessionType: z.string(),
+  resumeText: z.string().optional(),
+  jobDescription: z.string().optional(),
+  companyContext: z.string().optional(),
+  timezone: z.string().optional(),
 });
 export type InterviewSessionContext = z.infer<typeof InterviewSessionContextSchema>;
 
-export const InterviewSessionStartRequestSchema = z.object({
-  context: InterviewSessionContextSchema,
-});
-export type InterviewSessionStartRequest = z.infer<typeof InterviewSessionStartRequestSchema>;
-
-export const InterviewSessionStartResponseSchema = z.object({
-  sessionId: z.string(),
-  openingMessage: z.string(),
-  firstQuestion: QuestionBlueprintSchema,
-  questionIndex: z.number(),
-  totalQuestions: z.number(),
-});
-export type InterviewSessionStartResponse = z.infer<typeof InterviewSessionStartResponseSchema>;
-
-export const InterviewAnswerRequestSchema = z.object({
-  questionId: z.string(),
-  answerText: z.string(),
-});
-export type InterviewAnswerRequest = z.infer<typeof InterviewAnswerRequestSchema>;
-
-export const InterviewAnswerResponseSchema = z.object({
-  completedTurnId: z.string(),
-  nextQuestion: QuestionBlueprintSchema.nullable(),
-  isLastQuestion: z.boolean(),
-  questionIndex: z.number(),
-  totalQuestions: z.number(),
-});
-export type InterviewAnswerResponse = z.infer<typeof InterviewAnswerResponseSchema>;
-
+// ==========================================
+// INTERVIEW TURNS
+// ==========================================
 export const InterviewTurnSchema = z.object({
-  id: z.string().optional(), // For completedTurnId
-  interviewer: z.string().optional(),
+  turnId: z.string(),
+  interviewer: z.string(),
   question: z.string(),
-  candidateResponse: z.string(),
+  candidateResponse: z.string().optional(),
   timestamp: z.number().optional(),
-  questionBlueprint: QuestionBlueprintSchema.optional(),
+  codeSnippet: z.string().optional(),
+  codeLanguage: z.string().optional(),
   codeFeedback: z.string().optional(),
 });
 export type InterviewTurn = z.infer<typeof InterviewTurnSchema>;
 
+// ==========================================
+// REPORT & EVALUATION
+// ==========================================
 export const DimensionScoreSchema = z.object({
   dimension: DimensionKeySchema,
   score_status: EvaluationStatusSchema,
@@ -190,6 +118,56 @@ export const DimensionScoreSchema = z.object({
   confidence: EvidenceConfidenceSchema,
 });
 export type DimensionScore = z.infer<typeof DimensionScoreSchema>;
+
+export const CompetencyScoreSchema = z.object({
+  competency: z.string(),
+  score: z.number(),
+  evidence: z.array(z.string()),
+});
+export type CompetencyScore = z.infer<typeof CompetencyScoreSchema>;
+
+export const AdvisoryPanelSchema = z.object({
+  consensus: z.string(),
+  dissentingOpinions: z.array(z.string()),
+});
+export type AdvisoryPanel = z.infer<typeof AdvisoryPanelSchema>;
+
+export const BiggestRiskSchema = z.object({
+  description: z.string(),
+  mitigation: z.string(),
+});
+export type BiggestRisk = z.infer<typeof BiggestRiskSchema>;
+
+export const CoachPackSchema = z.object({
+  focusArea: z.string(),
+  exercises: z.array(z.string()),
+});
+export type CoachPack = z.infer<typeof CoachPackSchema>;
+
+export const TrajectoryReplaySchema = z.object({
+  summary: z.string(),
+  keyMoments: z.array(z.string()),
+});
+export type TrajectoryReplay = z.infer<typeof TrajectoryReplaySchema>;
+
+export const AuditFindingsSchema = z.object({
+  biasDetected: z.boolean(),
+  notes: z.string(),
+});
+export type AuditFindings = z.infer<typeof AuditFindingsSchema>;
+
+export const PrioritizedActionSchema = z.object({
+  action: z.string(),
+  impact: z.string(),
+});
+export type PrioritizedAction = z.infer<typeof PrioritizedActionSchema>;
+
+export const ProviderMetadataSchema = z.object({
+  provider: z.string(),
+  model: z.string(),
+  tokens: z.number().optional(),
+});
+export type ProviderMetadata = z.infer<typeof ProviderMetadataSchema>;
 
 export const QuestionPerformanceSchema = z.object({
   question_text: z.string(),
@@ -204,30 +182,30 @@ export const QuestionPerformanceSchema = z.object({
 export type QuestionPerformance = z.infer<typeof QuestionPerformanceSchema>;
 
 export const FinalReportSchema = z.object({
-  overallSummary: z.string().optional(),
-  evaluationModel: z.enum(['legacy', 'v1_dimensions']).optional(),
+  overallSummary: z.string(),
+  evaluationModel: z.enum(['legacy', 'v1_dimensions']),
   readiness: z.object({
     status: z.enum(['INTERVIEW_READY', 'ALMOST_READY', 'NOT_READY']),
     reasoning: z.string(),
-  }).optional(),
+  }),
   quantitativeAnalysis: z.object({
-    competency_scores: z.any().optional(),
-    dimension_scores: z.array(DimensionScoreSchema).optional(),
-  }).optional(),
-  advisoryPanel: z.any().optional(),
-  questionPerformance: z.array(QuestionPerformanceSchema).optional(),
-  biggestRiskArea: z.any().optional(),
-  coachPack: z.any().optional(),
-  trajectoryReplay: z.any().optional(),
-  auditLayer: z.any().optional(),
+    competency_scores: z.array(CompetencyScoreSchema),
+    dimension_scores: z.array(DimensionScoreSchema),
+  }),
+  advisoryPanel: AdvisoryPanelSchema,
+  questionPerformance: z.array(QuestionPerformanceSchema),
+  biggestRiskArea: BiggestRiskSchema.optional(),
+  coachPack: CoachPackSchema,
+  trajectoryReplay: TrajectoryReplaySchema.optional(),
+  auditLayer: AuditFindingsSchema.optional(),
   pilotFeedback: z.any().optional(),
   simplifiedScore: z.number().nullable().optional(),
   topStrength: z.string().optional(),
   topWeakness: z.string().optional(),
   estimatedSessionsToReady: z.number().optional(),
   quickWins: z.array(z.string()).optional(),
-  prioritizedActions: z.any().optional(),
-  _metadata: z.any().optional(),
+  prioritizedActions: z.array(PrioritizedActionSchema).optional(),
+  _metadata: ProviderMetadataSchema.optional(),
 });
 export type FinalReport = z.infer<typeof FinalReportSchema>;
 
@@ -288,30 +266,33 @@ export const ResumeDataSchema = z.object({
 export type ResumeData = z.infer<typeof ResumeDataSchema>;
 
 export const ATSDiagnosticsResultSchema = z.object({
-  overallMatch: z.number(),
-  missingKeywords: z.array(z.string()),
-  formattingIssues: z.array(z.string()),
-  readabilityScore: z.number(),
+  score: z.number(),
+  highConfidenceIssues: z.array(z.string()),
+  possibleRiskIssues: z.array(z.string()),
 });
 export type ATSDiagnosticsResult = z.infer<typeof ATSDiagnosticsResultSchema>;
 
 export const JDMatchResultSchema = z.object({
-  matchPercentage: z.number(),
+  jdMatchScore: z.number(),
   matchedSkills: z.array(z.string()),
-  missingSkills: z.array(z.string()),
-  recommendations: z.array(z.string()),
+  deterministicMissingSkills: z.array(z.string()),
+  llmMissingHardSkills: z.array(z.string()),
+  llmMissingSoftSkills: z.array(z.string()),
 });
 export type JDMatchResult = z.infer<typeof JDMatchResultSchema>;
 
 export const ResumeScoreResponseSchema = z.object({
-  resumeData: ResumeDataSchema.optional(),
-  atsDiagnostics: ATSDiagnosticsResultSchema.optional(),
-  jdMatch: JDMatchResultSchema.optional(),
+  success: z.boolean(),
+  atsDiagnostics: ATSDiagnosticsResultSchema,
+  jdMatch: JDMatchResultSchema.nullable(),
 });
 export type ResumeScoreResponse = z.infer<typeof ResumeScoreResponseSchema>;
 
 export const ResumeSuggestionResponseSchema = z.object({
-  suggestions: z.array(z.string()),
+  success: z.boolean(),
+  bulletSuggestions: z.array(z.string()),
+  summarySuggestion: z.string().optional(),
+  jdUsed: z.boolean(),
 });
 export type ResumeSuggestionResponse = z.infer<typeof ResumeSuggestionResponseSchema>;
 
@@ -320,79 +301,105 @@ export type ResumeSuggestionResponse = z.infer<typeof ResumeSuggestionResponseSc
 // ==========================================
 
 export const ClearSpeakProfileSchema = z.object({
-  userId: z.string().optional(),
-  targetAccent: z.string().optional(),
-  nativeLanguage: z.string().optional(),
-  focusAreas: z.array(z.string()).optional(),
-  role: z.string().optional(),
-  practiceDuration: z.any().optional(),
-  level: z.any().optional(),
-  goal: z.string().optional(),
-  audienceContext: z.string().optional(),
-  mainStruggle: z.string().optional(),
-  comfortLanguage: z.string().optional(),
-  createdAt: z.string().optional(),
-  updatedAt: z.string().optional(),
-}).catchall(z.any());
+  userId: z.string(),
+  targetAccent: z.string(),
+  nativeLanguage: z.string(),
+  focusAreas: z.array(z.string()),
+  role: z.string(),
+  practiceDuration: z.number(),
+  level: z.enum(['1', '2', '3']),
+  goal: z.string(),
+  audienceContext: z.string(),
+  mainStruggle: z.string(),
+  comfortLanguage: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
 export type ClearSpeakProfile = z.infer<typeof ClearSpeakProfileSchema>;
 
+export const PassageTokenSchema = z.object({
+  word: z.string(),
+  isHardWord: z.boolean(),
+  expectedPhonemes: z.array(z.string()).optional(),
+});
+export type PassageToken = z.infer<typeof PassageTokenSchema>;
+
 export const ClearSpeakSessionContentSchema = z.object({
-  passageData: z.any().optional(),
-  keyVocab: z.any().optional(),
-  retrySentence: z.any().optional(),
-  interviewBridgeQuestion: z.any().optional(),
-  topicTag: z.string().optional(),
-  targetSkill: z.string().optional(),
-  text: z.string().optional(),
+  passageData: z.array(PassageTokenSchema),
+  keyVocab: z.array(z.string()),
+  retrySentence: z.string().optional(),
+  interviewBridgeQuestion: z.string().optional(),
+  topicTag: z.string(),
+  targetSkill: z.string(),
+  text: z.string(),
   audioUrl: z.string().optional(),
-  duration: z.number().optional(),
-  difficultyLevel: z.any().optional(),
-  repeatPhrase: z.any().optional(),
-  bridgeReady: z.any().optional(),
-}).catchall(z.any());
+  duration: z.number(),
+  difficultyLevel: z.number(),
+  repeatPhrase: z.string().optional(),
+  bridgeReady: z.boolean(),
+});
 export type ClearSpeakSessionContent = z.infer<typeof ClearSpeakSessionContentSchema>;
 
 export const ClearSpeakSessionScoreSchema = z.object({
-  clarity: z.number().optional(),
-  pacing: z.number().optional(),
-  rhythm: z.number().optional(),
-  composite: z.number().optional(),
-  hardWordBonus: z.number().optional(),
-  feedbackTip: z.string().optional(),
-  pronunciationScore: z.number().nullable().optional(),
-  fluencyScore: z.number().nullable().optional(),
-  vocabularyScore: z.number().nullable().optional(),
-  feedback: z.string().optional(),
+  clarity: z.number(),
+  pacing: z.number(),
+  rhythm: z.number(),
+  composite: z.number(),
+  hardWordBonus: z.number(),
+  feedbackTip: z.string(),
+  pronunciationScore: z.number().nullable(),
+  fluencyScore: z.number().nullable(),
+  vocabularyScore: z.number().nullable(),
+  feedback: z.string(),
   mockData: z.boolean().optional(),
-  measuredWpm: z.number().optional(),
-  retrySuccess: z.boolean().optional(),
-}).catchall(z.any());
+  measuredWpm: z.number(),
+  retrySuccess: z.boolean(),
+});
 export type ClearSpeakSessionScore = z.infer<typeof ClearSpeakSessionScoreSchema>;
 
 export const ClearSpeakProgressSchema = z.object({
-  sessionsCompleted: z.number().optional(),
-  averageScore: z.number().optional(),
-  improvement: z.number().optional(),
-  streak: z.number().optional(),
-  userId: z.string().optional(),
-  lastPracticeDate: z.string().optional(),
-  clarityTrend: z.any().optional(),
-  topicBestScores: z.any().optional(),
-  bestPerformingTopic: z.string().optional(),
-  hardWordCount: z.number().optional(),
-  totalSessionsCompleted: z.number().optional(),
-  updatedAt: z.string().optional(),
-}).catchall(z.any());
+  sessionsCompleted: z.number(),
+  averageScore: z.number(),
+  improvement: z.number(),
+  streak: z.number(),
+  userId: z.string(),
+  lastPracticeDate: z.string(),
+  clarityTrend: z.array(z.number()),
+  topicBestScores: z.record(z.number()),
+  bestPerformingTopic: z.string(),
+  hardWordCount: z.number(),
+  totalSessionsCompleted: z.number(),
+  updatedAt: z.string(),
+});
 export type ClearSpeakProgress = z.infer<typeof ClearSpeakProgressSchema>;
 
-export interface HardWordEntry { word: string; failCount: number; lastFailed?: string; resolved?: boolean; lastAttemptedAt?: string; [k: string]: any; }
-export interface HardWordsLedger { userId: string; entries: HardWordEntry[]; updatedAt?: string; [k: string]: any; }
+export const HardWordEntrySchema = z.object({
+  word: z.string(),
+  failCount: z.number(),
+  lastFailed: z.string(),
+  resolved: z.boolean(),
+  lastAttemptedAt: z.string(),
+});
+export type HardWordEntry = z.infer<typeof HardWordEntrySchema>;
+
+export const HardWordsLedgerSchema = z.object({
+  userId: z.string(),
+  entries: z.array(HardWordEntrySchema),
+  updatedAt: z.string(),
+});
+export type HardWordsLedger = z.infer<typeof HardWordsLedgerSchema>;
 
 export const BridgeTriggerStateSchema = z.object({
-  shouldSurface: z.boolean().optional(),
+  shouldSurface: z.boolean(),
   triggered: z.boolean(),
-  reason: z.string().optional(),
-  streakMet: z.boolean().optional(),
-  rollingAvgMet: z.boolean().optional(),
-}).catchall(z.any());
+  reason: z.string(),
+  streakMet: z.boolean(),
+  rollingAvgMet: z.boolean(),
+});
 export type BridgeTriggerState = z.infer<typeof BridgeTriggerStateSchema>;
+
+export const ClearSpeakScoreResponseSchema = z.object({
+  success: z.boolean(),
+  score: ClearSpeakSessionScoreSchema,
+});
+export type ClearSpeakScoreResponse = z.infer<typeof ClearSpeakScoreResponseSchema>;

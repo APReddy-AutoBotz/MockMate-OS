@@ -19,7 +19,10 @@
     "preview": "vite preview",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "shared:build": "npm run build --workspace=mockmate-shared",
+    "shared:test": "npm run test --workspace=mockmate-shared",
+    "check:contracts": "npm run typecheck --workspace=mockmate-shared"
   },
   "dependencies": {
     "@google/genai": "^1.40.0",
@@ -72,5 +75,9 @@
     "vite": "^5.1.0",
     "vite-plugin-pwa": "^1.2.0",
     "workbox-window": "^7.4.0"
-  }
+  },
+  "workspaces": [
+    "shared",
+    "backend"
+  ]
 }

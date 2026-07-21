@@ -49,7 +49,7 @@ router.get('/sessions/:id', async (req: any, res) => {
     try {
         const userId = req.user.uid;
         const sessionId = req.params.id;
-        const session = await sessionService.getSession(sessionId);
+        const session = await sessionService.getSession(userId, sessionId);
 
         if (!session) return res.status(404).json({ error: 'Session not found' });
         if (session.userId !== userId) return res.status(403).json({ error: 'Unauthorized' });

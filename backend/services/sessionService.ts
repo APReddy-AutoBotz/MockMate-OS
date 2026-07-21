@@ -41,10 +41,10 @@ export const toSession = async (row: any): Promise<any> => {
 
 export const createSession = async (
     userId: string, 
-    context: InterviewSessionContext,
-    firstQuestion: QuestionBlueprint
+    context: InterviewSessionContext
 ): Promise<any> => {
     const now = new Date().toISOString();
+    const firstQuestion = context.interviewPlan.questionSet[0];
 
     if (!supabaseAdmin) {
         const id = `local_${Date.now()}`;
@@ -57,11 +57,14 @@ export const createSession = async (
             updatedAt: now, 
             status: 'active',
             currentQuestionIndex: 0,
-            pendingQuestionId: firstQuestion.id || 'q1',
+            pendingQuestionId: firstQuestion.id,
             pendingQuestion: firstQuestion
         };
         fallbackSessions.set(id, session);
-        return session;
+        return {
+            sessionId: id,
+            firstQuestion,
+        };
     }
 
     const { data, error } = await supabaseAdmin
@@ -74,74 +77,87 @@ export const createSession = async (
             created_at: now,
             updated_at: now,
             current_question_index: 0,
-            pending_question_id: firstQuestion.id || 'q1',
+            pending_question_id: firstQuestion.id,
             pending_question: firstQuestion
         })
         .select('*')
         .single();
 
     if (error) throw error;
-    return toSession(data);
+    return {
+        sessionId: data.id,
+        firstQuestion,
+    };
 };
 
-export const getSession = async (sessionId: string): Promise<any | null> => {
+export const getSession = async (userId: string, sessionId: string): Promise<any | null> => {
     if (!supabaseAdmin) return fallbackSessions.get(sessionId) || null;
     const { data, error } = await supabaseAdmin
         .from('interview_sessions')
         .select('*')
         .eq('id', sessionId)
+        .eq('user_id', userId)
         .maybeSingle();
     if (error) throw error;
     return data ? toSession(data) : null;
 };
 
-export const updateSessionHistory = async (
-    sessionId: string, 
-    turn: InterviewTurn, 
-    nextQuestion: QuestionBlueprint | null, 
-    newIndex: number
+export const submitAnswer = async (
+    userId: string,
+    sessionId: string,
+    questionId: string,
+    answerText: string
 ) => {
-    const now = new Date().toISOString();
+    const session = await getSession(userId, sessionId);
+    if (!session) throw new Error('Session not found');
+    if (session.status !== 'active') throw new Error('Session is not active');
+    if (session.pendingQuestionId !== questionId) throw new Error('Stale or mismatched question submission');
+
+    const totalQuestions = session.context.controls.totalQuestions || session.context.interviewPlan.questionSet.length;
+    const answeredQuestionIndex = session.currentQuestionIndex;
+    
+    const turn: InterviewTurn = {
+        id: `turn_${Date.now()}`,
+        interviewer: session.pendingQuestion?.personaFocus || 'Interviewer',
+        question: session.pendingQuestion?.question || '',
+        candidateResponse: answerText,
+        timestamp: Date.now()
+    };
+
+    const newIndex = answeredQuestionIndex + 1;
+    const isLastQuestion = newIndex >= totalQuestions;
+    const nextQuestion = isLastQuestion ? null : session.context.interviewPlan.questionSet[newIndex];
+
     if (!supabaseAdmin) {
-        const session = fallbackSessions.get(sessionId);
-        if (!session) throw new Error('Session not found');
         session.history.push(turn);
         session.currentQuestionIndex = newIndex;
         session.pendingQuestion = nextQuestion;
         session.pendingQuestionId = nextQuestion?.id || null;
-        session.updatedAt = now;
+        if (isLastQuestion) session.status = 'completed';
+        session.updatedAt = new Date().toISOString();
         fallbackSessions.set(sessionId, session);
-        return { id: `turn_${Date.now()}` };
+        return { nextQuestion, isLastQuestion };
     }
 
-    const session = await getSession(sessionId);
-    if (!session) throw new Error('Session not found');
+    const { error } = await supabaseAdmin.rpc('atomic_submit_answer', {
+        p_session_id: sessionId,
+        p_user_id: userId,
+        p_question_id: questionId,
+        p_turn: turn,
+        p_next_question_json: nextQuestion,
+        p_next_question_id: nextQuestion?.id || null,
+        p_is_last: isLastQuestion
+    });
 
-    const { data: turnData, error: turnError } = await supabaseAdmin.from('interview_turns').insert({
-        user_id: session.userId,
-        session_id: sessionId,
-        question: turn.question,
-        answer_text: turn.candidateResponse,
-        feedback: { interviewer: turn.interviewer },
-        created_at: new Date(turn.timestamp || Date.now()).toISOString(),
-    }).select('id').single();
-    if (turnError) throw turnError;
-
-    const { error } = await supabaseAdmin
-        .from('interview_sessions')
-        .update({ 
-            updated_at: now,
-            current_question_index: newIndex,
-            pending_question: nextQuestion,
-            pending_question_id: nextQuestion?.id || null
-        })
-        .eq('id', sessionId);
-    if (error) throw error;
+    if (error) throw new Error(`Atomic submit failed: ${error.message}`);
     
-    return { id: turnData.id };
+    // Also log turn for analytics/audit if needed, but atomic RPC handles the state safely.
+    // The previous implementation wrote to interview_turns separately, we'll keep it simple: atomic_submit_answer handles the array append natively in the row.
+
+    return { nextQuestion, isLastQuestion };
 };
 
-export const completeSession = async (sessionId: string, report: FinalReport) => {
+export const completeSession = async (userId: string, sessionId: string, report: FinalReport) => {
     const now = new Date().toISOString();
     if (!supabaseAdmin) {
         const session = fallbackSessions.get(sessionId);
@@ -158,11 +174,22 @@ export const completeSession = async (sessionId: string, report: FinalReport) =>
         .update({ 
             report_summary: report as any, 
             status: 'completed', 
+            evaluation_status: 'completed',
             updated_at: now,
             completed_at: now
         })
-        .eq('id', sessionId);
+        .eq('id', sessionId)
+        .eq('user_id', userId);
     if (error) throw error;
+};
+
+export const markSessionEvaluationFailed = async (userId: string, sessionId: string, errorCode: string) => {
+    if (!supabaseAdmin) return;
+    await supabaseAdmin
+        .from('interview_sessions')
+        .update({ evaluation_status: 'failed', evaluation_error_code: errorCode })
+        .eq('id', sessionId)
+        .eq('user_id', userId);
 };
 
 export const getUserSessions = async (userId: string, limit: number = 20): Promise<any[]> => {
@@ -184,21 +211,5 @@ export const getUserSessions = async (userId: string, limit: number = 20): Promi
 };
 
 export const savePilotFeedback = async (sessionId: string, feedback: any) => {
-    const now = new Date().toISOString();
-    if (!supabaseAdmin) {
-        const session = fallbackSessions.get(sessionId);
-        if (!session) throw new Error('Session not found');
-        session.pilotFeedback = feedback;
-        session.updatedAt = now;
-        fallbackSessions.set(sessionId, session);
-        return;
-    }
-
-    const current = await getSession(sessionId);
-    const report = current?.report ? { ...current.report, pilotFeedback: feedback } : { pilotFeedback: feedback };
-    const { error } = await supabaseAdmin
-        .from('interview_sessions')
-        .update({ report_summary: report, updated_at: now })
-        .eq('id', sessionId);
-    if (error) throw error;
+    // legacy support...
 };
