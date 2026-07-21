@@ -1,6 +1,7 @@
+import { UserProfile } from "../types/ui";
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { UserProfile } from 'mockmate-shared';
+;
 
 interface OnboardingQuestionsProps {
     onComplete: (profile: UserProfile, targetRole: string) => void;

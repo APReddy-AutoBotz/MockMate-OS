@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { apiClient } from './apiClient';
 import {
   InterviewPlan,
@@ -10,7 +11,7 @@ export const calibrateIntent = async (
     intentText: string,
     additionalContext?: string
 ): Promise<{ recommendedPanelIDs: string[]; recommendedRole: string; matchReasons?: Record<string, string> }> => {
-    return apiClient.post('interview/calibrate', { intentText, additionalContext });
+    return apiClient.post<any>('interview/calibrate', { intentText, additionalContext }, z.any());
 };
 
 export const generateInterviewPlan = async (
@@ -19,7 +20,7 @@ export const generateInterviewPlan = async (
     sessionControls: any,
     selectedPanelIDs: string[]
 ): Promise<InterviewPlan> => {
-    return apiClient.post('interview/plan', { intentText, jdText, controls: sessionControls, selectedPanelIDs });
+    return apiClient.post<any>('interview/plan', { intentText, jdText, controls: sessionControls, selectedPanelIDs }, z.any());
 };
 
 export const generateInterviewPlanV2 = async (
@@ -29,13 +30,13 @@ export const generateInterviewPlanV2 = async (
     selectedPanelIDs: string[],
     contextData: any
 ): Promise<InterviewPlan> => {
-    return apiClient.post('interview/plan', { intentText, jdText, controls: sessionControls, selectedPanelIDs, contextData });
+    return apiClient.post<any>('interview/plan', { intentText, jdText, controls: sessionControls, selectedPanelIDs, contextData }, z.any());
 };
 
 export const startInterviewSession = async (
     context: InterviewSessionContext
 ): Promise<{ firstQuestion: QuestionBlueprint; personaId: string; sessionId: string }> => {
-    const data = await apiClient.post<{ sessionId: string; firstQuestion: QuestionBlueprint }>('interview/sessions', { context });
+    const data = await apiClient.post<{ sessionId: string; firstQuestion: QuestionBlueprint }>('interview/sessions', { context }, z.any());
     return {
         firstQuestion: data.firstQuestion,
         personaId: context.selectedPanelIDs?.[0] || 'p1',
@@ -48,20 +49,20 @@ export const submitAnswerAndGetNext = async (
     questionId: string,
     answerText: string
 ): Promise<{ nextQuestion: QuestionBlueprint | null; isLastQuestion: boolean }> => {
-    return apiClient.post(`interview/sessions/${sessionId}/answers`, { questionId, answerText });
+    return apiClient.post<any>(`interview/sessions/${sessionId}/answers`, { questionId, answerText }, z.any());
 };
 
 export const analyzeCode = async (blueprint: QuestionBlueprint, code: string): Promise<string> => {
-    const data = await apiClient.post<{ feedback: string }>('interview/code/analyze', { blueprint, code });
+    const data = await apiClient.post<{ feedback: string }>('interview/code/analyze', { blueprint, code }, z.any());
     return data.feedback;
 };
 
 export const simulateExecution = async (code: string, language: string): Promise<{ stdout: string; stderr: string }> => {
-    return apiClient.post('interview/code/simulate', { code, language });
+    return apiClient.post<any>('interview/code/simulate', { code, language }, z.any());
 };
 
 export const getHintForQuestion = async (question: string): Promise<string> => {
-    const data = await apiClient.post<{ hint: string }>('interview/hint', { question });
+    const data = await apiClient.post<{ hint: string }>('interview/hint', { question }, z.any());
     return data.hint;
 };
 
@@ -70,7 +71,7 @@ export const generateIdealAnswer = async (
     blueprint: QuestionBlueprint | null,
     userAnswer: string
 ): Promise<string> => {
-    const data = await apiClient.post<{ idealResponse: string }>('interview/ideal-response', { question, blueprint, userAnswer });
+    const data = await apiClient.post<{ idealResponse: string }>('interview/ideal-response', { question, blueprint, userAnswer }, z.any());
     return data.idealResponse;
 };
 
@@ -89,7 +90,7 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
 export const transcribeAudio = async (blob: Blob): Promise<string> => {
     try {
         const base64Audio = await blobToBase64(blob);
-        const data = await apiClient.post<{ transcript: string }>('interview/transcribe', { audioBase64: base64Audio, mimeType: blob.type });
+        const data = await apiClient.post<{ transcript: string }>('interview/transcribe', { audioBase64: base64Audio, mimeType: blob.type }, z.any());
         return data.transcript;
     } catch (error) {
         console.error("Transcription failed", error);

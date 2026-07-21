@@ -1,3 +1,4 @@
+import { z } from 'zod';
 /**
  * services/csAnalytics.ts
  * Mockmate ClearSpeak — lightweight beta instrumentation.

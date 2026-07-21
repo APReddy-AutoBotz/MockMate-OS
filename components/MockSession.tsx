@@ -49,6 +49,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     const [isGeneratingIdeal, setIsGeneratingIdeal] = useState(false);
     const [reportError, setReportError] = useState('');
     const [localContext, setLocalContext] = useState(sessionContext);
+    const [sessionId, setSessionId] = useState<string>('');
 
     const sessionHistory = useRef<InterviewTurn[]>([]);
     const currentQuestionIndex = useRef(0);
@@ -72,11 +73,12 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
                         qText = firstQuestion.question;
                     }
                 } else {
-                    const { firstQuestion, personaId: startId, updatedContext } = await mockGeminiService.startInterviewSession(sessionContext);
-                    setLocalContext(updatedContext);
-                    setCurrentQuestion(firstQuestion);
+                    const { firstQuestion, personaId: startId, sessionId: sid } = await mockGeminiService.startInterviewSession(sessionContext);
+                    setSessionId(sid);
+                    setCurrentBlueprint(firstQuestion);
+                    setCurrentQuestion(firstQuestion.question);
                     setCurrentPersonaId(startId);
-                    qText = firstQuestion;
+                    qText = firstQuestion.question;
                 }
 
                 if (!qText || qText.trim() === "") {
@@ -150,11 +152,11 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
 
         const persona = PERSONAS_CONFIG.find(p => p.id === currentPersonaId) || PERSONAS_CONFIG[0];
         sessionHistory.current.push({
+            id: currentBlueprint?.id || `q-${sessionHistory.current.length}`,
             interviewer: `${persona.name} — ${persona.title}`,
             question: currentQuestion,
-            candidateResponse: lastTranscript,
-            questionBlueprint: currentBlueprint ?? undefined,
-            codeFeedback: codeFeedback || undefined
+            candidateResponse: lastTranscript || undefined,
+            timestamp: Date.now()
         });
 
         setIdealAnswer(null);
@@ -192,10 +194,11 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
         audioService.playConfirm();
         const persona = PERSONAS_CONFIG.find(p => p.id === currentPersonaId) || PERSONAS_CONFIG[0];
         sessionHistory.current.push({
+            id: currentBlueprint?.id || `q-${sessionHistory.current.length}`,
             interviewer: `${persona.name} — ${persona.title}`,
             question: currentQuestion,
             candidateResponse: '[SKIPPED]',
-            questionBlueprint: currentBlueprint ?? undefined
+            timestamp: Date.now()
         });
         handleProceedToNextQuestion();
     };
@@ -241,15 +244,16 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
             } else {
                 const nextIndex = sessionHistory.current.length % localContext.selectedPanelIDs.length;
                 const nextPersonaId = localContext.selectedPanelIDs[nextIndex];
-                const { nextQuestion, isLastQuestion } = await mockGeminiService.submitAnswerAndGetNext(currentSessionId, currentBlueprint?.id || 'q1', answerText);
+                const { nextQuestion, isLastQuestion } = await mockGeminiService.submitAnswerAndGetNext(sessionId, currentBlueprint?.id || 'q1', lastTranscript || '[SKIPPED]');
 
                 if (isLastQuestion) generateReport();
                 else if (nextQuestion) {
-                    setCurrentQuestion(nextQuestion);
+                    setCurrentBlueprint(nextQuestion);
+                    setCurrentQuestion(nextQuestion.question);
                     setCurrentPersonaId(nextPersonaId);
                     audioService.playNotify();
                     setSessionPhase('asking');
-                    trackQuestionUsage(nextQuestion, localContext.candidateRole);
+                    trackQuestionUsage(nextQuestion.question, localContext.candidateRole);
                 } else generateReport();
             }
         } catch (err) { generateReport(); }
@@ -259,7 +263,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
         setSessionPhase('generating_report');
         setReportError('');
         try {
-            const report = await mockGeminiService.generateFinalReport(currentSessionId);
+            const report = await mockGeminiService.generateFinalReport(sessionId);
             onReportGenerated(report);
         } catch (error) {
             setReportError('Report generation failed. Please try again, or exit without results.');

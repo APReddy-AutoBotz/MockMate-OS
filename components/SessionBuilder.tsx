@@ -1,7 +1,10 @@
 
 import { motion } from 'framer-motion';
-import { JDInsights, CompetencyWeight, QuestionBlueprint } from 'mockmate-shared';
+import { QuestionBlueprint } from 'mockmate-shared';
 import React from 'react';
+
+type JDInsights = Record<string, any>;
+type CompetencyWeight = { name: string; weight: number };
 
 interface SessionBuilderProps {
     jdInsights: JDInsights;
@@ -78,7 +81,7 @@ const SessionBuilder: React.FC<SessionBuilderProps> = ({
     const softSkills  = jdInsights.softSkills?.length      > 0 ? jdInsights.softSkills    : [];
 
     const formattedWeights = weights.map(w => ({
-        label: w.competency.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim().toLowerCase(),
+        label: w.name.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim().toLowerCase(),
         pct: w.weight <= 1 ? Math.round(w.weight * 100) : Math.round(w.weight),
     }));
 

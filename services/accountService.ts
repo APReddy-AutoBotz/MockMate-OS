@@ -1,7 +1,8 @@
+import { z } from 'zod';
 import { apiClient } from './apiClient';
 
 export async function deleteMyData(): Promise<void> {
-  await apiClient.delete('me/data');
+  await apiClient.delete<any>('me/data', z.any());
 }
 
 export function clearLocalPracticeData() {
@@ -10,5 +11,5 @@ export function clearLocalPracticeData() {
     const key = localStorage.key(index);
     if (key?.startsWith('mockmate_')) keysToRemove.push(key);
   }
-  keysToRemove.forEach(key => localStorage.removeItem(key));
+  keysToRemove.forEach(key => localStorage.removeItem(key), z.any());
 }
