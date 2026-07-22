@@ -34,6 +34,12 @@ async function runRuntimeVerification() {
         email text,
         created_at timestamp with time zone DEFAULT now()
       );
+      CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid AS $$
+        SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+      $$ LANGUAGE sql STABLE;
+      CREATE OR REPLACE FUNCTION auth.role() RETURNS text AS $$
+        SELECT coalesce(current_setting('request.jwt.claim.role', true), 'anon');
+      $$ LANGUAGE sql STABLE;
       DO $$
       BEGIN
         IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'anon') THEN
