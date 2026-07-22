@@ -11,6 +11,9 @@ export const supabaseAdmin: SupabaseClient | null = isSupabaseConfigured
         persistSession: false,
         autoRefreshToken: false,
       },
+      realtime: {
+        create: () => null as any,
+      },
     })
   : null;
 
