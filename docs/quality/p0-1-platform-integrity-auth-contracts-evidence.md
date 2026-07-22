@@ -1,16 +1,17 @@
-# P0-1F Final Code Closure & Quality Evidence Report
+# P0-1G Final Code & Contract Acceptance Evidence Report
 
 ## Overview
-This document records empirical verification results for MockMate task **P0-1F: Final Code Closure — Secure the RPC, Execute Migrations in Disposable PostgreSQL, Eliminate Remaining Fabricated Report Content, Fix Plan Cardinality, Add Frontend Tests, and Accurately Record the Billing-Blocked CI State**.
+This document records empirical verification results for MockMate task **P0-1G: Browser Runtime and Contract Acceptance Gate — Fix Runtime Configuration, Calibration, Plan Cardinality, Simulation, Data Deletion, and Remaining Evaluative Filler**.
 
 ---
 
 ## 1. Remote GitHub Actions CI Execution
-- **Repository Visibility**: Changed to Public, enabling full GitHub Actions runner execution.
-- **Workflow Run ID**: `29905718833`
-- **Head SHA**: `9c83af28e932b7244955fe4f7cfef07b0ec22998`
-- **Workflow Status & Conclusion**: `completed` / **`success`** (Duration: 2m1s)
-- **Executed Steps (17/17 PASSED)**:
+- **Repository Visibility**: Public (Full Actions execution enabled).
+- **Workflow Run ID**: `29908632381`
+- **Workflow URL**: [https://github.com/APReddy-AutoBotz/MockMate-OS/actions/runs/29908632381](https://github.com/APReddy-AutoBotz/MockMate-OS/actions/runs/29908632381)
+- **Head SHA**: `d6ee4cf`
+- **Workflow Status & Conclusion**: `completed` / **`success`** (Duration: 1m53s)
+- **Executed Steps (19/19 PASSED)**:
   1. `Install root & workspace dependencies` (PASSED)
   2. `Shared typecheck` (PASSED)
   3. `Shared tests` (PASSED)
@@ -20,18 +21,20 @@ This document records empirical verification results for MockMate task **P0-1F: 
   7. `Full static migration verification` (PASSED)
   8. `Disposable PostgreSQL runtime migration verification` (PASSED)
   9. `Frontend build` (PASSED)
-  10. `Backend tests` (PASSED)
-  11. `Backend build` (PASSED)
-  12. `Production smoke checks` (PASSED)
-  13. `Dependency audit` (PASSED)
-  14. `Install mobile dependencies` (PASSED)
-  15. `Mobile typecheck` (PASSED)
-  16. `Mobile lint` (PASSED)
-  17. `Production config smoke check` (PASSED)
+  10. `Browser runtime configuration test` (PASSED)
+  11. `Backend tests` (PASSED)
+  12. `Backend build` (PASSED)
+  13. `Production smoke checks` (PASSED)
+  14. `Dependency audit` (PASSED)
+  15. `Install mobile dependencies` (PASSED)
+  16. `Mobile typecheck` (PASSED)
+  17. `Mobile lint` (PASSED)
+  18. `Full-history secret scan` (PASSED)
+  19. `Production config smoke check` (PASSED)
 
 ---
 
-## 2. Static Rejection & Code Integrity Gates
+## 2. Static Rejection & Security Integrity Gates
 
 | Gate Check | Required Output | Verification Command | Result |
 | :--- | :--- | :--- | :--- |
@@ -40,26 +43,26 @@ This document records empirical verification results for MockMate task **P0-1F: 
 | **No `z.any()`** | Zero matches across application code | `git grep "z\.any()"` | **PASSED (0 matches)** |
 | **No `SUPABASE_SERVICE_KEY`** | Zero matches in `backend/` or `scripts/` | `git grep "SUPABASE_SERVICE_KEY" backend/ scripts/` | **PASSED (0 matches)** |
 | **No legacy `dummyFirstQuestion`** | Zero matches across codebase | `git grep "dummyFirstQuestion"` | **PASSED (0 matches)** |
-| **No `interview_sessions.history`** | Zero matches in database RPCs & backend | `git grep -i "interview_sessions.*history"` | **PASSED (0 matches)** |
+| **No `import.meta` Function Hacks** | Zero `new Function('return import.meta.env')` | `npm run test:browser-runtime` | **PASSED (0 matches)** |
+| **Full-History Secret Scan** | Zero exposed keys across all git commits | `node scripts/scan-git-history.mjs` | **PASSED (15 commits scanned)** |
 | **No fake report defaults** | Unscored reports marked `NOT_ASSESSED` with `null` scores & zero filler strings | `backend/services/aiService.ts` | **PASSED** |
-| **No false-positive code analysis** | Provider failure returns `status: 'unavailable', feedback: 'Code analysis unavailable.', passed: null` | `backend/tests/interviewRoutes.test.ts` | **PASSED** |
 
 ---
 
-## 3. Security-Definer RPC Lockdown & Migration Verification
-- **Migration**: [20260721_add_authoritative_session_fields.sql](file:///e:/MockMate/supabase/migrations/20260721_add_authoritative_session_fields.sql)
+## 3. Security-Definer RPC Lockdown & PostgreSQL Verification
+- **Migration File**: `supabase/migrations/20260721_add_authoritative_session_fields.sql`
 - **Validation**: Enforced `p_answer_kind IN ('answered', 'skipped')`, `REVOKE ALL ON FUNCTION public.atomic_submit_answer(...) FROM PUBLIC, anon, authenticated;`, and `GRANT EXECUTE ON FUNCTION public.atomic_submit_answer(...) TO service_role;`.
 - **Static Verification**: `npm run verify:supabase` passed 100%.
-- **Runtime Disposable DB Verification**: `npm run verify:supabase:runtime` executed 11 runtime checks against PostgreSQL service container in CI, verifying lexical migration application, turn insertion, duplicate rejection, state transition to `awaiting_report`, and permission revocation for `anon`/`authenticated` roles.
+- **Runtime Disposable DB Verification**: `npm run verify:supabase:runtime` executed 11 runtime checks against the `postgres:16-alpine` service container in CI with `SET ROLE service_role;` and proved role revocation for `anon` and `authenticated` roles.
 
 ---
 
 ## 4. Frontend & Backend Test Execution
 
-- **Frontend Test Suite (`npm test`)**: 5 passed, 5 total test suites; 36 passed, 36 total unit tests.
+- **Frontend Test Suite (`npm test -- --runInBand`)**: 5 passed, 5 total test suites; 36 passed, 36 total unit tests.
   - Covers setup errors, invalid payload handling, network submission error retaining current question, skip submission error retaining current question, report generation errors, raw report parsing, `NOT_ASSESSED` rendering (`--/100`), and cardinality matching.
-- **Backend Test Suite (`cd backend && npm test`)**: 2 passed, 2 total test suites; 27 passed, 27 total tests.
-  - Covers session initialization, opening message separation, deterministic question IDs, answer submission, stale/duplicate index rejection, cross-user authorization rejection, raw report schema validation, missing evidence/confidence demotion to `insufficient_evidence`, `awaiting_report` status enforcement, and evaluation lifecycle transitions (`processing` -> `completed`).
+- **Backend Test Suite (`cd backend && npm test`)**: 2 passed, 2 total test suites; 30 passed, 30 total tests.
+  - Covers session initialization, opening message separation, deterministic question IDs, answer submission, stale/duplicate index rejection, cross-user authorization rejection, raw report schema validation, missing evidence/confidence demotion to `insufficient_evidence`, `awaiting_report` status enforcement, calibration schema validation, code simulation responses (`success`/`unavailable`), and data deletion response contracts (`AccountDeletionResponseSchema`).
 
 ---
 
@@ -69,13 +72,14 @@ All local release verification steps pass cleanly:
 1. `shared:build`: OK
 2. `shared:test`: OK (9/9 tests passed)
 3. `typecheck`: OK (0 errors)
-4. `verify:supabase`: OK
-5. `verify:supabase:runtime`: OK
-6. `build`: OK (Vite production build)
-7. `backend:build`: OK
-8. `backend:test`: OK (27/27 tests passed)
-9. `frontend:test`: OK (36/36 tests passed)
-10. `mobile:typecheck`: OK
-11. `mobile:lint`: OK
-12. `smoke:production`: OK
-13. `audit:production`: OK (0 vulnerabilities)
+4. `test`: OK (36/36 frontend tests passed)
+5. `verify:supabase`: OK
+6. `verify:supabase:runtime`: OK
+7. `test:browser-runtime`: OK
+8. `build`: OK (Vite production build)
+9. `backend:build`: OK
+10. `backend:test`: OK (30/30 backend tests passed)
+11. `mobile:typecheck`: OK
+12. `mobile:lint`: OK
+13. `smoke:production`: OK
+14. `audit:production`: OK (0 vulnerabilities)
