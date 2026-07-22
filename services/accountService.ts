@@ -1,8 +1,12 @@
-import { AccountDeletionResponseSchema } from 'mockmate-shared';
+import { AccountDeletionResponse, AccountDeletionResponseSchema } from 'mockmate-shared';
 import { apiClient } from './apiClient';
 
-export async function deleteMyData(): Promise<void> {
-  await apiClient.delete('me/data', AccountDeletionResponseSchema);
+export async function deleteMyData(): Promise<AccountDeletionResponse> {
+  const result = await apiClient.delete('me/data', AccountDeletionResponseSchema);
+  if (result.success) {
+    clearLocalPracticeData();
+  }
+  return result;
 }
 
 export function clearLocalPracticeData() {

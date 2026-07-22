@@ -419,9 +419,10 @@ export const CalibrateRequestSchema = z.object({
 export const CalibrateResponseSchema = z.object({
   recommendedPanelIDs: z.array(z.string()),
   recommendedRole: z.string(),
-  matchReasons: z.record(z.string(), z.string()).optional(),
-  suggestedControls: SessionControlsSchema.optional(),
-  jdInsights: JDInsightsSchema.optional(),
+  matchReasons: z.record(z.string(), z.string()),
+  suggestedControls: SessionControlsSchema,
+  jdInsights: JDInsightsSchema,
+  fallbackUsed: z.boolean(),
 }).strict();
 export type CalibrateResponse = z.infer<typeof CalibrateResponseSchema>;
 
@@ -431,6 +432,7 @@ export const PlanGenerationRequestSchema = z.object({
   controls: SessionControlsSchema,
   jdText: z.string().optional(),
   resumeText: z.string().optional(),
+  selectedPanelIDs: z.array(z.string()).optional(),
 }).strict();
 
 export const InterviewSessionStartRequestSchema = z.object({
@@ -501,8 +503,13 @@ export const CodeSimulationRequestSchema = z.object({
 }).strict();
 
 export const AccountDeletionResponseSchema = z.object({
-  success: z.boolean().default(true),
-  message: z.string().optional(),
+  success: z.boolean(),
+  operation: z.literal('app_data_deleted'),
+  deletedTables: z.array(z.string()),
+  failedTables: z.array(z.string()),
+  authIdentityDeleted: z.boolean(),
+  authIdentityRetainedReason: z.string().optional(),
+  requestId: z.string(),
 }).strict();
 export type AccountDeletionResponse = z.infer<typeof AccountDeletionResponseSchema>;
 

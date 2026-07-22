@@ -1,43 +1,18 @@
-import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { getRuntimeConfig, validateRuntimeConfig } from './runtimeConfig';
 
-const getEnvVar = (name: string): string => {
-  // Try process.env first
-  if (typeof process !== 'undefined' && process.env) {
-    const val = process.env[name];
-    if (val) return String(val);
-  }
-  // Try import.meta.env via Function constructor safely
-  try {
-    const metaEnv = new Function('return import.meta.env')();
-    if (metaEnv && metaEnv[name]) return String(metaEnv[name]);
-  } catch {}
-  // Try window (for tests/fallback)
-  if (typeof window !== 'undefined') {
-    const val = (window as any)[name];
-    if (val) return String(val);
-  }
-  return '';
-};
+const config = getRuntimeConfig();
+const validation = validateRuntimeConfig();
 
-const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
-const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
+export const isSupabaseConfigured = Boolean(config.supabaseUrl && config.supabaseAnonKey);
+export const isUsingMockAuth = config.isDevelopment && config.enableDevAuth;
 
-export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
-
-const isDevelopmentMode = 
-  (typeof process !== 'undefined' && process.env.NODE_ENV === 'development') ||
-  (() => { try { return (new Function('return import.meta.env')())?.MODE === 'development'; } catch { return false; } })();
-
-const isDevAuthFlagEnabled = getEnvVar('VITE_ENABLE_DEV_AUTH') === 'true' || getEnvVar('ENABLE_DEV_AUTH') === 'true';
-
-export const isUsingMockAuth = isDevelopmentMode && isDevAuthFlagEnabled;
-
-if (!isSupabaseConfigured && !isUsingMockAuth && (typeof process === 'undefined' || process.env.NODE_ENV !== 'test')) {
-  throw new Error("Missing Supabase configuration. Production must fail closed if Supabase browser configuration is missing.");
+if (!validation.valid && !isUsingMockAuth) {
+  throw new Error(validation.error || 'Missing Supabase configuration.');
 }
 
 export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(supabaseUrl, supabaseAnonKey, {
+  ? createClient(config.supabaseUrl, config.supabaseAnonKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,

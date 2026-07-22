@@ -526,4 +526,64 @@ describe('Backend Express API & Route Parity Tests', () => {
     spy.mockRestore();
   });
 
+  it('24. POST /api/interview/calibrate returns canonical CalibrateResponseSchema', async () => {
+    const spy = jest.spyOn(aiService, 'calibrateIntent').mockResolvedValueOnce({
+      recommendedRole: 'Backend Engineer',
+      recommendedPanelIDs: ['p1', 'p2'],
+      matchReasons: { p1: 'Culture fit', p2: 'Tech depth' },
+      suggestedControls: sampleControls,
+      jdInsights: { role: 'Backend Engineer' },
+      fallbackUsed: false,
+    });
+
+    const res = await request(app)
+      .post('/api/interview/calibrate')
+      .set('Authorization', testAuthHeader)
+      .send({ role: 'Backend Engineer', jobDescription: 'Node.js, PostgreSQL' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.recommendedPanelIDs).toBeDefined();
+    expect(Array.isArray(res.body.recommendedPanelIDs)).toBe(true);
+    expect(res.body.recommendedRole).toBeDefined();
+    expect(res.body.matchReasons).toBeDefined();
+    expect(res.body.suggestedControls).toBeDefined();
+    expect(res.body.jdInsights).toBeDefined();
+    expect(typeof res.body.fallbackUsed).toBe('boolean');
+
+    spy.mockRestore();
+  });
+
+  it('25. POST /api/interview/code/simulate parses status = success and status = unavailable', async () => {
+    const resSuccess = await request(app)
+      .post('/api/interview/code/simulate')
+      .set('Authorization', testAuthHeader)
+      .send({ code: 'console.log("hello");', language: 'javascript' });
+
+    expect(resSuccess.status).toBe(200);
+    expect(resSuccess.body.status).toBe('success');
+    expect(typeof resSuccess.body.stdout).toBe('string');
+
+    const resUnavailable = await request(app)
+      .post('/api/interview/code/simulate')
+      .set('Authorization', testAuthHeader)
+      .send({ code: '', language: 'javascript' });
+
+    expect(resUnavailable.status).toBe(200);
+    expect(resUnavailable.body.status).toBe('unavailable');
+  });
+
+  it('26. DELETE /api/me/data returns canonical AccountDeletionResponseSchema', async () => {
+    const res = await request(app)
+      .delete('/api/me/data')
+      .set('Authorization', testAuthHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.operation).toBe('app_data_deleted');
+    expect(Array.isArray(res.body.deletedTables)).toBe(true);
+    expect(Array.isArray(res.body.failedTables)).toBe(true);
+    expect(res.body.authIdentityDeleted).toBe(false);
+    expect(res.body.requestId).toBeDefined();
+  });
+
 });

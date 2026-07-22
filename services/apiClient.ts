@@ -23,28 +23,14 @@ export interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
 }
 
+import { getRuntimeConfig } from './runtimeConfig';
+
 const getApiBase = (): string => {
-  if (typeof process !== 'undefined' && process.env?.VITE_API_URL) {
-    return process.env.VITE_API_URL;
-  }
-  try {
-    const metaEnv = new Function('return import.meta.env')();
-    return metaEnv?.VITE_API_URL || '';
-  } catch {
-    return '';
-  }
+  return getRuntimeConfig().apiUrl;
 };
 
 const isDevEnv = (): boolean => {
-  if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'development') {
-    return true;
-  }
-  try {
-    const metaEnv = new Function('return import.meta.env')();
-    return Boolean(metaEnv?.DEV);
-  } catch {
-    return false;
-  }
+  return getRuntimeConfig().isDevelopment;
 };
 
 async function request<T>(

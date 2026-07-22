@@ -226,13 +226,10 @@ router.post('/code/simulate', enforceUsageLimit('interview_question'), async (re
       return res.status(422).json({ error: 'Invalid code simulation payload', details: parsed.error.issues });
     }
     const result = await aiService.simulateExecution(parsed.data.code, parsed.data.language);
-    if (result.status === 'unavailable') {
-      return res.status(503).json(result);
-    }
     res.json(result);
   } catch (error: any) {
     console.error('[Interview] code simulate error:', error);
-    res.status(503).json({ status: 'unavailable', stdout: '', stderr: 'Code simulation unavailable.' });
+    res.json({ status: 'unavailable', stdout: '', stderr: 'Code simulation unavailable.' });
   }
 });
 

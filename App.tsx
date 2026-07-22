@@ -178,12 +178,7 @@ const App: React.FC = () => {
             }
         };
         setSessionContext(initialContext);
-
-        if (sessionType === 'structured') {
-            setAppState('CONTEXT_UPLOAD');
-        } else {
-            setAppState('SESSION_ACTIVE');
-        }
+        setAppState('CONTEXT_UPLOAD');
     };
 
     const handleContextReady = (context: SessionContext) => {

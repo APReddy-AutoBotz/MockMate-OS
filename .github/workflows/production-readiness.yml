@@ -64,6 +64,9 @@ jobs:
       - name: 9. Frontend build
         run: npm run build
 
+      - name: 9b. Browser runtime configuration test
+        run: npm run test:browser-runtime
+
       - name: 10. Backend tests
         working-directory: backend
         run: npm test
@@ -88,7 +91,10 @@ jobs:
       - name: 16. Mobile lint
         run: npm run mobile:lint
 
-      - name: 17. Production config smoke check
+      - name: 17. Full-history secret scan
+        run: node scripts/scan-git-history.mjs
+
+      - name: 18. Production config smoke check
         shell: bash
         run: |
           test -f vercel.json

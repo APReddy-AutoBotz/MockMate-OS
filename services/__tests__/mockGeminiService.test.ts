@@ -30,6 +30,7 @@ describe('Mock Gemini Service', () => {
       const mockResult = {
         recommendedPanelIDs: ['p1', 'p2'],
         recommendedRole: 'Software Engineer',
+        matchReasons: { p1: 'Culture match', p2: 'Tech match' },
         suggestedControls: {
           difficulty: 'intermediate',
           totalQuestions: 5,
@@ -50,7 +51,8 @@ describe('Mock Gemini Service', () => {
           tools: [],
           softSkills: [],
           competencyWeights: { PROBLEM_FRAMING: 0.5 }
-        }
+        },
+        fallbackUsed: false
       };
 
       (global.fetch as jest.Mock).mockResolvedValueOnce({
