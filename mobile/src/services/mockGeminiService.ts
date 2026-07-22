@@ -97,7 +97,7 @@ export const transcribeAudio = async (uri: string, mimeType: string): Promise<st
   try {
     const base64Audio = await uriToBase64(uri);
     const data = await apiClient.post('interview/transcribe', TranscribeAudioResponseSchema, { audioBase64: base64Audio, mimeType });
-    return data.transcript;
+    return data.transcript || "";
   } catch (error) {
     console.error('Transcription failed', error);
     return "";
