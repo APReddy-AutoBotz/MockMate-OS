@@ -37,13 +37,13 @@ async function runRuntimeVerification() {
       DO $$
       BEGIN
         IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'anon') THEN
-          CREATE ROLE anon NOSPUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOLOGIN;
+          CREATE ROLE anon NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOLOGIN;
         END IF;
         IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'authenticated') THEN
-          CREATE ROLE authenticated NOSPUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOLOGIN;
+          CREATE ROLE authenticated NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOLOGIN;
         END IF;
         IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'service_role') THEN
-          CREATE ROLE service_role NOSPUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOLOGIN;
+          CREATE ROLE service_role NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOLOGIN;
         END IF;
       END
       $$;
