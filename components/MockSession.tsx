@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { InterviewSessionContext, FinalReport, QuestionBlueprint } from 'mockmate-shared';
+import { InterviewSessionContext, FinalReport, QuestionBlueprint, AnswerSubmissionResponse } from 'mockmate-shared';
 import * as mockGeminiService from '../services/mockGeminiService';
 import PushToTalkInput from './PushToTalkInput';
 import CodeEditor from './CodeEditor';
@@ -57,6 +57,8 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
   const [isGeneratingIdeal, setIsGeneratingIdeal] = useState(false);
   const [reportError, setReportError] = useState('');
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
+  const [submissionError, setSubmissionError] = useState<string>('');
+  const [lastSubmissionResult, setLastSubmissionResult] = useState<AnswerSubmissionResponse | null>(null);
 
   const deliveryMode = sessionContext.controls?.deliveryMode || 'exam';
   const isCoachMode = deliveryMode === 'coach';
@@ -128,6 +130,8 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
         'answered',
         lastTranscript
       );
+      setLastSubmissionResult(res);
+      setSubmissionError('');
 
       if (isCoachMode) {
         setSessionPhase('feedback_shown');
@@ -171,14 +175,20 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
       }
     } catch (err: any) {
       console.error("Answer submission error:", err);
+      setSubmissionError(err.message || "Failed to submit answer. Please retry.");
     }
   };
 
   const handleProceedAfterFeedback = async () => {
     setIdealAnswer(null);
-    if (questionIndex + 1 >= totalQuestions || !currentQuestion) {
+    if (questionIndex >= totalQuestions - 1 && currentQuestion?.id === lastSubmissionResult?.completedTurnId) {
+      await generateReport();
+    } else if (lastSubmissionResult?.isLastQuestion || !lastSubmissionResult?.nextQuestion) {
       await generateReport();
     } else {
+      setQuestionIndex(lastSubmissionResult.questionIndex);
+      setTotalQuestions(lastSubmissionResult.totalQuestions);
+      setCurrentQuestion(lastSubmissionResult.nextQuestion);
       setSessionPhase('loading_question');
       setLastTranscript('');
       setCodeValue('');
@@ -191,6 +201,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
   const handleConfirmSkip = async () => {
     if (!currentQuestion || !sessionId) return;
     audioService.playConfirm();
+    setSubmissionError('');
     try {
       const res = await mockGeminiService.submitAnswerAndGetNext(
         sessionId,
@@ -212,8 +223,9 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
         setHint(null);
         setSessionPhase('asking');
       }
-    } catch (err) {
-      await generateReport();
+    } catch (err: any) {
+      console.error("Skip error:", err);
+      setSubmissionError(err.message || "Failed to skip question. Please retry.");
     }
   };
 
@@ -223,9 +235,9 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     audioService.playConfirm();
     try {
       const nudge = await mockGeminiService.getHintForQuestion(currentQuestion.question, currentQuestion.expectedSignals);
-      setHint(nudge);
+      setHint(nudge || "Hint unavailable.");
     } catch (e) {
-      setHint("Focus on the primary technical tradeoff of your chosen approach.");
+      setHint("Hint unavailable.");
     } finally {
       setIsHintLoading(false);
     }

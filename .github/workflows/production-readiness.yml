@@ -21,57 +21,57 @@ jobs:
           node-version: '20'
           cache: npm
 
-      - name: Install dependencies
+      - name: 1. Install root & workspace dependencies
         run: npm ci
 
-      - name: Install backend dependencies
+      - name: 2. Shared typecheck
+        run: npm run check:contracts
+
+      - name: 3. Shared tests
+        run: npm run shared:test
+
+      - name: 4. Shared build
+        run: npm run shared:build
+
+      - name: 5. Frontend typecheck
+        run: npm run typecheck
+
+      - name: 6. Full migration verification
+        run: npm run verify:supabase
+
+      - name: 7. Frontend build
+        run: npm run build
+
+      - name: 8. Backend tests
         working-directory: backend
-        run: npm ci
+        run: npm test
 
-      - name: Install mobile dependencies
+      - name: 9. Backend build
+        working-directory: backend
+        run: npm run build
+
+      - name: 10. Production smoke checks
+        run: npm run smoke:production
+
+      - name: 11. Dependency audit
+        run: npm run audit:production
+
+      - name: 12. Install mobile dependencies
         working-directory: mobile
         run: npm ci
 
-      - name: Build shared package
-        run: npm run shared:build
-
-      - name: Test shared contracts
-        run: npm run shared:test
-
-      - name: Frontend typecheck
-        run: npm run typecheck
-
-      - name: Supabase migration checks
-        run: npm run verify:supabase
-
-      - name: Frontend build
-        run: npm run build
-
-      - name: Backend build
-        working-directory: backend
-        run: npm run build
-
-      - name: Backend tests
-        working-directory: backend
-        run: npm run test
-
-      - name: Production smoke checks
-        run: npm run smoke:production
-
-      - name: Production dependency audits
-        run: npm run audit:production
-
-      - name: Mobile typecheck
+      - name: 13. Mobile typecheck
         run: npm run mobile:typecheck
 
-      - name: Mobile lint
+      - name: 14. Mobile lint
         run: npm run mobile:lint
 
-      - name: Production config smoke check
+      - name: 15. Production config smoke check
         shell: bash
         run: |
           test -f vercel.json
           test -f supabase/migrations/001_initial_schema.sql
+          test -f supabase/migrations/20260721_add_authoritative_session_fields.sql
           test -f public/manifest.json
           test -f mobile/eas.json
           grep -q '"/api/(.*)"' vercel.json

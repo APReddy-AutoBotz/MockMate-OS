@@ -218,10 +218,28 @@ export const DimensionScoreSchema = z.object({
 }).strict();
 export type DimensionScore = z.infer<typeof DimensionScoreSchema>;
 
+export const EvaluationModelEnum = z.enum([
+  'mockmate_v1_canonical',
+  'gemini_flash_2.5_canonical',
+  'groq_llama3_canonical',
+  'deterministic_fallback_unscored',
+  'v1_dimensions',
+  'unknown'
+]);
+export type EvaluationModel = z.infer<typeof EvaluationModelEnum>;
+
+export const ReadinessStatusEnum = z.enum([
+  'INTERVIEW_READY',
+  'ALMOST_READY',
+  'NOT_READY',
+  'NOT_ASSESSED'
+]);
+export type ReadinessStatus = z.infer<typeof ReadinessStatusEnum>;
+
 export const AdvisoryPanelSchema = z.object({
   name: z.string(),
   assessment: z.string(),
-  hireRecommendation: z.boolean(),
+  hireRecommendation: z.boolean().nullable(),
 }).strict();
 export type AdvisoryPanel = z.infer<typeof AdvisoryPanelSchema>;
 
@@ -290,9 +308,9 @@ export type QuestionPerformance = z.infer<typeof QuestionPerformanceSchema>;
 
 export const FinalReportSchema = z.object({
   overallSummary: z.string(),
-  evaluationModel: z.string(),
+  evaluationModel: EvaluationModelEnum,
   readiness: z.object({
-    status: z.string(),
+    status: ReadinessStatusEnum,
     reasoning: z.string(),
   }).strict(),
   quantitativeAnalysis: z.object({
@@ -307,7 +325,7 @@ export const FinalReportSchema = z.object({
   simplifiedScore: z.number().nullable(),
   topStrength: z.string().optional(),
   topWeakness: z.string().optional(),
-  estimatedSessionsToReady: z.number().optional(),
+  estimatedSessionsToReady: z.number().nullable().optional(),
   quickWins: z.array(z.string()),
   prioritizedActions: z.array(PrioritizedActionSchema),
   providerMetadata: ProviderMetadataSchema.optional(),
@@ -396,6 +414,23 @@ export const ReportFetchResponseSchema = z.object({
   report: FinalReportSchema.nullable(),
 }).strict();
 export type ReportFetchResponse = z.infer<typeof ReportFetchResponseSchema>;
+
+export const CodeAnalysisRequestSchema = z.object({
+  blueprint: QuestionBlueprintSchema.optional(),
+  code: z.string(),
+}).strict();
+
+export const CodeSimulationRequestSchema = z.object({
+  code: z.string(),
+  language: z.string(),
+}).strict();
+
+export const CodeSimulationResponseSchema = z.object({
+  status: z.enum(['success', 'unavailable']),
+  stdout: z.string(),
+  stderr: z.string(),
+}).strict();
+export type CodeSimulationResponse = z.infer<typeof CodeSimulationResponseSchema>;
 
 // ============================================================================
 // RESUME SCHEMAS
@@ -589,7 +624,8 @@ export const TranscribeAudioResponseSchema = z.object({
 export type TranscribeAudioResponse = z.infer<typeof TranscribeAudioResponseSchema>;
 
 export const CodeAnalysisResponseSchema = z.object({
+  status: z.enum(['analyzed', 'unavailable']),
   feedback: z.string(),
-  passed: z.boolean(),
+  passed: z.boolean().nullable(),
 }).strict();
 export type CodeAnalysisResponse = z.infer<typeof CodeAnalysisResponseSchema>;

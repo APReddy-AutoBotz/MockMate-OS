@@ -9,7 +9,9 @@ import {
   CalibrateRequestSchema,
   PlanGenerationRequestSchema,
   HintRequestSchema,
-  IdealResponseRequestSchema
+  IdealResponseRequestSchema,
+  CodeAnalysisRequestSchema,
+  CodeSimulationRequestSchema
 } from 'mockmate-shared';
 
 const router = Router();
@@ -156,10 +158,13 @@ router.post('/hint', enforceUsageLimit('interview_question'), async (req: any, r
       return res.status(422).json({ error: 'Invalid hint request payload', details: parsed.error.issues });
     }
     const result = await aiService.getHintForQuestion(parsed.data.questionText, parsed.data.expectedSignals);
+    if (!result || result === 'Hint unavailable.') {
+      return res.status(503).json({ hint: 'Hint unavailable.', error: 'Hint unavailable.' });
+    }
     res.json({ hint: result });
   } catch (error: any) {
     console.error('[Interview] hint error:', error);
-    res.status(500).json({ error: error.message || 'Could not generate hint' });
+    res.status(503).json({ hint: 'Hint unavailable.', error: 'Hint unavailable.' });
   }
 });
 
@@ -170,10 +175,13 @@ router.post('/ideal-response', enforceUsageLimit('interview_question'), async (r
       return res.status(422).json({ error: 'Invalid ideal response payload', details: parsed.error.issues });
     }
     const result = await aiService.generateIdealAnswer(parsed.data.questionText, parsed.data.expectedSignals, parsed.data.userAnswer);
+    if (!result || result === 'Sample response unavailable.') {
+      return res.status(503).json({ idealResponse: 'Sample response unavailable.', error: 'Sample response unavailable.' });
+    }
     res.json({ idealResponse: result });
   } catch (error: any) {
     console.error('[Interview] ideal response error:', error);
-    res.status(500).json({ error: error.message || 'Could not generate ideal response' });
+    res.status(503).json({ idealResponse: 'Sample response unavailable.', error: 'Sample response unavailable.' });
   }
 });
 
@@ -190,18 +198,40 @@ router.post('/transcribe', enforceUsageLimit('interview_question'), async (req: 
 });
 
 // ==========================================
-// CODE EXECUTION
+// CODE EXECUTION & SIMULATION
 // ==========================================
 
 router.post('/code/analyze', enforceUsageLimit('interview_question'), async (req: any, res) => {
   try {
-    const { blueprint, code } = req.body;
-    if (!blueprint || !code) return res.status(400).json({ error: 'Missing blueprint or code' });
-    const result = await aiService.analyzeCode(blueprint, code);
+    const parsed = CodeAnalysisRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(422).json({ error: 'Invalid code analysis payload', details: parsed.error.issues });
+    }
+    const result = await aiService.analyzeCode(parsed.data.blueprint, parsed.data.code);
+    if (result.status === 'unavailable') {
+      return res.status(503).json(result);
+    }
     res.json(result);
   } catch (error: any) {
     console.error('[Interview] code analyze error:', error);
-    res.status(500).json({ error: error.message || 'Could not analyze code' });
+    res.status(503).json({ status: 'unavailable', feedback: 'Code analysis unavailable.', passed: null });
+  }
+});
+
+router.post('/code/simulate', enforceUsageLimit('interview_question'), async (req: any, res) => {
+  try {
+    const parsed = CodeSimulationRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(422).json({ error: 'Invalid code simulation payload', details: parsed.error.issues });
+    }
+    const result = await aiService.simulateExecution(parsed.data.code, parsed.data.language);
+    if (result.status === 'unavailable') {
+      return res.status(503).json(result);
+    }
+    res.json(result);
+  } catch (error: any) {
+    console.error('[Interview] code simulate error:', error);
+    res.status(503).json({ status: 'unavailable', stdout: '', stderr: 'Code simulation unavailable.' });
   }
 });
 

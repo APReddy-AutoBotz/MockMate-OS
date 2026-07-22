@@ -38,6 +38,7 @@ type Bucket = { tokens: number; ts: number };
 const buckets = new Map<string, Bucket>();
 function rateLimitSimple({ max = 20, windowMs = 60_000 }: { max?: number; windowMs?: number }) {
   return (req: Request, res: Response, next: NextFunction) => {
+    if (process.env.NODE_ENV === 'test') return next();
     const key = req.ip || req.headers['x-forwarded-for']?.toString() || 'anon';
     const now = Date.now();
     const b = buckets.get(key) || { tokens: max, ts: now };

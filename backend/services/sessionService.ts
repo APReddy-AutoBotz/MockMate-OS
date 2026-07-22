@@ -45,6 +45,8 @@ export const toSession = async (row: any): Promise<any> => {
     currentQuestionIndex: row.current_question_index ?? row.currentQuestionIndex ?? 0,
     pendingQuestionId: row.pending_question_id ?? row.pendingQuestionId ?? null,
     pendingQuestion: row.pending_question ?? row.pendingQuestion ?? null,
+    evaluationStatus: row.evaluation_status ?? row.evaluationStatus ?? 'not_tested',
+    evaluationErrorCode: row.evaluation_error_code ?? row.evaluationErrorCode ?? null,
   };
 };
 
@@ -221,12 +223,14 @@ export const submitAnswer = async (
 export const completeSession = async (userId: string, sessionId: string, report: FinalReport) => {
   const now = new Date().toISOString();
   if (!supabaseAdmin) {
-    const session = fallbackSessions.get(sessionId);
-    if (!session) throw new Error('Session not found');
-    session.report = report;
-    session.status = 'completed';
-    session.updatedAt = now;
-    fallbackSessions.set(sessionId, session);
+    const s = fallbackSessions.get(sessionId);
+    if (s && s.userId === userId) {
+      s.report = report;
+      s.status = 'completed';
+      s.evaluationStatus = 'completed';
+      s.completedAt = now;
+      s.updatedAt = now;
+    }
     return;
   }
 
@@ -245,7 +249,14 @@ export const completeSession = async (userId: string, sessionId: string, report:
 };
 
 export const markSessionEvaluationFailed = async (userId: string, sessionId: string, errorCode: string) => {
-  if (!supabaseAdmin) return;
+  if (!supabaseAdmin) {
+    const s = fallbackSessions.get(sessionId);
+    if (s && s.userId === userId) {
+      s.evaluationStatus = 'failed';
+      s.evaluationErrorCode = errorCode;
+    }
+    return;
+  }
   await supabaseAdmin
     .from('interview_sessions')
     .update({ evaluation_status: 'failed', evaluation_error_code: errorCode })
