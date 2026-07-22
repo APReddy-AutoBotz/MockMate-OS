@@ -318,8 +318,8 @@ export const FinalReportSchema = z.object({
   }).strict(),
   advisoryPanel: z.array(AdvisoryPanelSchema),
   questionPerformance: z.array(QuestionPerformanceSchema),
-  biggestRiskArea: BiggestRiskSchema,
-  coachPack: CoachPackSchema,
+  biggestRiskArea: BiggestRiskSchema.nullable().optional(),
+  coachPack: CoachPackSchema.nullable().optional(),
   trajectoryReplay: z.array(TrajectoryReplaySchema),
   auditLayer: z.array(AuditFindingsSchema),
   simplifiedScore: z.number().nullable(),
@@ -331,6 +331,81 @@ export const FinalReportSchema = z.object({
   providerMetadata: ProviderMetadataSchema.optional(),
 }).strict();
 export type FinalReport = z.infer<typeof FinalReportSchema>;
+
+// ============================================================================
+// RAW PROVIDER REPORT CONTRACTS
+// ============================================================================
+
+export const RawDimensionScoreSchema = z.object({
+  dimension: z.string().optional(),
+  dimensionName: z.string().optional(),
+  score_status: z.string().optional(),
+  anchor_score: z.number().nullable().optional(),
+  normalized_score: z.number().nullable().optional(),
+  reason: z.string().optional(),
+  evidence: z.array(z.string()).optional(),
+  confidence: z.string().optional(),
+}).passthrough();
+
+export const RawFinalReportSchema = z.object({
+  overallSummary: z.string(),
+  evaluationModel: z.string().optional(),
+  readiness: z.object({
+    status: z.string().optional(),
+    reasoning: z.string().optional(),
+  }).passthrough().optional(),
+  quantitativeAnalysis: z.object({
+    dimension_scores: z.array(RawDimensionScoreSchema).optional(),
+  }).passthrough().optional(),
+  advisoryPanel: z.array(z.object({
+    name: z.string().optional(),
+    assessment: z.string().optional(),
+    hireRecommendation: z.boolean().nullable().optional(),
+  }).passthrough()).optional(),
+  questionPerformance: z.array(z.object({
+    question_text: z.string().optional(),
+    question_phase: z.string().optional(),
+    user_transcript: z.string().optional(),
+    max_impact_response: z.string().optional(),
+    feedback: z.string().optional(),
+    strengths: z.array(z.string()).optional(),
+    improvements: z.array(z.string()).optional(),
+  }).passthrough()).optional(),
+  biggestRiskArea: z.object({
+    title: z.string().optional(),
+    observation: z.string().optional(),
+    mitigation: z.string().optional(),
+  }).passthrough().optional(),
+  coachPack: z.object({
+    title: z.string().optional(),
+    redoNow: z.union([
+      z.string(),
+      z.object({ question: z.string().optional(), instruction: z.string().optional() }).passthrough()
+    ]).optional(),
+    micro_drills: z.array(z.union([
+      z.string(),
+      z.object({ weakness: z.string().optional(), drill_prompt: z.string().optional(), focus_point: z.string().optional() }).passthrough()
+    ])).optional(),
+  }).passthrough().optional(),
+  trajectoryReplay: z.array(z.object({
+    summary: z.string().optional(),
+    keyMoments: z.array(z.string()).optional(),
+  }).passthrough()).optional(),
+  auditLayer: z.array(z.object({
+    biasDetected: z.boolean().optional(),
+    notes: z.string().optional(),
+  }).passthrough()).optional(),
+  simplifiedScore: z.number().nullable().optional(),
+  topStrength: z.string().optional(),
+  topWeakness: z.string().optional(),
+  estimatedSessionsToReady: z.number().nullable().optional(),
+  quickWins: z.array(z.string()).optional(),
+  prioritizedActions: z.array(z.object({
+    action: z.string().optional(),
+    impact: z.string().optional(),
+  }).passthrough()).optional(),
+}).passthrough();
+export type RawFinalReport = z.infer<typeof RawFinalReportSchema>;
 
 // ============================================================================
 // CANONICAL API REQUEST / RESPONSE SCHEMAS FOR INTERVIEW ROUTE
@@ -424,6 +499,12 @@ export const CodeSimulationRequestSchema = z.object({
   code: z.string(),
   language: z.string(),
 }).strict();
+
+export const AccountDeletionResponseSchema = z.object({
+  success: z.boolean().default(true),
+  message: z.string().optional(),
+}).strict();
+export type AccountDeletionResponse = z.infer<typeof AccountDeletionResponseSchema>;
 
 export const CodeSimulationResponseSchema = z.object({
   status: z.enum(['success', 'unavailable']),

@@ -1,8 +1,8 @@
-import { z } from 'zod';
+import { AccountDeletionResponseSchema } from 'mockmate-shared';
 import { apiClient } from './apiClient';
 
 export async function deleteMyData(): Promise<void> {
-  await apiClient.delete<any>('me/data', z.any());
+  await apiClient.delete('me/data', AccountDeletionResponseSchema);
 }
 
 export function clearLocalPracticeData() {
@@ -11,5 +11,5 @@ export function clearLocalPracticeData() {
     const key = localStorage.key(index);
     if (key?.startsWith('mockmate_')) keysToRemove.push(key);
   }
-  keysToRemove.forEach(key => localStorage.removeItem(key), z.any());
+  keysToRemove.forEach(key => localStorage.removeItem(key));
 }

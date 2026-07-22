@@ -23,6 +23,30 @@ export interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
 }
 
+const getApiBase = (): string => {
+  if (typeof process !== 'undefined' && process.env?.VITE_API_URL) {
+    return process.env.VITE_API_URL;
+  }
+  try {
+    const metaEnv = new Function('return import.meta.env')();
+    return metaEnv?.VITE_API_URL || '';
+  } catch {
+    return '';
+  }
+};
+
+const isDevEnv = (): boolean => {
+  if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'development') {
+    return true;
+  }
+  try {
+    const metaEnv = new Function('return import.meta.env')();
+    return Boolean(metaEnv?.DEV);
+  } catch {
+    return false;
+  }
+};
+
 async function request<T>(
   endpoint: string,
   schema: z.ZodType<T>,
@@ -30,7 +54,7 @@ async function request<T>(
 ): Promise<T> {
   const { requireAuth = true, params, headers: customHeaders, ...fetchOptions } = options;
 
-  const API_BASE = (import.meta as any).env?.VITE_API_URL || '';
+  const API_BASE = getApiBase();
   let url = `${API_BASE}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
   if (params) {
     const query = new URLSearchParams(params).toString();
@@ -81,7 +105,7 @@ async function request<T>(
   const payload = await response.json();
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
-    if ((import.meta as any).env?.DEV) {
+    if (isDevEnv()) {
       console.error(
         `Contract validation failed for endpoint ${endpoint}:`,
         parsed.error.issues.map((i) => i.path.join('.'))
@@ -104,7 +128,7 @@ async function requestRaw(
 ): Promise<ArrayBuffer> {
   const { requireAuth = true, params, headers: customHeaders, ...fetchOptions } = options;
 
-  const API_BASE = (import.meta as any).env?.VITE_API_URL || '';
+  const API_BASE = getApiBase();
   let url = `${API_BASE}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
   if (params) {
     const query = new URLSearchParams(params).toString();

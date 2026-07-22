@@ -1,55 +1,64 @@
-
 class AudioService {
     private ctx: AudioContext | null = null;
 
     private init() {
-        if (!this.ctx) {
-            this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        if (!this.ctx && typeof window !== 'undefined' && (window.AudioContext || (window as any).webkitAudioContext)) {
+            try {
+                const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+                this.ctx = new AudioCtx();
+            } catch {
+                this.ctx = null;
+            }
         }
     }
 
     private playTone(freq: number, type: OscillatorType, duration: number, volume: number) {
-        this.init();
-        if (!this.ctx) return;
+        try {
+            this.init();
+            if (!this.ctx) return;
 
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
 
-        osc.type = type;
-        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
 
-        gain.gain.setValueAtTime(0, this.ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(volume, this.ctx.currentTime + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+            gain.gain.setValueAtTime(0, this.ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(volume, this.ctx.currentTime + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
 
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
 
-        osc.start();
-        osc.stop(this.ctx.currentTime + duration);
+            osc.start();
+            osc.stop(this.ctx.currentTime + duration);
+        } catch {
+            // Ignore audio playback failures in environments without Web Audio support
+        }
     }
 
     playConfirm() {
-        // Soft double-tap chime
         this.playTone(880, 'sine', 0.15, 0.05);
         setTimeout(() => this.playTone(1320, 'sine', 0.2, 0.03), 50);
     }
 
     playNotify() {
-        // High, clear single chime
         this.playTone(1760, 'sine', 0.3, 0.02);
     }
 
     playStart() {
-        // Rising warm tone
-        this.playTone(440, 'sine', 0.5, 0.05);
-        setTimeout(() => this.playTone(660, 'sine', 0.4, 0.03), 100);
+        this.playTone(440, 'triangle', 0.1, 0.04);
+        setTimeout(() => this.playTone(660, 'triangle', 0.1, 0.04), 80);
+        setTimeout(() => this.playTone(880, 'triangle', 0.25, 0.05), 160);
     }
 
     playEnd() {
-        // Falling gentle tone
-        this.playTone(440, 'sine', 0.4, 0.04);
-        setTimeout(() => this.playTone(220, 'sine', 0.6, 0.02), 150);
+        this.playTone(523.25, 'sine', 0.2, 0.04);
+        setTimeout(() => this.playTone(392, 'sine', 0.3, 0.03), 100);
+    }
+
+    playWarning() {
+        this.playTone(330, 'sawtooth', 0.2, 0.04);
     }
 }
 

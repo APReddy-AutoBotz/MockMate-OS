@@ -1,16 +1,16 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
 
 const getEnvVar = (name: string): string => {
-  // Try import.meta.env (Vite)
-  if (typeof import.meta !== 'undefined' && (import.meta as any).env) {
-    const val = (import.meta as any).env[name];
-    if (val) return String(val);
-  }
-  // Try process.env
+  // Try process.env first
   if (typeof process !== 'undefined' && process.env) {
     const val = process.env[name];
     if (val) return String(val);
   }
+  // Try import.meta.env via Function constructor safely
+  try {
+    const metaEnv = new Function('return import.meta.env')();
+    if (metaEnv && metaEnv[name]) return String(metaEnv[name]);
+  } catch {}
   // Try window (for tests/fallback)
   if (typeof window !== 'undefined') {
     const val = (window as any)[name];
@@ -25,14 +25,14 @@ const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
 const isDevelopmentMode = 
-  (typeof import.meta !== 'undefined' && (import.meta as any).env && (import.meta as any).env.MODE === 'development') || 
-  (typeof process !== 'undefined' && process.env.NODE_ENV === 'development');
+  (typeof process !== 'undefined' && process.env.NODE_ENV === 'development') ||
+  (() => { try { return (new Function('return import.meta.env')())?.MODE === 'development'; } catch { return false; } })();
 
 const isDevAuthFlagEnabled = getEnvVar('VITE_ENABLE_DEV_AUTH') === 'true' || getEnvVar('ENABLE_DEV_AUTH') === 'true';
 
 export const isUsingMockAuth = isDevelopmentMode && isDevAuthFlagEnabled;
 
-if (!isSupabaseConfigured && !isUsingMockAuth) {
+if (!isSupabaseConfigured && !isUsingMockAuth && (typeof process === 'undefined' || process.env.NODE_ENV !== 'test')) {
   throw new Error("Missing Supabase configuration. Production must fail closed if Supabase browser configuration is missing.");
 }
 

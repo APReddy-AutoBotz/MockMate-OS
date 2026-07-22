@@ -32,6 +32,11 @@ DECLARE
   v_turn_id uuid;
   v_result jsonb;
 BEGIN
+  -- 0. Validate answer kind
+  IF p_answer_kind NOT IN ('answered', 'skipped') THEN
+    RAISE EXCEPTION 'Invalid answer kind';
+  END IF;
+
   -- 1. Lock matching session row
   SELECT * INTO v_session
   FROM public.interview_sessions
@@ -90,3 +95,19 @@ BEGIN
   RETURN v_result;
 END;
 $$;
+
+REVOKE ALL ON FUNCTION public.atomic_submit_answer(
+  uuid, uuid, text, integer, text, text, jsonb, text, boolean, integer
+) FROM PUBLIC;
+
+REVOKE ALL ON FUNCTION public.atomic_submit_answer(
+  uuid, uuid, text, integer, text, text, jsonb, text, boolean, integer
+) FROM anon;
+
+REVOKE ALL ON FUNCTION public.atomic_submit_answer(
+  uuid, uuid, text, integer, text, text, jsonb, text, boolean, integer
+) FROM authenticated;
+
+GRANT EXECUTE ON FUNCTION public.atomic_submit_answer(
+  uuid, uuid, text, integer, text, text, jsonb, text, boolean, integer
+) TO service_role;

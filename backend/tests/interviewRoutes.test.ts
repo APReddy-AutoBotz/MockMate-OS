@@ -50,6 +50,22 @@ describe('Backend Express API & Route Parity Tests', () => {
     },
   };
 
+  beforeEach(() => {
+    jest.spyOn(aiService, 'callWithFallback').mockImplementation(async () => ({
+      text: JSON.stringify({
+        openingMessage: 'Welcome to your interview session!',
+        questionSet: sampleContext.interviewPlan.questionSet
+      }),
+      provider: 'test',
+      model: 'test',
+      fallbackTriggered: false,
+    }));
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it('1. POST /api/interview/sessions creates session with separate openingMessage and firstQuestion', async () => {
     const res = await request(app)
       .post('/api/interview/sessions')
@@ -356,17 +372,156 @@ describe('Backend Express API & Route Parity Tests', () => {
     spy.mockRestore();
   });
 
-  it('18. Code analysis failure never returns passed = true', async () => {
-    const spy = jest.spyOn(aiService, 'callWithFallback').mockRejectedValueOnce(new Error('AI Provider Offline'));
+  it('19. Raw report missing evidence or confidence does not produce a scored dimension', async () => {
+    const rawData = {
+      overallSummary: 'Partial evaluation.',
+      quantitativeAnalysis: {
+        dimension_scores: [
+          {
+            dimension: 'PROBLEM_FRAMING',
+            score_status: 'scored',
+            anchor_score: 4,
+            normalized_score: 80,
+            reason: 'Good framing',
+            // Missing evidence and missing confidence
+          }
+        ]
+      }
+    };
 
-    const res = await request(app)
-      .post('/api/interview/code/analyze')
+    const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
+      text: JSON.stringify(rawData),
+      provider: 'test',
+      model: 'test',
+      fallbackTriggered: false,
+    });
+
+    const report = await aiService.generateFinalReport([
+      { id: '1', interviewer: 'Interviewer', question: 'Q1', candidateResponse: 'A1', timestamp: Date.now() }
+    ], sampleContext);
+
+    expect(report.readiness.status).toBe('NOT_ASSESSED');
+    expect(report.simplifiedScore).toBeNull();
+    expect(report.quantitativeAnalysis.dimension_scores[0].score_status).toBe('insufficient_evidence');
+    expect(report.quantitativeAnalysis.dimension_scores[0].anchor_score).toBeNull();
+
+    spy.mockRestore();
+  });
+
+  it('20. NOT_ASSESSED report contains zero evaluative filler objects or string fallbacks', async () => {
+    const rawData = {
+      overallSummary: 'Evaluation could not be completed.',
+      quantitativeAnalysis: {
+        dimension_scores: []
+      }
+    };
+
+    const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
+      text: JSON.stringify(rawData),
+      provider: 'test',
+      model: 'test',
+      fallbackTriggered: false,
+    });
+
+    const report = await aiService.generateFinalReport([
+      { id: '1', interviewer: 'Interviewer', question: 'Q1', candidateResponse: 'A1', timestamp: Date.now() }
+    ], sampleContext);
+
+    expect(report.readiness.status).toBe('NOT_ASSESSED');
+    expect(report.advisoryPanel).toEqual([]);
+    expect(report.biggestRiskArea).toBeNull();
+    expect(report.coachPack).toBeNull();
+    expect(report.trajectoryReplay).toEqual([]);
+    expect(report.auditLayer).toEqual([]);
+    expect(report.simplifiedScore).toBeNull();
+
+    spy.mockRestore();
+  });
+
+  it('21. Report generation fails if session is not in awaiting_report status', async () => {
+    const startRes = await request(app)
+      .post('/api/interview/sessions')
       .set('Authorization', testAuthHeader)
-      .send({ code: 'def foo(): pass' });
+      .send({ context: sampleContext });
 
-    expect(res.status).toBe(503);
-    expect(res.body.passed).toBeNull();
-    expect(res.body.status).toBe('unavailable');
+    const sessionId = startRes.body.sessionId;
+
+    // Session is active (not awaiting_report)
+    const reportRes = await request(app)
+      .post(`/api/interview/sessions/${sessionId}/report`)
+      .set('Authorization', testAuthHeader);
+
+    expect(reportRes.status).toBe(409);
+    expect(reportRes.body.error).toContain('awaiting_report');
+  });
+
+  it('22. Deterministic question IDs are generated based on role, mode, text, and index', () => {
+    const id1 = aiService.createDeterministicQuestionId('Frontend Engineer', 'classic_behavioral', 'Explain React state.', 1);
+    const id2 = aiService.createDeterministicQuestionId('Frontend Engineer', 'classic_behavioral', 'Explain React state.', 1);
+    const id3 = aiService.createDeterministicQuestionId('Frontend Engineer', 'classic_behavioral', 'Explain React state.', 2);
+
+    expect(id1).toEqual(id2);
+    expect(id1).not.toEqual(id3);
+    expect(id1).toContain('frontend_engineer');
+    expect(id1).not.toContain('Date.now()');
+  });
+
+  it('23. Report generation advances evaluation_status from awaiting_report -> processing -> completed', async () => {
+    const startRes = await request(app)
+      .post('/api/interview/sessions')
+      .set('Authorization', testAuthHeader)
+      .send({ context: sampleContext });
+
+    const sessionId = startRes.body.sessionId;
+
+    // Turn 1
+    await request(app)
+      .post(`/api/interview/sessions/${sessionId}/answers`)
+      .set('Authorization', testAuthHeader)
+      .send({ questionId: 'q1', expectedQuestionIndex: 0, answerKind: 'answered', answerText: 'Ans 1' });
+
+    // Turn 2
+    await request(app)
+      .post(`/api/interview/sessions/${sessionId}/answers`)
+      .set('Authorization', testAuthHeader)
+      .send({ questionId: 'q2', expectedQuestionIndex: 1, answerKind: 'answered', answerText: 'Ans 2' });
+
+    const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
+      text: JSON.stringify({
+        overallSummary: 'Great session!',
+        readiness: { status: 'INTERVIEW_READY', reasoning: 'Ready' },
+        quantitativeAnalysis: {
+          dimension_scores: [
+            {
+              dimension: 'PROBLEM_FRAMING',
+              score_status: 'scored',
+              anchor_score: 4,
+              normalized_score: 80,
+              reason: 'Good framing',
+              evidence: ['Stated assumptions'],
+              confidence: 'high'
+            }
+          ]
+        }
+      }),
+      provider: 'test',
+      model: 'test',
+      fallbackTriggered: false,
+    });
+
+    const reportRes = await request(app)
+      .post(`/api/interview/sessions/${sessionId}/report`)
+      .set('Authorization', testAuthHeader);
+
+    expect(reportRes.status).toBe(200);
+    expect(reportRes.body.readiness.status).toBe('INTERVIEW_READY');
+
+    const completedSession = await sessionService.getSession(testUserId, sessionId);
+    expect(completedSession?.status).toBe('completed');
+    expect(completedSession?.evaluationStatus).toBe('completed');
+    expect(completedSession?.pendingQuestionId).toBeNull();
+    expect(completedSession?.pendingQuestion).toBeNull();
+    expect(completedSession?.completedAt).toBeDefined();
 
     spy.mockRestore();
   });

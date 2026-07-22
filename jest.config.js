@@ -2,6 +2,7 @@ export default {
   testEnvironment: 'jsdom',
   setupFilesAfterEnv: ['<rootDir>/src/setupTests.ts'],
   moduleNameMapper: {
+    '^mockmate-shared$': '<rootDir>/shared/src/index.ts',
     '^@/(.*)$': '<rootDir>/$1',
   },
   transform: {

@@ -11,6 +11,20 @@ jobs:
     name: Typecheck and build
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,37 +50,45 @@ jobs:
       - name: 5. Frontend typecheck
         run: npm run typecheck
 
-      - name: 6. Full migration verification
+      - name: 6. Frontend unit tests
+        run: npm test -- --runInBand
+
+      - name: 7. Full static migration verification
         run: npm run verify:supabase
 
-      - name: 7. Frontend build
+      - name: 8. Disposable PostgreSQL runtime migration verification
+        env:
+          POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: npm run verify:supabase:runtime
+
+      - name: 9. Frontend build
         run: npm run build
 
-      - name: 8. Backend tests
+      - name: 10. Backend tests
         working-directory: backend
         run: npm test
 
-      - name: 9. Backend build
+      - name: 11. Backend build
         working-directory: backend
         run: npm run build
 
-      - name: 10. Production smoke checks
+      - name: 12. Production smoke checks
         run: npm run smoke:production
 
-      - name: 11. Dependency audit
+      - name: 13. Dependency audit
         run: npm run audit:production
 
-      - name: 12. Install mobile dependencies
+      - name: 14. Install mobile dependencies
         working-directory: mobile
         run: npm ci
 
-      - name: 13. Mobile typecheck
+      - name: 15. Mobile typecheck
         run: npm run mobile:typecheck
 
-      - name: 14. Mobile lint
+      - name: 16. Mobile lint
         run: npm run mobile:lint
 
-      - name: 15. Production config smoke check
+      - name: 17. Production config smoke check
         shell: bash
         run: |
           test -f vercel.json

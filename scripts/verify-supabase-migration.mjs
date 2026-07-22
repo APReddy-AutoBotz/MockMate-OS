@@ -111,6 +111,26 @@ if (!normalizedSql.includes("status = case when p_is_last then 'awaiting_report'
   failures.push('RPC atomic_submit_answer must set status to awaiting_report on final answer');
 }
 
+if (!normalizedSql.includes("p_answer_kind not in ('answered', 'skipped')")) {
+  failures.push('RPC atomic_submit_answer must validate p_answer_kind');
+}
+
+if (!normalizedSql.includes('revoke all on function public.atomic_submit_answer') || !normalizedSql.includes('from public')) {
+  failures.push('RPC atomic_submit_answer must REVOKE permissions FROM PUBLIC');
+}
+
+if (!normalizedSql.includes('from anon')) {
+  failures.push('RPC atomic_submit_answer must REVOKE permissions FROM anon');
+}
+
+if (!normalizedSql.includes('from authenticated')) {
+  failures.push('RPC atomic_submit_answer must REVOKE permissions FROM authenticated');
+}
+
+if (!normalizedSql.includes('grant execute on function public.atomic_submit_answer') || !normalizedSql.includes('to service_role')) {
+  failures.push('RPC atomic_submit_answer must GRANT EXECUTE TO service_role');
+}
+
 // Verify completed_at is NOT set during answer submission
 if (normalizedSql.includes('completed_at = now()')) {
   failures.push('RPC atomic_submit_answer must not set completed_at during answer submission');

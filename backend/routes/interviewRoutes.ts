@@ -116,7 +116,8 @@ router.post('/sessions/:sessionId/report', async (req: any, res) => {
     res.json(result);
   } catch (error: any) {
     console.error('[Interview] report error:', error);
-    res.status(500).json({ error: error.message || 'Could not generate report' });
+    const status = error.status || 500;
+    res.status(status).json({ error: error.message || 'Could not generate report' });
   }
 });
 

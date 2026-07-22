@@ -47,6 +47,7 @@ export const toSession = async (row: any): Promise<any> => {
     pendingQuestion: row.pending_question ?? row.pendingQuestion ?? null,
     evaluationStatus: row.evaluation_status ?? row.evaluationStatus ?? 'not_tested',
     evaluationErrorCode: row.evaluation_error_code ?? row.evaluationErrorCode ?? null,
+    completedAt: row.completed_at || row.completedAt || undefined,
   };
 };
 
@@ -220,6 +221,36 @@ export const submitAnswer = async (
   };
 };
 
+export const markSessionEvaluationProcessing = async (userId: string, sessionId: string) => {
+  const session = await getSession(userId, sessionId);
+  if (!session) {
+    const err: any = new Error('Session not found');
+    err.status = 404;
+    throw err;
+  }
+  if (session.status !== 'awaiting_report') {
+    const err: any = new Error(`Session must be awaiting_report before generating report. Current status: '${session.status}'`);
+    err.status = 409;
+    throw err;
+  }
+
+  if (!supabaseAdmin) {
+    const s = fallbackSessions.get(sessionId);
+    if (s && s.userId === userId) {
+      s.evaluationStatus = 'processing';
+      s.evaluationErrorCode = undefined;
+    }
+    return;
+  }
+
+  const { error } = await supabaseAdmin
+    .from('interview_sessions')
+    .update({ evaluation_status: 'processing', evaluation_error_code: null })
+    .eq('id', sessionId)
+    .eq('user_id', userId);
+  if (error) throw error;
+};
+
 export const completeSession = async (userId: string, sessionId: string, report: FinalReport) => {
   const now = new Date().toISOString();
   if (!supabaseAdmin) {
@@ -228,6 +259,9 @@ export const completeSession = async (userId: string, sessionId: string, report:
       s.report = report;
       s.status = 'completed';
       s.evaluationStatus = 'completed';
+      s.pendingQuestionId = null;
+      s.pendingQuestion = null;
+      s.evaluationErrorCode = undefined;
       s.completedAt = now;
       s.updatedAt = now;
     }
@@ -240,6 +274,9 @@ export const completeSession = async (userId: string, sessionId: string, report:
       report_summary: report as any, 
       status: 'completed', 
       evaluation_status: 'completed',
+      pending_question_id: null,
+      pending_question: null,
+      evaluation_error_code: null,
       updated_at: now,
       completed_at: now
     })

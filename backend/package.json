@@ -7,7 +7,7 @@
     "start": "node dist/localServer.js",
     "dev": "npm run build && node dist/localServer.js",
     "build": "tsc",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand --forceExit"
   },
   "dependencies": {
     "@google/genai": "^1.28.0",

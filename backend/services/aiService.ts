@@ -10,6 +10,7 @@ import {
   InterviewPlanSchema,
   RawInterviewPlanSchema,
   FinalReportSchema,
+  RawFinalReportSchema,
   CalibrateResponse,
   CalibrateResponseSchema
 } from 'mockmate-shared';
@@ -202,6 +203,17 @@ OUTPUT JSON SCHEMA:
   }
 };
 
+export function createDeterministicQuestionId(role: string, mode: string, questionText: string, index: number): string {
+  const normRole = (role || 'role').toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const normMode = (mode || 'mode').toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const normText = (questionText || 'q').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 30);
+  let hash = 0;
+  for (let i = 0; i < normText.length; i++) {
+    hash = (hash * 31 + normText.charCodeAt(i)) >>> 0;
+  }
+  return `q_${normRole}_${normMode}_${index}_${hash.toString(16)}`;
+}
+
 // --- Plan Generation ---
 
 export const generateInterviewPlan = async (
@@ -268,7 +280,7 @@ export const generateInterviewPlan = async (
 
   // 2. Create stable deterministic question IDs & normalize questions
   const normalizedQuestions = rawParsed.questionSet.map((q, idx) => ({
-    id: `q_${Date.now()}_${idx + 1}`,
+    id: createDeterministicQuestionId(role, sessionMode, q.question, idx + 1),
     phase: q.phase || 'scenario',
     difficulty: q.difficulty || sessionControls.difficulty,
     question: q.question,
@@ -384,53 +396,66 @@ export const generateFinalReport = async (
   const reportData = extractJson(text || '{}');
   if (!reportData || !reportData.overallSummary) throw new Error("Incomplete or invalid report returned by provider");
 
+  const rawReport = RawFinalReportSchema.parse(reportData);
+
   // Validate readiness status strictly
   const validStatuses = ['INTERVIEW_READY', 'ALMOST_READY', 'NOT_READY', 'NOT_ASSESSED'];
-  const providerStatus = reportData.readiness?.status;
-  const readinessStatus = validStatuses.includes(providerStatus) ? providerStatus : 'NOT_ASSESSED';
+  const providerStatus = rawReport.readiness?.status;
+  const readinessStatus = validStatuses.includes(providerStatus || '') ? providerStatus : 'NOT_ASSESSED';
 
-  // Process dimension scores without injecting fake scores
-  const rawDimensionScores = reportData.quantitativeAnalysis?.dimension_scores || [];
+  // Process dimension scores strictly without synthesizing missing evidence or confidence
+  const rawDimensionScores = rawReport.quantitativeAnalysis?.dimension_scores || [];
   let scoredTotal = 0;
   let scoredCount = 0;
 
   const dimensionScores = rawDimensionScores.map((ds: any) => {
-    const isScored = ds.score_status === 'scored' && typeof ds.anchor_score === 'number' && typeof ds.normalized_score === 'number' && ds.reason;
-    if (isScored) {
+    const hasCanonicalKey = Boolean(ds.dimension && APPROVED_DIMENSIONS[ds.dimension as keyof typeof APPROVED_DIMENSIONS]);
+    const isScoreStatusScored = ds.score_status === 'scored';
+    const isAnchorScoreValid = typeof ds.anchor_score === 'number' && ds.anchor_score >= 0 && ds.anchor_score <= 5;
+    const isNormalizedScoreValid = typeof ds.normalized_score === 'number' && ds.normalized_score >= 0 && ds.normalized_score <= 100;
+    const hasReason = typeof ds.reason === 'string' && ds.reason.trim().length > 0;
+    const hasEvidence = Array.isArray(ds.evidence) && ds.evidence.length > 0 && ds.evidence.every((e: any) => typeof e === 'string' && e.trim().length > 0);
+    const hasConfidence = typeof ds.confidence === 'string' && ['high', 'medium', 'low'].includes(ds.confidence);
+
+    const isValidScored = hasCanonicalKey && isScoreStatusScored && isAnchorScoreValid && isNormalizedScoreValid && hasReason && hasEvidence && hasConfidence;
+
+    if (isValidScored) {
       scoredTotal += ds.normalized_score;
       scoredCount++;
       return {
-        dimension: ds.dimension || 'PROBLEM_FRAMING',
-        dimensionName: ds.dimensionName || APPROVED_DIMENSIONS[ds.dimension as keyof typeof APPROVED_DIMENSIONS]?.name || 'Problem Framing',
+        dimension: ds.dimension as any,
+        dimensionName: ds.dimensionName || APPROVED_DIMENSIONS[ds.dimension as keyof typeof APPROVED_DIMENSIONS]?.name || 'Dimension',
         score_status: 'scored' as const,
         anchor_score: ds.anchor_score,
         normalized_score: ds.normalized_score,
-        reason: String(ds.reason),
-        evidence: Array.isArray(ds.evidence) && ds.evidence.length > 0 ? ds.evidence.map(String) : [String(ds.reason)],
-        confidence: ['high', 'medium', 'low'].includes(ds.confidence) ? ds.confidence : 'medium'
+        reason: String(ds.reason).trim(),
+        evidence: ds.evidence.map((e: any) => String(e).trim()),
+        confidence: ds.confidence as any
       };
     } else {
+      const dimKey = hasCanonicalKey ? ds.dimension : 'PROBLEM_FRAMING';
       return {
-        dimension: ds.dimension || 'PROBLEM_FRAMING',
-        dimensionName: ds.dimensionName || APPROVED_DIMENSIONS[ds.dimension as keyof typeof APPROVED_DIMENSIONS]?.name || 'Problem Framing',
+        dimension: dimKey as any,
+        dimensionName: APPROVED_DIMENSIONS[dimKey as keyof typeof APPROVED_DIMENSIONS]?.name || 'Problem Framing',
         score_status: (ds.score_status === 'not_tested' ? 'not_tested' : 'insufficient_evidence') as any,
         anchor_score: null,
         normalized_score: null,
-        reason: ds.reason ? String(ds.reason) : 'Insufficient evidence to evaluate dimension.',
+        reason: ds.reason ? String(ds.reason).trim() : 'Insufficient evidence to evaluate dimension.',
         evidence: [],
         confidence: 'low' as const
       };
     }
   });
 
-  const finalSimplifiedScore = scoredCount > 0 ? Math.round(scoredTotal / scoredCount) : null;
-  const finalReadinessStatus = scoredCount === 0 ? 'NOT_ASSESSED' : readinessStatus;
-  const finalReadinessReasoning = scoredCount === 0 
+  const isUnscored = scoredCount === 0;
+  const finalSimplifiedScore = isUnscored ? null : Math.round(scoredTotal / scoredCount);
+  const finalReadinessStatus = isUnscored ? 'NOT_ASSESSED' : readinessStatus;
+  const finalReadinessReasoning = isUnscored 
     ? 'Evaluation could not be completed due to insufficient evidence or unscored dimensions.'
-    : (reportData.readiness?.reasoning || 'Session evaluation complete.');
+    : (rawReport.readiness?.reasoning || 'Session evaluation complete.');
 
   const normalizedReport = {
-    overallSummary: reportData.overallSummary,
+    overallSummary: rawReport.overallSummary,
     evaluationModel: 'mockmate_v1_canonical' as const,
     readiness: {
       status: finalReadinessStatus as any,
@@ -439,56 +464,56 @@ export const generateFinalReport = async (
     quantitativeAnalysis: {
       dimension_scores: dimensionScores
     },
-    advisoryPanel: (reportData.advisoryPanel || []).map((ap: any) => ({
-      name: ap.name || ap.persona || 'Lead Evaluator',
-      assessment: ap.assessment || ap.summary || 'Assessment completed.',
-      hireRecommendation: scoredCount === 0 ? null : (typeof ap.hireRecommendation === 'boolean' ? ap.hireRecommendation : null)
+    advisoryPanel: isUnscored ? [] : (rawReport.advisoryPanel || []).map((ap: any) => ({
+      name: ap.name || 'Evaluator',
+      assessment: ap.assessment || 'Assessment recorded.',
+      hireRecommendation: typeof ap.hireRecommendation === 'boolean' ? ap.hireRecommendation : null
     })),
-    questionPerformance: (reportData.questionPerformance || []).map((qp: any, idx: number) => ({
+    questionPerformance: (rawReport.questionPerformance || []).map((qp: any, idx: number) => ({
       question_text: qp.question_text || history[idx]?.question || 'Question',
       question_phase: qp.question_phase || 'scenario',
       user_transcript: qp.user_transcript || history[idx]?.candidateResponse || '',
       max_impact_response: qp.max_impact_response,
-      feedback: qp.feedback || 'Response analyzed.',
+      feedback: qp.feedback || (history[idx]?.candidateResponse ? 'Response recorded.' : 'No response provided.'),
       strengths: Array.isArray(qp.strengths) ? qp.strengths : [],
       improvements: Array.isArray(qp.improvements) ? qp.improvements : []
     })),
-    biggestRiskArea: {
-      title: reportData.biggestRiskArea?.title || 'Area for Growth',
-      observation: reportData.biggestRiskArea?.observation || 'No critical risks identified.',
-      mitigation: reportData.biggestRiskArea?.mitigation || 'Continue practicing structured responses.'
+    biggestRiskArea: (isUnscored || !rawReport.biggestRiskArea?.title) ? null : {
+      title: rawReport.biggestRiskArea.title,
+      observation: rawReport.biggestRiskArea.observation || '',
+      mitigation: rawReport.biggestRiskArea.mitigation || ''
     },
-    coachPack: {
-      title: reportData.coachPack?.title || 'Coaching Micro-Drills',
-      redoNow: typeof reportData.coachPack?.redoNow === 'object' ? {
-        question: reportData.coachPack.redoNow.question || history[0]?.question || 'Question',
-        instruction: reportData.coachPack.redoNow.instruction || 'Practice giving a structured answer.'
+    coachPack: (isUnscored || !rawReport.coachPack?.title) ? null : {
+      title: rawReport.coachPack.title,
+      redoNow: typeof rawReport.coachPack.redoNow === 'object' ? {
+        question: rawReport.coachPack.redoNow.question || history[0]?.question || 'Question',
+        instruction: rawReport.coachPack.redoNow.instruction || 'Practice response.'
       } : {
         question: history[0]?.question || 'Question',
-        instruction: String(reportData.coachPack?.redoNow || 'Practice structured answers.')
+        instruction: String(rawReport.coachPack.redoNow || 'Practice response.')
       },
-      micro_drills: (reportData.coachPack?.micro_drills || []).map((md: any) => ({
+      micro_drills: (rawReport.coachPack.micro_drills || []).map((md: any) => ({
         weakness: typeof md === 'string' ? md : md.weakness || 'General Polish',
-        drill_prompt: typeof md === 'string' ? 'Practice response structure' : md.drill_prompt || 'Practice structured summary',
+        drill_prompt: typeof md === 'string' ? 'Practice response structure' : md.drill_prompt || 'Practice summary',
         focus_point: typeof md === 'string' ? 'Clarity' : md.focus_point || 'Clarity'
       }))
     },
-    trajectoryReplay: (reportData.trajectoryReplay || []).map((tr: any) => ({
-      summary: tr.summary || tr.observation || 'Session completed.',
-      keyMoments: Array.isArray(tr.keyMoments) ? tr.keyMoments : ['Turn answered.']
+    trajectoryReplay: isUnscored ? [] : (rawReport.trajectoryReplay || []).map((tr: any) => ({
+      summary: tr.summary || 'Turn completed.',
+      keyMoments: Array.isArray(tr.keyMoments) ? tr.keyMoments : []
     })),
-    auditLayer: (reportData.auditLayer || []).map((al: any) => ({
+    auditLayer: isUnscored ? [] : (rawReport.auditLayer || []).map((al: any) => ({
       biasDetected: typeof al.biasDetected === 'boolean' ? al.biasDetected : false,
-      notes: al.notes || al.gap || 'Standard evaluation applied.'
+      notes: al.notes || 'Evaluation completed.'
     })),
     simplifiedScore: finalSimplifiedScore,
-    topStrength: reportData.topStrength,
-    topWeakness: reportData.topWeakness,
-    estimatedSessionsToReady: scoredCount === 0 ? null : (typeof reportData.estimatedSessionsToReady === 'number' ? reportData.estimatedSessionsToReady : null),
-    quickWins: Array.isArray(reportData.quickWins) ? reportData.quickWins : [],
-    prioritizedActions: (reportData.prioritizedActions || []).map((pa: any) => ({
-      action: pa.action || pa.title || 'Practice STAR framework',
-      impact: pa.impact || 'high'
+    topStrength: isUnscored ? undefined : rawReport.topStrength,
+    topWeakness: isUnscored ? undefined : rawReport.topWeakness,
+    estimatedSessionsToReady: isUnscored ? null : (typeof rawReport.estimatedSessionsToReady === 'number' ? rawReport.estimatedSessionsToReady : null),
+    quickWins: isUnscored ? [] : (Array.isArray(rawReport.quickWins) ? rawReport.quickWins : []),
+    prioritizedActions: isUnscored ? [] : (rawReport.prioritizedActions || []).map((pa: any) => ({
+      action: pa.action || 'Practice structured communication',
+      impact: pa.impact || 'medium'
     }))
   };
 
@@ -496,11 +521,15 @@ export const generateFinalReport = async (
 };
 
 export const generateAuthoritativeReport = async (userId: string, sessionId: string): Promise<FinalReport> => {
+  await sessionService.markSessionEvaluationProcessing(userId, sessionId);
   const session = await sessionService.getSession(userId, sessionId);
   if (!session) throw new Error('Session not found');
 
   const history = session.history || [];
-  if (history.length === 0) throw new Error('No interview history to analyze.');
+  if (history.length === 0) {
+    await sessionService.markSessionEvaluationFailed(userId, sessionId, 'NO_HISTORY');
+    throw new Error('No interview history to analyze.');
+  }
 
   try {
     const report = await generateFinalReport(history, session.context);

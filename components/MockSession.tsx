@@ -118,9 +118,46 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     }
   };
 
+  const handleAnswerSuccess = (res: AnswerSubmissionResponse) => {
+    setLastSubmissionResult(res);
+    setSubmissionError('');
+
+    if (isCoachMode) {
+      setSessionPhase('feedback_shown');
+      setIsGeneratingIdeal(true);
+      mockGeminiService.generateIdealAnswer(currentQuestion!.question, currentQuestion!.expectedSignals, lastTranscript)
+        .then(sample => setIdealAnswer(sample || "Sample response unavailable."))
+        .catch(() => setIdealAnswer("Sample response unavailable."))
+        .finally(() => setIsGeneratingIdeal(false));
+
+      if (res.isLastQuestion || !res.nextQuestion) {
+        // Will trigger report on next click
+      } else {
+        setQuestionIndex(res.questionIndex);
+        setTotalQuestions(res.totalQuestions);
+        setCurrentQuestion(res.nextQuestion);
+      }
+    } else {
+      if (res.isLastQuestion || !res.nextQuestion) {
+        generateReport();
+      } else {
+        setQuestionIndex(res.questionIndex);
+        setTotalQuestions(res.totalQuestions);
+        setCurrentQuestion(res.nextQuestion);
+        setSessionPhase('loading_question');
+        setLastTranscript('');
+        setCodeValue('');
+        setCodeFeedback(null);
+        setHint(null);
+        setSessionPhase('asking');
+      }
+    }
+  };
+
   const handleConfirmTranscript = async () => {
     if (!currentQuestion || !sessionId) return;
     audioService.playConfirm();
+    setSubmissionError('');
 
     try {
       const res = await mockGeminiService.submitAnswerAndGetNext(
@@ -130,52 +167,29 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
         'answered',
         lastTranscript
       );
-      setLastSubmissionResult(res);
-      setSubmissionError('');
-
-      if (isCoachMode) {
-        setSessionPhase('feedback_shown');
-        setIsGeneratingIdeal(true);
-        try {
-          const sample = await withTimeout(
-            mockGeminiService.generateIdealAnswer(currentQuestion.question, currentQuestion.expectedSignals, lastTranscript),
-            IDEAL_ANSWER_TIMEOUT_MS,
-            'Timeout'
-          );
-          setIdealAnswer(sample || "Sample response unavailable.");
-        } catch {
-          setIdealAnswer("Sample response unavailable.");
-        } finally {
-          setIsGeneratingIdeal(false);
-        }
-
-        // Prepare next question state
-        if (res.isLastQuestion || !res.nextQuestion) {
-          // Will trigger report on next click
-        } else {
-          setQuestionIndex(res.questionIndex);
-          setTotalQuestions(res.totalQuestions);
-          setCurrentQuestion(res.nextQuestion);
-        }
-      } else {
-        // Exam mode: proceed directly to next question or report
-        if (res.isLastQuestion || !res.nextQuestion) {
-          await generateReport();
-        } else {
-          setQuestionIndex(res.questionIndex);
-          setTotalQuestions(res.totalQuestions);
-          setCurrentQuestion(res.nextQuestion);
-          setSessionPhase('loading_question');
-          setLastTranscript('');
-          setCodeValue('');
-          setCodeFeedback(null);
-          setHint(null);
-          setSessionPhase('asking');
-        }
-      }
+      handleAnswerSuccess(res);
     } catch (err: any) {
       console.error("Answer submission error:", err);
       setSubmissionError(err.message || "Failed to submit answer. Please retry.");
+      setSessionPhase('asking');
+    }
+  };
+
+  const handleConfirmSkip = async () => {
+    if (!currentQuestion || !sessionId) return;
+    setSubmissionError('');
+
+    try {
+      const res = await mockGeminiService.submitAnswerAndGetNext(
+        sessionId,
+        currentQuestion.id,
+        questionIndex,
+        'skipped'
+      );
+      handleAnswerSuccess(res);
+    } catch (err: any) {
+      console.error("Skip submission failed:", err);
+      setSubmissionError(err.message || "Could not skip question.");
     }
   };
 
@@ -195,37 +209,6 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
       setCodeFeedback(null);
       setHint(null);
       setSessionPhase('asking');
-    }
-  };
-
-  const handleConfirmSkip = async () => {
-    if (!currentQuestion || !sessionId) return;
-    audioService.playConfirm();
-    setSubmissionError('');
-    try {
-      const res = await mockGeminiService.submitAnswerAndGetNext(
-        sessionId,
-        currentQuestion.id,
-        questionIndex,
-        'skipped'
-      );
-
-      if (res.isLastQuestion || !res.nextQuestion) {
-        await generateReport();
-      } else {
-        setQuestionIndex(res.questionIndex);
-        setTotalQuestions(res.totalQuestions);
-        setCurrentQuestion(res.nextQuestion);
-        setSessionPhase('loading_question');
-        setLastTranscript('');
-        setCodeValue('');
-        setCodeFeedback(null);
-        setHint(null);
-        setSessionPhase('asking');
-      }
-    } catch (err: any) {
-      console.error("Skip error:", err);
-      setSubmissionError(err.message || "Failed to skip question. Please retry.");
     }
   };
 
@@ -333,6 +316,11 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
               <div className="max-w-sm w-full p-8 text-center space-y-6 bg-brand-dark border border-white/[0.1] rounded-3xl shadow-2xl">
                 <h3 className="text-xl md:text-2xl font-medium text-white tracking-tight">Skip this question?</h3>
                 <p className="text-xs text-brand-tint leading-relaxed">It is okay to skip. This will be noted in your session record.</p>
+                {submissionError && (
+                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-2 text-xs text-red-400">
+                    {submissionError}
+                  </div>
+                )}
                 <div className="flex flex-col gap-3">
                   <button onClick={handleConfirmSkip} className="bg-brand-primary text-brand-dark font-bold py-4 rounded-xl text-[10px] uppercase tracking-widest">Yes, skip</button>
                   <button onClick={() => setSessionPhase('asking')} className="bg-white/5 text-white font-bold py-4 rounded-xl border border-white/10 text-[10px] uppercase tracking-widest">Never mind</button>

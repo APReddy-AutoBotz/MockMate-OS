@@ -24,10 +24,12 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
         }
     }, [report]);
 
-    const score = report.simplifiedScore ?? calculateScore(report);
-    const readinessPercent = Math.round(score);
+    const isNotAssessed = report.readiness?.status === 'NOT_ASSESSED' || report.simplifiedScore === null;
+    const score = report.simplifiedScore;
+    const readinessPercent = score !== null && typeof score === 'number' ? Math.round(score) : null;
 
     const getReadinessText = () => {
+        if (isNotAssessed || readinessPercent === null) return 'NOT ASSESSED';
         if (readinessPercent >= 80) return 'Interview Ready';
         if (readinessPercent >= 60) return 'Almost Ready';
         return 'Needs Practice';
@@ -49,14 +51,14 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
 
                 <div className="relative z-10">
                     <div className="text-7xl md:text-9xl font-black text-white tracking-tighter leading-none mb-4">
-                        {readinessPercent}
+                        {readinessPercent !== null ? readinessPercent : '--'}
                         <span className="text-xl md:text-2xl text-brand-tint font-bold ml-1">/100</span>
                     </div>
 
                     <div className="w-full max-w-sm mx-auto h-1.5 bg-white/5 rounded-full overflow-hidden mt-6 shadow-inner">
                         <motion.div
                             initial={{ width: 0 }}
-                            animate={{ width: `${readinessPercent}%` }}
+                            animate={{ width: `${readinessPercent !== null ? readinessPercent : 0}%` }}
                             transition={{ duration: 1.5, ease: "easeOut" }}
                             className="h-full bg-brand-primary shadow-[0_0_12px_rgba(255,188,3,0.6)]"
                         />
