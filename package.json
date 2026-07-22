@@ -14,7 +14,7 @@
     "audit:production": "npm audit --omit=dev && cd backend && npm audit --omit=dev",
     "mobile:typecheck": "cd mobile && npx tsc --noEmit",
     "mobile:lint": "cd mobile && npm run lint",
-    "check:mobile": "npm run mobile:typecheck && npm run mobile:lint",
+    "check:mobile": "cd mobile && npm ci && npx tsc --noEmit && npm run lint",
     "check:release": "npm run check:production && npm run audit:production && npm run check:mobile",
     "preview": "vite preview",
     "test": "jest",
