@@ -88,18 +88,21 @@ const PushToTalkInput: React.FC<PushToTalkInputProps> = ({ onTranscriptSubmit, d
 
         setLiveStatus('transcribing');
         try {
-            const transcript = await (mockGeminiService as any).transcribeAudio(blob);
-            if (transcript.trim()) {
-                onTranscriptSubmit(transcript);
+            const res = await (mockGeminiService as any).transcribeAudio(blob);
+            const status = typeof res === 'object' && res ? res.status : (res ? 'transcribed' : 'unavailable');
+            const text = typeof res === 'object' && res ? res.transcript : res;
+
+            if (status === 'transcribed' && text && text.trim()) {
+                onTranscriptSubmit(text.trim());
                 setLiveStatus('idle');
                 setElapsedSeconds(0);
             } else {
-                setError("We could not hear an answer.");
+                setError("Transcription unavailable. Retry recording or type your answer.");
                 setLiveStatus('error');
                 resetToIdleAfterError();
             }
         } catch (e) {
-            setError("We could not prepare your answer. Please try again.");
+            setError("Transcription unavailable. Retry recording or type your answer.");
             setLiveStatus('error');
             resetToIdleAfterError();
         }

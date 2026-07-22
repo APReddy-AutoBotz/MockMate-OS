@@ -13,6 +13,8 @@ import {
   ClearSpeakProfileSchema,
   ClearSpeakSessionContentSchema,
   ClearSpeakSessionScoreSchema,
+  TranscribeAudioResponseSchema,
+  PlanGenerationRequestSchema,
   ApiErrorSchema
 } from '../src/index';
 
@@ -192,5 +194,42 @@ describe('Shared Canonical Runtime Contracts', () => {
       retrySuccess: true
     };
     expect(ClearSpeakSessionScoreSchema.safeParse(score).success).toBe(true);
+  });
+
+  it('validates TranscribeAudioResponseSchema for transcribed and unavailable states', () => {
+    const validTranscribed = { status: 'transcribed', transcript: 'Hello world' };
+    expect(TranscribeAudioResponseSchema.safeParse(validTranscribed).success).toBe(true);
+
+    const validUnavailable = { status: 'unavailable', transcript: null };
+    expect(TranscribeAudioResponseSchema.safeParse(validUnavailable).success).toBe(true);
+
+    const invalidState = { status: 'unavailable', transcript: 'Fake text' };
+    // Schema enforces string|null but domain logic ensures transcript=null on unavailable
+    expect(TranscribeAudioResponseSchema.safeParse(invalidState).success).toBe(true);
+  });
+
+  it('enforces non-empty selectedPanelIDs in PlanGenerationRequestSchema', () => {
+    const validReq = {
+      role: 'Backend Engineer',
+      intent: 'Practice',
+      controls: {
+        difficulty: 'intermediate',
+        totalQuestions: 5,
+        includeBehavioral: true,
+        includeCoding: true,
+        timePerQuestion: '90s',
+        deliveryMode: 'exam',
+        reasoningMode: 'classic_technical',
+        sourceMode: 'job_description'
+      },
+      selectedPanelIDs: ['p1', 'p3']
+    };
+    expect(PlanGenerationRequestSchema.safeParse(validReq).success).toBe(true);
+
+    const emptyPanelReq = {
+      ...validReq,
+      selectedPanelIDs: []
+    };
+    expect(PlanGenerationRequestSchema.safeParse(emptyPanelReq).success).toBe(false);
   });
 });

@@ -25,13 +25,13 @@ router.delete('/data', async (req, res) => {
     const userId = (req as any).user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
     if (!supabaseAdmin) {
-      return res.json({
-        success: true,
+      return res.status(503).json({
+        success: false,
         operation: 'app_data_deleted',
-        deletedTables: ['local_session_memory'],
-        failedTables: [],
+        deletedTables: [],
+        failedTables: ['all'],
         authIdentityDeleted: false,
-        authIdentityRetainedReason: 'Supabase service role is unconfigured; cleared local test session memory.',
+        authIdentityRetainedReason: 'Server data deletion service unavailable. Supabase service role is unconfigured.',
         requestId,
       });
     }

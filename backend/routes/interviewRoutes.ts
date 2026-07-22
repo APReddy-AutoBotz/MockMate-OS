@@ -191,12 +191,14 @@ router.post('/ideal-response', enforceUsageLimit('interview_question'), async (r
 router.post('/transcribe', enforceUsageLimit('interview_question'), async (req: any, res) => {
   try {
     const { audioBase64, mimeType } = req.body;
-    if (!audioBase64) return res.status(400).json({ error: 'Missing audioData' });
+    if (!audioBase64) {
+      return res.status(400).json({ status: 'unavailable', transcript: null, error: 'Missing audioBase64' });
+    }
     const result = await aiService.transcribeAudio(audioBase64, mimeType);
-    res.json({ transcript: result });
+    res.json(result);
   } catch (error: any) {
     console.error('[Interview] transcribe error:', error);
-    res.status(500).json({ error: error.message || 'Could not transcribe audio' });
+    res.status(503).json({ status: 'unavailable', transcript: null, error: error.message || 'Could not transcribe audio' });
   }
 });
 

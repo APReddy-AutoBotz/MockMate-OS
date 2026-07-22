@@ -637,17 +637,57 @@ describe('Backend Express API & Route Parity Tests', () => {
     expect(resUnavailable.body.status).toBe('unavailable');
   });
 
-  it('29. DELETE /api/me/data returns canonical AccountDeletionResponseSchema', async () => {
+  it('29. DELETE /api/me/data returns 503 when Supabase service role is unconfigured', async () => {
     const res = await request(app)
       .delete('/api/me/data')
       .set('Authorization', testAuthHeader);
 
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
+    expect(res.status).toBe(503);
+    expect(res.body.success).toBe(false);
     expect(res.body.operation).toBe('app_data_deleted');
-    expect(Array.isArray(res.body.deletedTables)).toBe(true);
-    expect(Array.isArray(res.body.failedTables)).toBe(true);
     expect(res.body.authIdentityDeleted).toBe(false);
+    expect(res.body.authIdentityRetainedReason).toContain('unconfigured');
     expect(res.body.requestId).toBeDefined();
+  });
+
+  it('30. POST /api/interview/transcribe returns status=transcribed when provider succeeds and status=unavailable when offline', async () => {
+    const spy = jest.spyOn(aiService, 'transcribeAudio').mockResolvedValueOnce({
+      status: 'transcribed',
+      transcript: 'Real candidate speech sample',
+    }).mockResolvedValueOnce({
+      status: 'unavailable',
+      transcript: null,
+    });
+
+    const resTranscribed = await request(app)
+      .post('/api/interview/transcribe')
+      .set('Authorization', testAuthHeader)
+      .send({ audioBase64: 'dGVzdGF1ZGlvYnVmZmVy', mimeType: 'audio/webm' });
+
+    expect(resTranscribed.status).toBe(200);
+    expect(resTranscribed.body.status).toBe('transcribed');
+    expect(resTranscribed.body.transcript).toBe('Real candidate speech sample');
+
+    const resUnavailable = await request(app)
+      .post('/api/interview/transcribe')
+      .set('Authorization', testAuthHeader)
+      .send({ audioBase64: 'dGVzdGF1ZGlvYnVmZmVy', mimeType: 'audio/webm' });
+
+    expect(resUnavailable.status).toBe(200);
+    expect(resUnavailable.body.status).toBe('unavailable');
+    expect(resUnavailable.body.transcript).toBeNull();
+
+    spy.mockRestore();
+  });
+
+  it('31. POST /api/interview/transcribe returns status=unavailable with transcript=null when audio is empty', async () => {
+    const resEmpty = await request(app)
+      .post('/api/interview/transcribe')
+      .set('Authorization', testAuthHeader)
+      .send({ audioBase64: '', mimeType: 'audio/webm' });
+
+    expect(resEmpty.status).toBe(400);
+    expect(resEmpty.body.status).toBe('unavailable');
+    expect(resEmpty.body.transcript).toBeNull();
   });
 });

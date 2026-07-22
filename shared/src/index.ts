@@ -443,7 +443,7 @@ export const PlanGenerationRequestSchema = z.object({
   controls: SessionControlsSchema,
   jdText: z.string().optional(),
   resumeText: z.string().optional(),
-  selectedPanelIDs: z.array(z.string()).optional(),
+  selectedPanelIDs: z.array(z.string()).min(1),
 }).strict();
 
 export const InterviewSessionStartRequestSchema = z.object({
@@ -717,8 +717,12 @@ export const BridgeTriggerStateSchema = z.object({
 }).strict();
 export type BridgeTriggerState = z.infer<typeof BridgeTriggerStateSchema>;
 
+export const TranscriptionStatusSchema = z.enum(['transcribed', 'unavailable']);
+export type TranscriptionStatus = z.infer<typeof TranscriptionStatusSchema>;
+
 export const TranscribeAudioResponseSchema = z.object({
-  transcript: z.string(),
+  status: TranscriptionStatusSchema,
+  transcript: z.string().nullable(),
 }).strict();
 export type TranscribeAudioResponse = z.infer<typeof TranscribeAudioResponseSchema>;
 

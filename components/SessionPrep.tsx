@@ -71,6 +71,10 @@ const buildFallbackInterviewPlan = (
 
   const normalizedControls = { ...controls, totalQuestions: questionSet.length };
 
+  const isTechRole = /engineer|developer|software|coding|backend|frontend|fullstack|devops|data scientist|programmer/i.test(candidateRole || intentText || '');
+  const domains = isTechRole ? ['Software Engineering'] : (candidateRole ? [candidateRole] : []);
+  const tools = isTechRole ? ['Git'] : [];
+
   return {
     meta: {
       intent: intentText,
@@ -79,12 +83,12 @@ const buildFallbackInterviewPlan = (
     },
     jdInsights: {
       role: candidateRole || 'Candidate',
-      level: 'Senior',
+      level: 'Mid-Level',
       mustHaveSkills: ['Problem Solving', 'Communication'],
       niceToHave: [],
-      domains: ['Software'],
-      tools: ['Git'],
-      softSkills: ['Teamwork'],
+      domains,
+      tools,
+      softSkills: ['Teamwork', 'Communication'],
       competencyWeights: { PROBLEM_FRAMING: 0.5, TRADEOFF_CLARITY: 0.5 }
     },
     questionSet,

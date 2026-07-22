@@ -60,6 +60,10 @@ export const createSession = async (
     throw new Error('Interview plan must contain a non-empty question set');
   }
 
+  if (context.interviewPlan?.meta?.controls) {
+    context.controls = context.interviewPlan.meta.controls;
+  }
+
   const firstQuestion = context.interviewPlan.questionSet[0];
   const totalQuestions = context.interviewPlan.questionSet.length;
   const openingMessage = `Welcome to your mock interview session for the ${context.candidateRole} position. We will cover ${totalQuestions} key questions. Ready for your first question?`;

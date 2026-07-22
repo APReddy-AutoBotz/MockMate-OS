@@ -101,14 +101,14 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-export const transcribeAudio = async (blob: Blob): Promise<string> => {
+export const transcribeAudio = async (blob: Blob): Promise<TranscribeAudioResponse> => {
   try {
     const base64Audio = await blobToBase64(blob);
     const data = await apiClient.post('interview/transcribe', TranscribeAudioResponseSchema, { audioBase64: base64Audio, mimeType: blob.type });
-    return data.transcript;
+    return data;
   } catch (error) {
     console.error("Transcription failed", error);
-    return "";
+    return { status: 'unavailable', transcript: null };
   }
 };
 

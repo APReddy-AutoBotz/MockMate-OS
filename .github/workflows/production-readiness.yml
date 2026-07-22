@@ -99,10 +99,15 @@ jobs:
       - name: 16. Mobile lint
         run: npm run mobile:lint
 
-      - name: 17. Full-history secret scan
-        run: node scripts/scan-git-history.mjs
+      - name: 20. Recognized full-history secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 18. Production config smoke check
+      - name: 21. Supplemental custom secret-pattern scan
+        run: npm run scan:secrets
+
+      - name: 22. Production config smoke check
         shell: bash
         run: |
           test -f vercel.json
