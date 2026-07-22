@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useEffect, useState } from 'react';
 import type { ClearSpeakBridgePayload, ClearSpeakProfile, ClearSpeakProgress } from './types';
 import { getProfile, getProgress } from '../../services/clearSpeakService';

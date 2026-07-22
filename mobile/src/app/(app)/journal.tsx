@@ -88,7 +88,7 @@ export default function JournalScreen() {
               <Text style={styles.bulletText}>{item}</Text>
             </View>
           )) || (
-            <Text style={styles.bulletText}>Excellent speaking clarity and structure.</Text>
+            <Text style={styles.bulletText}>No evaluated strengths available.</Text>
           )}
         </View>
 
@@ -100,7 +100,7 @@ export default function JournalScreen() {
               <Text style={styles.bulletText}>{item}</Text>
             </View>
           )) || (
-            <Text style={styles.bulletText}>Improve conciseness and quantifiable impact.</Text>
+            <Text style={styles.bulletText}>No evaluated improvement areas available.</Text>
           )}
         </View>
       </ScrollView>

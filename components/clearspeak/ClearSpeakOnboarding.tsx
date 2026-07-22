@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useState } from 'react';
 import type { ClearSpeakLevel, ClearSpeakProfile, ClearSpeakRole, MainStruggle, PracticeDuration } from './types';
 import { saveProfile } from '../../services/clearSpeakService';

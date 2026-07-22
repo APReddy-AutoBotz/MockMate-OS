@@ -23,7 +23,7 @@ export interface ClearSpeakProfile {
   level: ClearSpeakLevel;
   goal: string;
   audienceContext: string;
-  mainStruggle: MainStruggle;
+  mainStruggle: MainStruggle | string;
   comfortLanguage: string;
   practiceDuration: PracticeDuration;
   createdAt: string;
@@ -40,14 +40,14 @@ export interface PassageToken {
 
 export interface ClearSpeakSessionContent {
   topicTag: string;
-  difficultyLevel: ClearSpeakLevel;
+  difficultyLevel: number;
   targetSkill: string;
   keyVocab: string[];
   passageData: PassageToken[];
-  repeatPhrase: string;
-  retrySentence: string;
+  repeatPhrase?: string;
+  retrySentence?: string;
   bridgeReady: boolean;
-  interviewBridgeQuestion: string;
+  interviewBridgeQuestion?: string;
 }
 
 export interface ClearSpeakSessionScore {
@@ -81,25 +81,12 @@ export interface BridgeTriggerState {
   shouldSurface: boolean;
 }
 
-/**
- * Bridge data contract. Passed from ClearSpeak → Interview on bridge acceptance.
- * Consumed by handleInterviewBridge in App.tsx to build a pre-seeded SessionContext.
- *
- * Contract version: 1.0
- * Source: implementation_plan.md §13
- */
 export interface ClearSpeakBridgePayload {
-  /** Always "clearspeak_bridge" — lets Interview mode detect controlled entry */
   source: 'clearspeak_bridge';
-  /** The AI-generated interview question linked to the practiced topic */
   bridgeQuestion: string;
-  /** ClearSpeak role identifier, mapped to a candidateRole string */
   role: ClearSpeakRole;
-  /** Topic cluster the user practiced (e.g. "Stakeholder Pushback") */
   topicTag: string;
-  /** Vocabulary words the user practiced this session */
   practicedWords: string[];
-  /** Most recent pillar scores for Interview context logging */
   recentScores: {
     clarity: number;
     pacing: number;
@@ -108,7 +95,6 @@ export interface ClearSpeakBridgePayload {
   };
 }
 
-/** App-level session phase state machine */
 export type ClearSpeakPhase =
   | 'idle'
   | 'onboarding'

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { UserProfile } from "./types/ui";
 
 import React, { useState, useEffect, Suspense } from 'react';
@@ -15,7 +14,7 @@ import AppContainer from './components/AppContainer';
 import SplashScreen from './components/SplashScreen';
 import SimplifiedReport from './components/SimplifiedReport';
 import InterviewOrbit from './components/InterviewOrbit';
-import { FinalReport, InterviewSessionContext as SessionContext } from "mockmate-shared";
+import { FinalReport, InterviewSessionContext as SessionContext, SessionControls } from "mockmate-shared";
 import { Logo } from './components/icons/Logo';
 import LandingPage from './components/LandingPage';
 import Login from './components/Login';
@@ -144,16 +143,39 @@ const App: React.FC = () => {
     };
 
 
-    const handleRoleSubmit = (intent: string, sessionType: string, companyData?: { name: string, url: string }) => {
+    const handleRoleSubmit = (intent: string, sessionType: 'structured' | 'conversational') => {
         audioService.playConfirm();
+        const initialControls: SessionControls = {
+            difficulty: 'intermediate',
+            totalQuestions: 5,
+            includeBehavioral: true,
+            includeCoding: false,
+            timePerQuestion: '90s',
+            deliveryMode: 'exam',
+            reasoningMode: 'classic_behavioral',
+            sourceMode: 'job_description'
+        };
         const initialContext: SessionContext = {
             candidateRole: intent,
             intentText: intent,
-            selectedPanelIDs: [],
+            selectedPanelIDs: ['p1'],
             sessionType: sessionType,
-            
-            companyName: companyData?.name,
-            companyUrl: companyData?.url
+            controls: initialControls,
+            interviewPlan: {
+                meta: {
+                    intent: intent,
+                    controls: initialControls
+                },
+                jdInsights: { role: intent },
+                questionSet: [{
+                    id: 'q_init_1',
+                    phase: 'scenario',
+                    difficulty: 'intermediate',
+                    question: 'Tell me about yourself.',
+                    expectedSignals: ['Communication'],
+                    personaFocus: 'p1'
+                }]
+            }
         };
         setSessionContext(initialContext);
 
@@ -495,7 +517,7 @@ const App: React.FC = () => {
                                         report={finalReport}
                                         onRestart={handleRestart}
                                         userProfile={userProfile}
-                                        sessionId={sessionContext?.sessionId}
+                                        sessionId={(sessionContext as any)?.sessionId}
                                     />
                                 )}
                             </ErrorBoundary>

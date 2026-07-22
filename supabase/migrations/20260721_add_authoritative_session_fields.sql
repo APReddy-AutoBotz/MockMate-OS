@@ -12,45 +12,70 @@ CREATE OR REPLACE FUNCTION atomic_submit_answer(
   p_session_id uuid,
   p_user_id uuid,
   p_question_id text,
-  p_turn jsonb,
+  p_expected_question_index integer,
+  p_answer_kind text,
+  p_answer_text text,
   p_next_question_json jsonb,
   p_next_question_id text,
-  p_is_last boolean
-) RETURNS boolean AS $$
+  p_is_last boolean,
+  p_total_questions integer
+) RETURNS jsonb AS $$
 DECLARE
-  v_pending text;
-  v_status text;
-  v_history jsonb;
+  v_session record;
+  v_turn_id uuid;
+  v_result jsonb;
 BEGIN
-  -- Lock row
-  SELECT pending_question_id, status, history INTO v_pending, v_status, v_history
+  -- 1. Lock matching session row
+  SELECT * INTO v_session
   FROM interview_sessions
   WHERE id = p_session_id AND user_id = p_user_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Session not found';
+    RAISE EXCEPTION 'Session not found or unauthorized';
   END IF;
 
-  IF v_status != 'active' THEN
+  IF v_session.status != 'active' THEN
     RAISE EXCEPTION 'Session is not active';
   END IF;
 
-  IF v_pending != p_question_id THEN
+  IF v_session.pending_question_id != p_question_id OR v_session.current_question_index != p_expected_question_index THEN
     RAISE EXCEPTION 'Stale or mismatched question submission';
   END IF;
 
-  -- Update session
+  -- 2. Insert into interview_turns
+  INSERT INTO interview_turns (
+    session_id,
+    question_id,
+    question,
+    answer_text,
+    created_at
+  ) VALUES (
+    p_session_id,
+    p_question_id,
+    COALESCE(v_session.pending_question->>'question', ''),
+    COALESCE(p_answer_text, ''),
+    now()
+  ) RETURNING id INTO v_turn_id;
+
+  -- 3. Update interview_sessions state
   UPDATE interview_sessions SET
-    history = COALESCE(v_history, '[]'::jsonb) || p_turn,
     pending_question_id = CASE WHEN p_is_last THEN NULL ELSE p_next_question_id END,
     pending_question = CASE WHEN p_is_last THEN NULL ELSE p_next_question_json END,
     current_question_index = current_question_index + 1,
-    status = CASE WHEN p_is_last THEN 'completed' ELSE status END,
-    completed_at = CASE WHEN p_is_last THEN now() ELSE completed_at END,
+    status = CASE WHEN p_is_last THEN 'awaiting_report' ELSE 'active' END,
     updated_at = now()
   WHERE id = p_session_id;
 
-  RETURN true;
+  -- 4. Construct return JSON
+  v_result := jsonb_build_object(
+    'completedTurnId', v_turn_id::text,
+    'nextQuestion', CASE WHEN p_is_last THEN NULL ELSE p_next_question_json END,
+    'isLastQuestion', p_is_last,
+    'questionIndex', v_session.current_question_index + 1,
+    'totalQuestions', p_total_questions
+  );
+
+  RETURN v_result;
 END;
 $$ LANGUAGE plpgsql;

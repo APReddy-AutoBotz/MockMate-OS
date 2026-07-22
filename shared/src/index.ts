@@ -1,12 +1,30 @@
 import { z } from 'zod';
 
-// COMMON CONTRACTS
-export const ApiErrorCodeSchema = z.string();
+// ============================================================================
+// COMMON CONTRACTS & ERROR CODES
+// ============================================================================
+
+export const ApiErrorCodeSchema = z.enum([
+  'UNAUTHORIZED',
+  'FORBIDDEN',
+  'NOT_FOUND',
+  'VALIDATION_ERROR',
+  'CONFLICT',
+  'RATE_LIMITED',
+  'PAYLOAD_TOO_LARGE',
+  'UNSUPPORTED_MEDIA_TYPE',
+  'CONTRACT_RESPONSE_INVALID',
+  'SERVICE_UNAVAILABLE',
+  'INTERNAL_ERROR'
+]);
+export type ApiErrorCode = z.infer<typeof ApiErrorCodeSchema>;
+
 export const ApiErrorSchema = z.object({
   error: z.string(),
   code: ApiErrorCodeSchema.optional(),
-  details: z.any().optional(),
+  details: z.unknown().optional(),
 }).strict();
+export type ApiErrorType = z.infer<typeof ApiErrorSchema>;
 
 export const CanonicalSuccessSchema = <T extends z.ZodTypeAny>(dataSchema: T) => z.object({
   success: z.literal(true),
@@ -18,13 +36,19 @@ export const CanonicalErrorSchema = z.object({
   error: ApiErrorSchema
 }).strict();
 
-export const EvaluationStatusSchema = z.enum(['scored', 'insufficient_evidence', 'not_tested', 'processing', 'completed', 'failed']);
+export const EvaluationStatusSchema = z.enum(['scored', 'insufficient_evidence', 'not_tested']);
 export type EvaluationStatus = z.infer<typeof EvaluationStatusSchema>;
+
+export const ReportGenerationStateSchema = z.enum(['pending', 'processing', 'completed', 'failed']);
+export type ReportGenerationState = z.infer<typeof ReportGenerationStateSchema>;
 
 export const EvidenceConfidenceSchema = z.enum(['low', 'medium', 'high']);
 export type EvidenceConfidence = z.infer<typeof EvidenceConfidenceSchema>;
 
-// INTERVIEW DIMENSION KEYS
+// ============================================================================
+// INTERVIEW DIMENSION KEYS & SESSION CONTROLS
+// ============================================================================
+
 export const DimensionKeySchema = z.enum([
   'PROBLEM_FRAMING',
   'SYSTEMS_THINKING',
@@ -39,21 +63,49 @@ export const DimensionKeySchema = z.enum([
 ]);
 export type DimensionKey = z.infer<typeof DimensionKeySchema>;
 
+export const DifficultySchema = z.enum(['starter', 'intermediate', 'expert']);
+export type Difficulty = z.infer<typeof DifficultySchema>;
+
+export const TimePerQuestionSchema = z.enum(['45s', '90s', '120s', 'none']);
+export type TimePerQuestion = z.infer<typeof TimePerQuestionSchema>;
+
+export const DeliveryModeSchema = z.enum(['exam', 'coach']);
+export type DeliveryMode = z.infer<typeof DeliveryModeSchema>;
+
+export const ReasoningModeSchema = z.enum([
+  'classic_behavioral',
+  'classic_technical',
+  'narrative_reasoning',
+  'problem_framing',
+  'tradeoff_decision',
+  'stakeholder_pressure',
+  'ai_collaboration_review',
+  'uncertainty_handling',
+  'adversarial_pushback'
+]);
+export type ReasoningMode = z.infer<typeof ReasoningModeSchema>;
+
+export const SourceModeSchema = z.enum(['job_description', 'question_bank', 'resume']);
+export type SourceMode = z.infer<typeof SourceModeSchema>;
+
 export const SessionControlsSchema = z.object({
-  difficulty: z.string(),
+  difficulty: DifficultySchema,
   totalQuestions: z.number(),
   includeBehavioral: z.boolean(),
   includeCoding: z.boolean(),
-  timePerQuestion: z.string(),
-  deliveryMode: z.string(),
-  reasoningMode: z.string(),
-  sourceMode: z.string().optional(),
+  timePerQuestion: TimePerQuestionSchema,
+  deliveryMode: DeliveryModeSchema,
+  reasoningMode: ReasoningModeSchema,
+  sourceMode: SourceModeSchema.optional(),
   targetCompetencies: z.array(z.string()).optional(),
   targetDimensions: z.array(DimensionKeySchema).optional(),
 }).strict();
 export type SessionControls = z.infer<typeof SessionControlsSchema>;
 
-// QUESTION BLUEPRINT
+// ============================================================================
+// QUESTION BLUEPRINT & JD INSIGHTS
+// ============================================================================
+
 export const QuestionBlueprintSchema = z.object({
   id: z.string(),
   phase: z.string(),
@@ -72,13 +124,29 @@ export const QuestionBlueprintSchema = z.object({
 }).strict();
 export type QuestionBlueprint = z.infer<typeof QuestionBlueprintSchema>;
 
-// INTERVIEW PLAN
+export const JDInsightsSchema = z.object({
+  source: z.string().optional(),
+  role: z.string().optional(),
+  level: z.string().optional(),
+  mustHaveSkills: z.array(z.string()).optional(),
+  niceToHave: z.array(z.string()).optional(),
+  domains: z.array(z.string()).optional(),
+  tools: z.array(z.string()).optional(),
+  softSkills: z.array(z.string()).optional(),
+  competencyWeights: z.record(z.string(), z.number()).optional(),
+}).strict();
+export type JDInsights = z.infer<typeof JDInsightsSchema>;
+
+// ============================================================================
+// INTERVIEW PLAN & CONTEXT
+// ============================================================================
+
 export const InterviewPlanSchema = z.object({
   meta: z.object({
     intent: z.string(),
     controls: SessionControlsSchema,
   }).strict(),
-  jdInsights: z.record(z.string(), z.any()),
+  jdInsights: JDInsightsSchema,
   questionSet: z.array(QuestionBlueprintSchema).min(1),
 }).strict();
 export type InterviewPlan = z.infer<typeof InterviewPlanSchema>;
@@ -89,7 +157,9 @@ export const InterviewSessionContextSchema = z.object({
   selectedPanelIDs: z.array(z.string()),
   controls: SessionControlsSchema,
   interviewPlan: InterviewPlanSchema,
-  sessionType: z.string(),
+  sessionType: z.enum(['structured', 'conversational']),
+  competencyWeights: z.array(z.unknown()).optional(),
+  jdInsights: JDInsightsSchema.optional(),
 }).strict();
 export type InterviewSessionContext = z.infer<typeof InterviewSessionContextSchema>;
 
@@ -102,7 +172,40 @@ export const InterviewTurnSchema = z.object({
 }).strict();
 export type InterviewTurn = z.infer<typeof InterviewTurnSchema>;
 
-// REPORT
+// ============================================================================
+// RAW PROVIDER PLAN SCHEMAS (NO Z.ANY)
+// ============================================================================
+
+export const RawQuestionBlueprintSchema = z.object({
+  id: z.string().optional(),
+  phase: z.string().optional(),
+  difficulty: z.string().optional(),
+  question: z.string(),
+  expectedSignals: z.array(z.string()).optional(),
+  personaFocus: z.string().optional(),
+  type: z.string().optional(),
+  failureModes: z.array(z.string()).optional(),
+  evaluationCriteria: z.array(z.string()).optional(),
+  rubric: z.record(z.string(), z.string()).optional(),
+  sourceBullets: z.array(z.string()).optional(),
+  language: z.string().optional(),
+  timeAllocation: z.number().optional(),
+  relatedDimensions: z.array(z.string()).optional(),
+}).passthrough();
+
+export const RawInterviewPlanSchema = z.object({
+  meta: z.object({
+    intent: z.string().optional(),
+    controls: z.record(z.string(), z.unknown()).optional(),
+  }).optional(),
+  jdInsights: z.record(z.string(), z.unknown()).optional(),
+  questionSet: z.array(RawQuestionBlueprintSchema),
+}).passthrough();
+
+// ============================================================================
+// REPORT CONTRACTS
+// ============================================================================
+
 export const DimensionScoreSchema = z.object({
   dimension: DimensionKeySchema,
   dimensionName: z.string().optional(),
@@ -129,10 +232,23 @@ export const BiggestRiskSchema = z.object({
 }).strict();
 export type BiggestRisk = z.infer<typeof BiggestRiskSchema>;
 
+export const RedoNowSchema = z.object({
+  question: z.string(),
+  instruction: z.string(),
+}).strict();
+export type RedoNow = z.infer<typeof RedoNowSchema>;
+
+export const MicroDrillSchema = z.object({
+  weakness: z.string(),
+  drill_prompt: z.string(),
+  focus_point: z.string(),
+}).strict();
+export type MicroDrill = z.infer<typeof MicroDrillSchema>;
+
 export const CoachPackSchema = z.object({
   title: z.string(),
-  redoNow: z.string(),
-  micro_drills: z.array(z.string()),
+  redoNow: z.union([RedoNowSchema, z.string()]),
+  micro_drills: z.array(z.union([MicroDrillSchema, z.string()])),
 }).strict();
 export type CoachPack = z.infer<typeof CoachPackSchema>;
 
@@ -198,10 +314,93 @@ export const FinalReportSchema = z.object({
 }).strict();
 export type FinalReport = z.infer<typeof FinalReportSchema>;
 
-export const ReportGenerationStateSchema = z.enum(['pending', 'processing', 'completed', 'failed']);
-export type ReportGenerationState = z.infer<typeof ReportGenerationStateSchema>;
+// ============================================================================
+// CANONICAL API REQUEST / RESPONSE SCHEMAS FOR INTERVIEW ROUTE
+// ============================================================================
 
-// RESUME
+export const CalibrateRequestSchema = z.object({
+  role: z.string(),
+  jobDescription: z.string().optional(),
+}).strict();
+
+export const CalibrateResponseSchema = z.object({
+  recommendedPanelIDs: z.array(z.string()),
+  recommendedRole: z.string(),
+  matchReasons: z.record(z.string(), z.string()).optional(),
+  suggestedControls: SessionControlsSchema.optional(),
+  jdInsights: JDInsightsSchema.optional(),
+}).strict();
+export type CalibrateResponse = z.infer<typeof CalibrateResponseSchema>;
+
+export const PlanGenerationRequestSchema = z.object({
+  role: z.string(),
+  intent: z.string(),
+  controls: SessionControlsSchema,
+  jdText: z.string().optional(),
+  resumeText: z.string().optional(),
+}).strict();
+
+export const InterviewSessionStartRequestSchema = z.object({
+  context: InterviewSessionContextSchema,
+}).strict();
+
+export const InterviewSessionStartResponseSchema = z.object({
+  sessionId: z.string(),
+  openingMessage: z.string(),
+  firstQuestion: QuestionBlueprintSchema,
+  questionIndex: z.number(),
+  totalQuestions: z.number(),
+}).strict();
+export type InterviewSessionStartResponse = z.infer<typeof InterviewSessionStartResponseSchema>;
+
+export const AnswerSubmissionRequestSchema = z.object({
+  questionId: z.string(),
+  expectedQuestionIndex: z.number(),
+  answerKind: z.enum(['answered', 'skipped']),
+  answerText: z.string().optional(),
+}).strict();
+
+export const AnswerSubmissionResponseSchema = z.object({
+  completedTurnId: z.string(),
+  nextQuestion: QuestionBlueprintSchema.nullable(),
+  isLastQuestion: z.boolean(),
+  questionIndex: z.number(),
+  totalQuestions: z.number(),
+}).strict();
+export type AnswerSubmissionResponse = z.infer<typeof AnswerSubmissionResponseSchema>;
+
+export const HintRequestSchema = z.object({
+  questionText: z.string(),
+  expectedSignals: z.array(z.string()),
+}).strict();
+
+export const HintResponseSchema = z.object({
+  hint: z.string(),
+}).strict();
+export type HintResponse = z.infer<typeof HintResponseSchema>;
+
+export const IdealResponseRequestSchema = z.object({
+  questionText: z.string(),
+  expectedSignals: z.array(z.string()),
+  userAnswer: z.string().optional(),
+}).strict();
+
+export const IdealResponseResponseSchema = z.object({
+  idealResponse: z.string(),
+}).strict();
+export type IdealResponseResponse = z.infer<typeof IdealResponseResponseSchema>;
+
+export const ReportFetchResponseSchema = z.object({
+  sessionId: z.string(),
+  status: ReportGenerationStateSchema,
+  report: FinalReportSchema.nullable(),
+}).strict();
+export type ReportFetchResponse = z.infer<typeof ReportFetchResponseSchema>;
+
+// ============================================================================
+// RESUME SCHEMAS
+// ============================================================================
+
 export const ResumeDataSchema = z.object({
   basics: z.object({
     name: z.string(),
@@ -251,10 +450,15 @@ export const ResumeDataSchema = z.object({
 }).strict();
 export type ResumeData = z.infer<typeof ResumeDataSchema>;
 
+export const ATSDiagnosticIssueSchema = z.object({
+  id: z.string(),
+  message: z.string(),
+}).strict();
+
 export const ATSDiagnosticsResultSchema = z.object({
   score: z.number(),
-  highConfidenceIssues: z.array(z.object({ id: z.string(), message: z.string() }).strict()),
-  possibleRiskIssues: z.array(z.object({ id: z.string(), message: z.string() }).strict()),
+  highConfidenceIssues: z.array(ATSDiagnosticIssueSchema),
+  possibleRiskIssues: z.array(ATSDiagnosticIssueSchema),
 }).strict();
 export type ATSDiagnosticsResult = z.infer<typeof ATSDiagnosticsResultSchema>;
 
@@ -282,16 +486,37 @@ export const ResumeSuggestionResponseSchema = z.object({
 }).strict();
 export type ResumeSuggestionResponse = z.infer<typeof ResumeSuggestionResponseSchema>;
 
-// CLEARSPEAK
+// ============================================================================
+// CLEARSPEAK SCHEMAS
+// ============================================================================
+
+export const ClearSpeakLevelSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
+export const ClearSpeakDurationSchema = z.union([z.literal(3), z.literal(5)]);
+
+export const HardWordEntrySchema = z.object({
+  word: z.string(),
+  failCount: z.number(),
+  lastAttemptedAt: z.string(),
+  resolved: z.boolean(),
+}).strict();
+export type HardWordEntry = z.infer<typeof HardWordEntrySchema>;
+
+export const HardWordsLedgerSchema = z.object({
+  userId: z.string(),
+  entries: z.array(HardWordEntrySchema),
+  updatedAt: z.string(),
+}).strict();
+export type HardWordsLedger = z.infer<typeof HardWordsLedgerSchema>;
+
 export const ClearSpeakProfileSchema = z.object({
   userId: z.string(),
   role: z.string(),
-  level: z.enum(['1', '2', '3']),
+  level: ClearSpeakLevelSchema,
   goal: z.string(),
   audienceContext: z.string(),
   mainStruggle: z.string(),
   comfortLanguage: z.string(),
-  practiceDuration: z.enum(['3', '5'] as any).transform(v => Number(v)),
+  practiceDuration: ClearSpeakDurationSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
 }).strict();
@@ -335,7 +560,7 @@ export const ClearSpeakProgressSchema = z.object({
   streak: z.number(),
   lastPracticeDate: z.string(),
   clarityTrend: z.array(z.number()),
-  topicBestScores: z.record(z.number()),
+  topicBestScores: z.record(z.string(), z.number()),
   bestPerformingTopic: z.string(),
   hardWordCount: z.number(),
   totalSessionsCompleted: z.number(),
@@ -343,20 +568,11 @@ export const ClearSpeakProgressSchema = z.object({
 }).strict();
 export type ClearSpeakProgress = z.infer<typeof ClearSpeakProgressSchema>;
 
-export const HardWordEntrySchema = z.object({
-  word: z.string(),
-  failCount: z.number(),
-  lastAttemptedAt: z.string(),
-  resolved: z.boolean(),
+export const ClearSpeakScoreResponseSchema = z.object({
+  success: z.boolean(),
+  score: ClearSpeakSessionScoreSchema,
 }).strict();
-export type HardWordEntry = z.infer<typeof HardWordEntrySchema>;
-
-export const HardWordsLedgerSchema = z.object({
-  userId: z.string(),
-  entries: z.array(HardWordEntrySchema),
-  updatedAt: z.string(),
-}).strict();
-export type HardWordsLedger = z.infer<typeof HardWordsLedgerSchema>;
+export type ClearSpeakScoreResponse = z.infer<typeof ClearSpeakScoreResponseSchema>;
 
 export const BridgeTriggerStateSchema = z.object({
   streakMet: z.boolean(),
@@ -367,18 +583,13 @@ export const BridgeTriggerStateSchema = z.object({
 }).strict();
 export type BridgeTriggerState = z.infer<typeof BridgeTriggerStateSchema>;
 
-export const ClearSpeakScoreResponseSchema = z.object({
-  success: z.boolean(),
-  score: ClearSpeakSessionScoreSchema,
+export const TranscribeAudioResponseSchema = z.object({
+  transcript: z.string(),
 }).strict();
-export type ClearSpeakScoreResponse = z.infer<typeof ClearSpeakScoreResponseSchema>;
+export type TranscribeAudioResponse = z.infer<typeof TranscribeAudioResponseSchema>;
 
-// Shared Raw Plan Schema (for Phase 3)
-export const RawInterviewPlanSchema = z.object({
-  meta: z.object({
-    intent: z.string().optional(),
-    controls: z.any().optional(),
-  }).optional(),
-  jdInsights: z.any().optional(),
-  questionSet: z.array(z.any()),
-});
+export const CodeAnalysisResponseSchema = z.object({
+  feedback: z.string(),
+  passed: z.boolean(),
+}).strict();
+export type CodeAnalysisResponse = z.infer<typeof CodeAnalysisResponseSchema>;

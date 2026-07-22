@@ -1,9 +1,6 @@
-// @ts-nocheck
-
 import React, { useState, useCallback } from 'react';
 import { FinalReport, PrioritizedAction } from 'mockmate-shared';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useIsMobile } from '../hooks/useIsMobile';
 import { generatePdf } from '../services/pdfGenerator';
 
 interface SimplifiedReportProps {
@@ -13,7 +10,6 @@ interface SimplifiedReportProps {
 }
 
 const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, onShowDetails }) => {
-    const isMobile = useIsMobile();
     const [showDetails, setShowDetails] = useState(false);
     const [isDownloading, setIsDownloading] = useState(false);
 
@@ -28,11 +24,9 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
         }
     }, [report]);
 
-    // Calculate simplified score if not provided
-    const score = report.simplifiedScore || calculateScore(report);
+    const score = report.simplifiedScore ?? calculateScore(report);
     const readinessPercent = Math.round(score);
 
-    // Get readiness text
     const getReadinessText = () => {
         if (readinessPercent >= 80) return 'Interview Ready';
         if (readinessPercent >= 60) return 'Almost Ready';
@@ -41,8 +35,6 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
 
     return (
         <div className="w-full max-w-3xl mx-auto px-5 md:px-8 py-10 md:py-16 space-y-8">
-
-            {/* PART 1: THE VERDICT */}
             <motion.section
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -55,14 +47,12 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                     <h1 className="text-2xl md:text-4xl font-medium text-white tracking-tight">Your practice performance</h1>
                 </div>
 
-                {/* Big Score */}
                 <div className="relative z-10">
                     <div className="text-7xl md:text-9xl font-black text-white tracking-tighter leading-none mb-4">
                         {readinessPercent}
                         <span className="text-xl md:text-2xl text-brand-tint font-bold ml-1">/100</span>
                     </div>
 
-                    {/* Progress Bar */}
                     <div className="w-full max-w-sm mx-auto h-1.5 bg-white/5 rounded-full overflow-hidden mt-6 shadow-inner">
                         <motion.div
                             initial={{ width: 0 }}
@@ -73,7 +63,6 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                     </div>
                 </div>
 
-                {/* Status Badge */}
                 <div className="inline-flex items-center gap-2.5 px-6 py-2.5 rounded-full border border-brand-primary/20 bg-brand-primary/5 relative z-10">
                     <div className="w-1.5 h-1.5 rounded-full bg-brand-primary animate-pulse" />
                     <span className="text-[10px] font-bold text-brand-primary uppercase tracking-widest">
@@ -81,9 +70,7 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                     </span>
                 </div>
 
-                {/* Key Insights */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-12 relative z-10">
-                    {/* Top Strength */}
                     <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-5 text-left">
                         <div className="flex items-center gap-2 mb-3">
                             <span className="text-brand-primary text-xs font-bold uppercase tracking-widest opacity-60">Strength</span>
@@ -93,7 +80,6 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                         </p>
                     </div>
 
-                    {/* Top Weakness */}
                     <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-5 text-left">
                         <div className="flex items-center gap-2 mb-3">
                             <span className="text-brand-tint text-xs font-bold uppercase tracking-[0.12em]">Focus area</span>
@@ -105,7 +91,6 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                 </div>
             </motion.section>
 
-            {/* PART 2: BREAKDOWN (Collapsible) */}
             <motion.section
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -135,7 +120,6 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                             className="overflow-hidden"
                         >
                             <div className="p-6 md:p-10 bg-white/[0.02] border border-white/[0.06] rounded-2xl space-y-10">
-                                {/* Top Skills */}
                                 {report.quantitativeAnalysis && report.quantitativeAnalysis.dimension_scores.length > 0 && (
                                     <div className="space-y-6">
                                         <div className="flex items-center gap-3">
@@ -147,11 +131,11 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                                                 <div key={i} className="space-y-2">
                                                     <div className="flex justify-between items-center">
                                                         <span className="text-[11px] text-white/50 font-medium uppercase tracking-widest">{skill.dimension}</span>
-                                                        <span className="text-[11px] font-bold text-brand-primary tracking-widest">{skill.normalized_score}%</span>
+                                                        <span className="text-[11px] font-bold text-brand-primary tracking-widest">{skill.normalized_score ?? 0}%</span>
                                                     </div>
                                                     <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
                                                         <div
-                                                            style={{ width: `${skill.normalized_score}%` }}
+                                                            style={{ width: `${skill.normalized_score ?? 0}%` }}
                                                             className="h-full bg-brand-primary/60"
                                                         />
                                                     </div>
@@ -161,7 +145,6 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                                     </div>
                                 )}
 
-                                {/* Better Answers Section */}
                                 {report.questionPerformance && report.questionPerformance.length > 0 && (
                                     <div className="space-y-6">
                                         <div className="flex items-center gap-3">
@@ -194,7 +177,6 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                 </AnimatePresence>
             </motion.section>
 
-            {/* PART 3: NEXT STEPS */}
             <motion.section
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -206,7 +188,6 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                     <h2 className="text-xl md:text-3xl font-medium text-white tracking-tight">Your path to success</h2>
                 </div>
 
-                {/* Quick Wins */}
                 {report.quickWins && report.quickWins.length > 0 && (
                     <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-6">
                         <h3 className="text-[10px] font-bold text-brand-primary mb-4 flex items-center gap-2 uppercase tracking-widest">
@@ -223,9 +204,8 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                     </div>
                 )}
 
-                {/* Prioritized Actions */}
                 <div className="space-y-4">
-                    {(report.prioritizedActions || generateDefaultActions(report))?.map((action, i) => (
+                    {report.prioritizedActions?.map((action, i) => (
                         <div
                             key={i}
                             className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-6 space-y-4"
@@ -242,17 +222,14 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
                                         }`}>
                                             {action.impact} Impact
                                         </span>
-                                        <span className="text-[9px] font-bold text-brand-tint uppercase tracking-[0.12em]">{action.action}</span>
                                     </div>
                                 </div>
                             </div>
-                            <p className="text-xs md:text-sm text-white/50 leading-relaxed italic">"{action.impact}"</p>
                         </div>
                     ))}
                 </div>
             </motion.section>
 
-            {/* Action Buttons */}
             <div className="flex flex-col sm:flex-row gap-4 pt-6">
                 <button
                     onClick={handleDownload}
@@ -272,58 +249,35 @@ const SimplifiedReport: React.FC<SimplifiedReportProps> = ({ report, onRestart, 
     );
 };
 
-// Helper functions
-function calculateScore(report: any): number {
+function calculateScore(report: FinalReport): number {
     if (!report.quantitativeAnalysis || !report.quantitativeAnalysis.dimension_scores || report.quantitativeAnalysis.dimension_scores.length === 0) return 0;
-    const scores = report.quantitativeAnalysis.dimension_scores.map((s: any) => s.normalized_score);
-    if (scores.length === 0) return 0;
-    const avgScore = scores.reduce((sum: number, score: number) => sum + score, 0) / scores.length;
-    return Math.round((avgScore / 5) * 100);
+    const scoredDimensions = report.quantitativeAnalysis.dimension_scores.filter(s => s.normalized_score !== null && s.normalized_score !== undefined);
+    if (scoredDimensions.length === 0) return 0;
+    const avgScore = scoredDimensions.reduce((sum, s) => sum + (s.normalized_score || 0), 0) / scoredDimensions.length;
+    return Math.round(avgScore);
 }
 
 function getTopStrength(report: FinalReport): string {
     if (report.quantitativeAnalysis && report.quantitativeAnalysis.dimension_scores.length > 0) {
-        const sorted = [...report.quantitativeAnalysis.dimension_scores].sort((a, b) => b.normalized_score - a.normalized_score);
-        return sorted[0].dimension;
+        const sorted = [...report.quantitativeAnalysis.dimension_scores]
+            .filter(s => s.normalized_score !== null)
+            .sort((a, b) => (b.normalized_score || 0) - (a.normalized_score || 0));
+        if (sorted.length > 0) return sorted[0].dimension;
     }
     return 'Clear communication';
 }
 
 function getTopWeakness(report: FinalReport): string {
     if (report.quantitativeAnalysis && report.quantitativeAnalysis.dimension_scores.length > 0) {
-        const sorted = [...report.quantitativeAnalysis.dimension_scores].sort((a, b) => a.normalized_score - b.normalized_score);
-        return sorted[0].dimension;
+        const sorted = [...report.quantitativeAnalysis.dimension_scores]
+            .filter(s => s.normalized_score !== null)
+            .sort((a, b) => (a.normalized_score || 0) - (b.normalized_score || 0));
+        if (sorted.length > 0) return sorted[0].dimension;
     }
     if (report.biggestRiskArea) {
-        return report.biggestRiskArea.action;
+        return report.biggestRiskArea.title;
     }
     return 'Technical depth';
-}
-
-function generateDefaultActions(report: FinalReport): PrioritizedAction[] {
-    const actions: PrioritizedAction[] = [];
-
-    if (report.biggestRiskArea) {
-        actions.push({
-            action: report.biggestRiskArea.action,
-            impact: 'high',
-            timeEstimate: '15 min',
-            exercise: report.biggestRiskArea.mitigation || 'Practice answering questions in this area with specific examples.'
-        });
-    }
-
-    if (report.coachPack?.micro_drills) {
-        report.coachPack.micro_drills.slice(0, 2).forEach((drill, i) => {
-            actions.push({
-                action: drill,
-                impact: i === 0 ? 'high' : 'medium',
-                timeEstimate: '10 min',
-                exercise: drill
-            });
-        });
-    }
-
-    return actions.slice(0, 3);
 }
 
 export default SimplifiedReport;

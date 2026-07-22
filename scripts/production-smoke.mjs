@@ -53,7 +53,8 @@ async function run() {
       NODE_ENV: 'production',
       ENABLE_DEV_AUTH: 'false',
       SUPABASE_URL: 'https://test.supabase.co',
-      SUPABASE_SERVICE_KEY: 'test-service-key',
+      SUPABASE_SERVICE_ROLE_KEY: 'test-service-role-key',
+      ALLOWED_ORIGINS: 'http://localhost:3000,http://127.0.0.1:3055',
       GROQ_API_KEY: 'test-groq-key',
       GOOGLE_API_KEY: 'test-google-key'
     },

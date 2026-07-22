@@ -2,116 +2,132 @@ import { z } from 'zod';
 import { apiClient } from './apiClient';
 import {
   InterviewPlan,
+  InterviewPlanSchema,
   InterviewSessionContext,
   FinalReport,
+  FinalReportSchema,
   QuestionBlueprint,
+  CalibrateResponseSchema,
+  CalibrateResponse,
+  InterviewSessionStartResponseSchema,
+  InterviewSessionStartResponse,
+  AnswerSubmissionResponseSchema,
+  AnswerSubmissionResponse,
+  HintResponseSchema,
+  IdealResponseResponseSchema,
+  TranscribeAudioResponseSchema,
+  CodeAnalysisResponseSchema
 } from 'mockmate-shared';
 
 export const calibrateIntent = async (
-    intentText: string,
-    additionalContext?: string
-): Promise<{ recommendedPanelIDs: string[]; recommendedRole: string; matchReasons?: Record<string, string> }> => {
-    return apiClient.post<any>('interview/calibrate', { intentText, additionalContext }, z.any());
+  role: string,
+  jobDescription?: string
+): Promise<CalibrateResponse> => {
+  return apiClient.post('interview/calibrate', CalibrateResponseSchema, { role, jobDescription });
 };
 
 export const generateInterviewPlan = async (
-    intentText: string,
-    jdText: string | null,
-    sessionControls: any,
-    selectedPanelIDs: string[]
+  role: string,
+  intentText: string,
+  sessionControls: any,
+  jdText?: string,
+  resumeText?: string
 ): Promise<InterviewPlan> => {
-    return apiClient.post<any>('interview/plan', { intentText, jdText, controls: sessionControls, selectedPanelIDs }, z.any());
-};
-
-export const generateInterviewPlanV2 = async (
-    intentText: string,
-    jdText: string | null,
-    sessionControls: any,
-    selectedPanelIDs: string[],
-    contextData: any
-): Promise<InterviewPlan> => {
-    return apiClient.post<any>('interview/plan', { intentText, jdText, controls: sessionControls, selectedPanelIDs, contextData }, z.any());
+  return apiClient.post('interview/plan', InterviewPlanSchema, { 
+    role, 
+    intent: intentText, 
+    controls: sessionControls, 
+    jdText, 
+    resumeText 
+  });
 };
 
 export const startInterviewSession = async (
-    context: InterviewSessionContext
-): Promise<{ firstQuestion: QuestionBlueprint; personaId: string; sessionId: string }> => {
-    const data = await apiClient.post<{ sessionId: string; firstQuestion: QuestionBlueprint }>('interview/sessions', { context }, z.any());
-    return {
-        firstQuestion: data.firstQuestion,
-        personaId: context.selectedPanelIDs?.[0] || 'p1',
-        sessionId: data.sessionId
-    };
+  context: InterviewSessionContext
+): Promise<InterviewSessionStartResponse> => {
+  return apiClient.post('interview/sessions', InterviewSessionStartResponseSchema, { context });
 };
 
 export const submitAnswerAndGetNext = async (
-    sessionId: string,
-    questionId: string,
-    answerText: string
-): Promise<{ nextQuestion: QuestionBlueprint | null; isLastQuestion: boolean }> => {
-    return apiClient.post<any>(`interview/sessions/${sessionId}/answers`, { questionId, answerText }, z.any());
+  sessionId: string,
+  questionId: string,
+  expectedQuestionIndex: number,
+  answerKind: 'answered' | 'skipped',
+  answerText?: string
+): Promise<AnswerSubmissionResponse> => {
+  return apiClient.post(
+    `interview/sessions/${sessionId}/answers`, 
+    AnswerSubmissionResponseSchema, 
+    { questionId, expectedQuestionIndex, answerKind, answerText }
+  );
 };
 
-export const analyzeCode = async (blueprint: QuestionBlueprint, code: string): Promise<string> => {
-    const data = await apiClient.post<{ feedback: string }>('interview/code/analyze', { blueprint, code }, z.any());
-    return data.feedback;
+export const analyzeCode = async (blueprint: QuestionBlueprint, code: string): Promise<{ feedback: string; passed: boolean }> => {
+  return apiClient.post('interview/code/analyze', CodeAnalysisResponseSchema, { blueprint, code });
 };
 
 export const simulateExecution = async (code: string, language: string): Promise<{ stdout: string; stderr: string }> => {
-    return apiClient.post<any>('interview/code/simulate', { code, language }, z.any());
+  const SimulationResponseSchema = z.object({
+    stdout: z.string().default(''),
+    stderr: z.string().default('')
+  }).strict();
+  const data = await apiClient.post('interview/code/simulate', SimulationResponseSchema, { code, language });
+  return {
+    stdout: data.stdout || '',
+    stderr: data.stderr || ''
+  };
 };
 
-export const getHintForQuestion = async (question: string): Promise<string> => {
-    const data = await apiClient.post<{ hint: string }>('interview/hint', { question }, z.any());
-    return data.hint;
+export const getHintForQuestion = async (questionText: string, expectedSignals?: string[]): Promise<string> => {
+  const data = await apiClient.post('interview/hint', HintResponseSchema, { questionText, expectedSignals: expectedSignals || [] });
+  return data.hint;
 };
 
 export const generateIdealAnswer = async (
-    question: string,
-    blueprint: QuestionBlueprint | null,
-    userAnswer: string
+  questionText: string,
+  expectedSignals?: string[],
+  userAnswer?: string
 ): Promise<string> => {
-    const data = await apiClient.post<{ idealResponse: string }>('interview/ideal-response', { question, blueprint, userAnswer }, z.any());
-    return data.idealResponse;
+  const data = await apiClient.post('interview/ideal-response', IdealResponseResponseSchema, { questionText, expectedSignals: expectedSignals || [], userAnswer });
+  return data.idealResponse;
 };
 
 const blobToBase64 = (blob: Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(blob);
-        reader.onloadend = () => {
-            const base64data = reader.result as string;
-            resolve(base64data.split(',')[1]);
-        };
-        reader.onerror = reject;
-    });
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(blob);
+    reader.onloadend = () => {
+      const base64data = reader.result as string;
+      resolve(base64data.split(',')[1]);
+    };
+    reader.onerror = reject;
+  });
 };
 
 export const transcribeAudio = async (blob: Blob): Promise<string> => {
-    try {
-        const base64Audio = await blobToBase64(blob);
-        const data = await apiClient.post<{ transcript: string }>('interview/transcribe', { audioBase64: base64Audio, mimeType: blob.type }, z.any());
-        return data.transcript;
-    } catch (error) {
-        console.error("Transcription failed", error);
-        return "I'm ready to move to the next question. (Transcription Unavailable)";
-    }
+  try {
+    const base64Audio = await blobToBase64(blob);
+    const data = await apiClient.post('interview/transcribe', TranscribeAudioResponseSchema, { audioBase64: base64Audio, mimeType: blob.type });
+    return data.transcript;
+  } catch (error) {
+    console.error("Transcription failed", error);
+    return "";
+  }
 };
 
 export const generateFinalReport = async (sessionId: string): Promise<FinalReport> => {
-    return apiClient.post(`interview/sessions/${sessionId}/report`);
+  return apiClient.post(`interview/sessions/${sessionId}/report`, FinalReportSchema, {});
 };
 
 export default {
-    calibrateIntent,
-    generateInterviewPlan,
-    generateInterviewPlanV2,
-    startInterviewSession,
-    submitAnswerAndGetNext,
-    analyzeCode,
-    simulateExecution,
-    getHintForQuestion,
-    transcribeAudio,
-    generateFinalReport,
-    generateIdealAnswer
+  calibrateIntent,
+  generateInterviewPlan,
+  startInterviewSession,
+  submitAnswerAndGetNext,
+  analyzeCode,
+  simulateExecution,
+  getHintForQuestion,
+  transcribeAudio,
+  generateFinalReport,
+  generateIdealAnswer
 };

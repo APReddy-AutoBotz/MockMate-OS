@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { PilotFeedback } from "../types/ui";
 
 import React, { useState } from 'react';
@@ -53,8 +52,7 @@ const PilotFeedbackCard: React.FC<PilotFeedbackCardProps> = ({ sessionId, existi
             ratings,
             issues: selectedIssues,
             openText,
-            timestamp: existingFeedback?.timestamp || new Date().toISOString(),
-            updatedAt: existingFeedback ? new Date().toISOString() : undefined
+            timestamp: existingFeedback?.timestamp || Date.now()
         };
 
         try {
