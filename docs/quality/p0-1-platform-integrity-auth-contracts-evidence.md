@@ -5,10 +5,29 @@ This document records empirical verification results for MockMate task **P0-1F: 
 
 ---
 
-## 1. External CI Block Recording (Run 29889061636)
-- Recorded in [p0-1e-ci-failure-root-cause.md](file:///e:/MockMate/docs/quality/p0-1e-ci-failure-root-cause.md).
-- GitHub Actions workflow run `29889061636` (Head SHA `9b5b4094...`, status `completed`, conclusion `failure`, 0 executed steps).
-- Cause: GitHub Actions runner account payment / spending limit restrictions on `APReddy-AutoBotz`. Remote code execution was not attempted by GitHub. Remote CI success cannot be claimed until the account owner resolves billing.
+## 1. Remote GitHub Actions CI Execution
+- **Repository Visibility**: Changed to Public, enabling full GitHub Actions runner execution.
+- **Workflow Run ID**: `29905718833`
+- **Head SHA**: `9c83af28e932b7244955fe4f7cfef07b0ec22998`
+- **Workflow Status & Conclusion**: `completed` / **`success`** (Duration: 2m1s)
+- **Executed Steps (17/17 PASSED)**:
+  1. `Install root & workspace dependencies` (PASSED)
+  2. `Shared typecheck` (PASSED)
+  3. `Shared tests` (PASSED)
+  4. `Shared build` (PASSED)
+  5. `Frontend typecheck` (PASSED)
+  6. `Frontend unit tests` (PASSED)
+  7. `Full static migration verification` (PASSED)
+  8. `Disposable PostgreSQL runtime migration verification` (PASSED)
+  9. `Frontend build` (PASSED)
+  10. `Backend tests` (PASSED)
+  11. `Backend build` (PASSED)
+  12. `Production smoke checks` (PASSED)
+  13. `Dependency audit` (PASSED)
+  14. `Install mobile dependencies` (PASSED)
+  15. `Mobile typecheck` (PASSED)
+  16. `Mobile lint` (PASSED)
+  17. `Production config smoke check` (PASSED)
 
 ---
 
@@ -31,7 +50,7 @@ This document records empirical verification results for MockMate task **P0-1F: 
 - **Migration**: [20260721_add_authoritative_session_fields.sql](file:///e:/MockMate/supabase/migrations/20260721_add_authoritative_session_fields.sql)
 - **Validation**: Enforced `p_answer_kind IN ('answered', 'skipped')`, `REVOKE ALL ON FUNCTION public.atomic_submit_answer(...) FROM PUBLIC, anon, authenticated;`, and `GRANT EXECUTE ON FUNCTION public.atomic_submit_answer(...) TO service_role;`.
 - **Static Verification**: `npm run verify:supabase` passed 100%.
-- **Runtime Disposable DB Verification**: `npm run verify:supabase:runtime` executed 11 runtime checks against PostgreSQL, verifying lexical migration application, turn insertion, duplicate rejection, state transition to `awaiting_report`, and permission revocation for `anon`/`authenticated` roles.
+- **Runtime Disposable DB Verification**: `npm run verify:supabase:runtime` executed 11 runtime checks against PostgreSQL service container in CI, verifying lexical migration application, turn insertion, duplicate rejection, state transition to `awaiting_report`, and permission revocation for `anon`/`authenticated` roles.
 
 ---
 
