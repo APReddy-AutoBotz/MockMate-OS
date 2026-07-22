@@ -47,10 +47,35 @@ const buildFallbackInterviewPlan = (
   candidateRole: string,
 ): InterviewPlan => {
   const safePanelIDs = panelIDs.length ? panelIDs : DEFAULT_PANEL_IDS;
+  const total = Math.max(1, Math.min(controls.totalQuestions || 5, 10));
+  const bank = [
+    { phase: 'introduction', question: `Walk me through your background and key experience relevant to ${candidateRole || 'the role'}.`, expectedSignals: ['Role alignment', 'Clear communication'] },
+    { phase: 'scenario', question: 'Describe a challenging project you took ownership of and how you framed the core problem.', expectedSignals: ['Problem framing', 'Ownership'] },
+    { phase: 'situational', question: 'How do you prioritize competing requirements and manage trade-offs under tight constraints?', expectedSignals: ['Tradeoffs', 'Prioritization'] },
+    { phase: 'behavioral', question: 'Tell me about a situation where you had a disagreement with a team member. How did you handle it?', expectedSignals: ['Conflict resolution', 'Empathy'] },
+    { phase: 'reflection', question: 'Looking back at a major project, what key lesson did you learn and what would you do differently next time?', expectedSignals: ['Growth mindset', 'Self-reflection'] }
+  ];
+
+  const questionSet = Array.from({ length: total }, (_, i) => {
+    const template = bank[i % bank.length];
+    const personaFocus = safePanelIDs[i % safePanelIDs.length];
+    return {
+      id: `q_fallback_${i + 1}`,
+      phase: template.phase,
+      difficulty: controls.difficulty,
+      question: template.question,
+      expectedSignals: template.expectedSignals,
+      personaFocus,
+    };
+  });
+
+  const normalizedControls = { ...controls, totalQuestions: questionSet.length };
+
   return {
     meta: {
       intent: intentText,
-      controls: controls,
+      controls: normalizedControls,
+      planSource: 'deterministic_fallback',
     },
     jdInsights: {
       role: candidateRole || 'Candidate',
@@ -62,24 +87,7 @@ const buildFallbackInterviewPlan = (
       softSkills: ['Teamwork'],
       competencyWeights: { PROBLEM_FRAMING: 0.5, TRADEOFF_CLARITY: 0.5 }
     },
-    questionSet: [
-      {
-        id: `q_fallback_1`,
-        phase: 'scenario',
-        difficulty: controls.difficulty,
-        question: 'Tell me about a complex project you led and the key technical trade-offs you navigated.',
-        expectedSignals: ['Architecture choice', 'Tradeoff reasoning'],
-        personaFocus: safePanelIDs[0] || 'p1',
-      },
-      {
-        id: `q_fallback_2`,
-        phase: 'behavioral',
-        difficulty: controls.difficulty,
-        question: 'Describe a situation where you had a disagreement with a team member. How did you handle it?',
-        expectedSignals: ['Conflict resolution', 'Empathy'],
-        personaFocus: safePanelIDs[1] || 'p2',
-      }
-    ],
+    questionSet,
   };
 };
 
@@ -146,7 +154,9 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, context, onGo
         currentContext.candidateRole || context.intentText,
         context.intentText,
         sessionControls,
-        jdText || undefined
+        jdText || undefined,
+        undefined,
+        selectedPanelIDs
       );
       setPlan(interviewPlan);
       setIsPlanReady(true);

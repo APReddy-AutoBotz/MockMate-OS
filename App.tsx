@@ -134,14 +134,12 @@ const App: React.FC = () => {
 
     const handleDeleteData = async () => {
         await deleteMyData();
-        clearLocalPracticeData();
         await signOut(auth);
         setUserProfile(null);
         setSessionContext(null);
         setFinalReport(null);
         setAppState('LANDING');
     };
-
 
     const handleRoleSubmit = (intent: string, sessionType: 'structured' | 'conversational') => {
         audioService.playConfirm();
@@ -158,24 +156,10 @@ const App: React.FC = () => {
         const initialContext: SessionContext = {
             candidateRole: intent,
             intentText: intent,
-            selectedPanelIDs: ['p1'],
+            selectedPanelIDs: ['p1', 'p3'],
             sessionType: sessionType,
             controls: initialControls,
-            interviewPlan: {
-                meta: {
-                    intent: intent,
-                    controls: initialControls
-                },
-                jdInsights: { role: intent },
-                questionSet: [{
-                    id: 'q_init_1',
-                    phase: 'scenario',
-                    difficulty: 'intermediate',
-                    question: 'Tell me about yourself.',
-                    expectedSignals: ['Communication'],
-                    personaFocus: 'p1'
-                }]
-            }
+            interviewPlan: undefined as any
         };
         setSessionContext(initialContext);
         setAppState('CONTEXT_UPLOAD');

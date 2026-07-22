@@ -62,20 +62,12 @@ export const submitAnswerAndGetNext = async (
   );
 };
 
-export const analyzeCode = async (blueprint: QuestionBlueprint, code: string): Promise<{ feedback: string; passed: boolean }> => {
+export const analyzeCode = async (blueprint: QuestionBlueprint, code: string): Promise<CodeAnalysisResponse> => {
   return apiClient.post('interview/code/analyze', CodeAnalysisResponseSchema, { blueprint, code });
 };
 
-export const simulateExecution = async (code: string, language: string): Promise<{ stdout: string; stderr: string }> => {
-  const SimulationResponseSchema = z.object({
-    stdout: z.string().default(''),
-    stderr: z.string().default('')
-  }).strict();
-  const data = await apiClient.post('interview/code/simulate', SimulationResponseSchema, { code, language });
-  return {
-    stdout: data.stdout || '',
-    stderr: data.stderr || ''
-  };
+export const simulateExecution = async (code: string, language: string): Promise<CodeSimulationResponse> => {
+  return apiClient.post('interview/code/simulate', CodeSimulationResponseSchema, { code, language });
 };
 
 export const getHintForQuestion = async (questionText: string, expectedSignals?: string[]): Promise<string> => {

@@ -1,11 +1,9 @@
-import { getRuntimeConfig } from './runtimeConfig';
+import { getRuntimeConfig, normalizeApiOrigin } from './runtimeConfig';
 
 const config = getRuntimeConfig();
-const rawApiUrl = config.apiUrl || '/api';
-const base = rawApiUrl.replace(/\/+$/, '');
 
-export const API_BASE = base;
-export const API_ORIGIN = base.replace(/\/api$/, '') || (typeof window !== 'undefined' ? window.location.origin : '');
+export const API_ORIGIN = config.apiOrigin;
+export const API_BASE = config.apiBase;
 
 export const apiUrl = (path: string) => {
   const safePath = path.startsWith('/') ? path : `/${path}`;
@@ -14,5 +12,8 @@ export const apiUrl = (path: string) => {
 
 export const apiRoute = (path: string) => {
   const safePath = path.startsWith('/') ? path : `/${path}`;
+  if (safePath.startsWith('/api/')) {
+    return `${API_BASE}${safePath.slice(4)}`;
+  }
   return `${API_BASE}${safePath}`;
 };

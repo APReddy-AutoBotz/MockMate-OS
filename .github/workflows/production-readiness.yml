@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -64,7 +66,13 @@ jobs:
       - name: 9. Frontend build
         run: npm run build
 
-      - name: 9b. Browser runtime configuration test
+      - name: 9a. Static runtime configuration precheck
+        run: npm run test:runtime-config-static
+
+      - name: 9b. Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: 9c. Playwright browser runtime execution test
         run: npm run test:browser-runtime
 
       - name: 10. Backend tests

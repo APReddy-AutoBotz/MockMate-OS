@@ -145,6 +145,7 @@ export const InterviewPlanSchema = z.object({
   meta: z.object({
     intent: z.string(),
     controls: SessionControlsSchema,
+    planSource: z.enum(['provider', 'deterministic_fallback']).optional(),
   }).strict(),
   jdInsights: JDInsightsSchema,
   questionSet: z.array(QuestionBlueprintSchema).min(1),
@@ -154,7 +155,7 @@ export type InterviewPlan = z.infer<typeof InterviewPlanSchema>;
 export const InterviewSessionContextSchema = z.object({
   candidateRole: z.string(),
   intentText: z.string(),
-  selectedPanelIDs: z.array(z.string()),
+  selectedPanelIDs: z.array(z.string()).min(1),
   controls: SessionControlsSchema,
   interviewPlan: InterviewPlanSchema,
   sessionType: z.enum(['structured', 'conversational']),
@@ -173,8 +174,18 @@ export const InterviewTurnSchema = z.object({
 export type InterviewTurn = z.infer<typeof InterviewTurnSchema>;
 
 // ============================================================================
-// RAW PROVIDER PLAN SCHEMAS (NO Z.ANY)
+// RAW PROVIDER SCHEMAS (NO Z.ANY)
 // ============================================================================
+
+export const RawCalibrateResponseSchema = z.object({
+  recommendedRole: z.string().optional(),
+  role: z.string().optional(),
+  recommendedPanelIDs: z.array(z.string()).optional(),
+  panelIDs: z.array(z.string()).optional(),
+  matchReasons: z.record(z.string(), z.string()).optional(),
+  suggestedControls: z.record(z.string(), z.unknown()).optional(),
+  jdInsights: z.record(z.string(), z.unknown()).optional(),
+}).passthrough();
 
 export const RawQuestionBlueprintSchema = z.object({
   id: z.string().optional(),

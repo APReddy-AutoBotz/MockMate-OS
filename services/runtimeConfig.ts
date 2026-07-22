@@ -1,4 +1,6 @@
 export interface RuntimeConfig {
+  apiOrigin: string;
+  apiBase: string;
   apiUrl: string;
   supabaseUrl: string;
   supabaseAnonKey: string;
@@ -15,17 +17,43 @@ const VITE_SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || '';
 const VITE_ENABLE_DEV_AUTH = process.env.VITE_ENABLE_DEV_AUTH === 'true';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
+export function normalizeApiOrigin(rawInput?: string, mode: { isProd?: boolean; isDev?: boolean; isTest?: boolean } = {}): { apiOrigin: string; apiBase: string } {
+  const trimmed = (rawInput || '').trim().replace(/\/+$/, '');
+  
+  if (trimmed) {
+    if (trimmed.endsWith('/api')) {
+      const apiOrigin = trimmed.slice(0, -4);
+      return { apiOrigin, apiBase: trimmed };
+    }
+    return { apiOrigin: trimmed, apiBase: `${trimmed}/api` };
+  }
+
+  if (mode.isDev || (!mode.isProd && !mode.isTest)) {
+    return { apiOrigin: 'http://localhost:3001', apiBase: 'http://localhost:3001/api' };
+  }
+
+  if (mode.isTest) {
+    return { apiOrigin: 'http://localhost:3001', apiBase: 'http://localhost:3001/api' };
+  }
+
+  // Production empty value uses same-origin /api
+  return { apiOrigin: '', apiBase: '/api' };
+}
+
 export function getRuntimeConfig(): RuntimeConfig {
   const isTest = NODE_ENV === 'test';
   const isProduction = NODE_ENV === 'production';
   const isDevelopment = NODE_ENV === 'development' || (!isProduction && !isTest);
 
+  const { apiOrigin, apiBase } = normalizeApiOrigin(VITE_API_URL, { isProd: isProduction, isDev: isDevelopment, isTest });
+
   const supabaseUrl = VITE_SUPABASE_URL || (isTest ? 'https://dummy.supabase.co' : '');
   const supabaseAnonKey = VITE_SUPABASE_ANON_KEY || (isTest ? 'dummy-anon-key' : '');
-  const apiUrl = VITE_API_URL || (isTest ? 'http://localhost:3001/api' : (isDevelopment ? 'http://localhost:3001/api' : '/api'));
 
   return {
-    apiUrl,
+    apiOrigin,
+    apiBase,
+    apiUrl: apiBase,
     supabaseUrl,
     supabaseAnonKey,
     enableDevAuth: VITE_ENABLE_DEV_AUTH,

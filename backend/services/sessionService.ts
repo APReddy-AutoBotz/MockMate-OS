@@ -61,7 +61,7 @@ export const createSession = async (
   }
 
   const firstQuestion = context.interviewPlan.questionSet[0];
-  const totalQuestions = context.controls?.totalQuestions || context.interviewPlan.questionSet.length;
+  const totalQuestions = context.interviewPlan.questionSet.length;
   const openingMessage = `Welcome to your mock interview session for the ${context.candidateRole} position. We will cover ${totalQuestions} key questions. Ready for your first question?`;
 
   if (!supabaseAdmin) {
@@ -158,11 +158,17 @@ export const submitAnswer = async (
     throw err;
   }
 
-  const totalQuestions = session.context?.controls?.totalQuestions || session.context?.interviewPlan?.questionSet?.length || 1;
+  const totalQuestions = session.context?.interviewPlan?.questionSet?.length || 1;
   const answeredQuestionIndex = session.currentQuestionIndex;
   const newIndex = answeredQuestionIndex + 1;
   const isLastQuestion = newIndex >= totalQuestions;
-  const nextQuestion = isLastQuestion ? null : session.context.interviewPlan.questionSet[newIndex];
+  const nextQuestion = isLastQuestion ? null : (session.context?.interviewPlan?.questionSet?.[newIndex] || null);
+
+  if (!isLastQuestion && !nextQuestion) {
+    const err: any = new Error('State integrity failure: next question missing before session completion');
+    err.status = 409;
+    throw err;
+  }
   const textToSave = answerKind === 'skipped' ? '[Question Skipped]' : (answerText || '');
 
   if (!supabaseAdmin) {

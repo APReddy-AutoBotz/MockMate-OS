@@ -7,7 +7,9 @@ import {
   InterviewSessionStartRequestSchema, 
   AnswerSubmissionRequestSchema,
   CalibrateRequestSchema,
+  CalibrateResponseSchema,
   PlanGenerationRequestSchema,
+  InterviewPlanSchema,
   HintRequestSchema,
   IdealResponseRequestSchema,
   CodeAnalysisRequestSchema,
@@ -29,7 +31,7 @@ router.post('/calibrate', enforceUsageLimit('interview_question'), async (req: a
       return res.status(422).json({ error: 'Invalid calibrate payload', details: parsed.error.issues });
     }
     const result = await aiService.calibrateIntent(parsed.data.role, parsed.data.jobDescription);
-    res.json(result);
+    res.json(CalibrateResponseSchema.parse(result));
   } catch (error: any) {
     console.error('[Interview] calibrate error:', error);
     res.status(500).json({ error: error.message || 'Could not calibrate intent' });
@@ -42,9 +44,9 @@ router.post('/plan', enforceUsageLimit('interview_question'), async (req: any, r
     if (!parsed.success) {
       return res.status(422).json({ error: 'Invalid plan generation payload', details: parsed.error.issues });
     }
-    const { role, intent, controls, jdText, resumeText } = parsed.data;
-    const result = await aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText);
-    res.json(result);
+    const { role, intent, controls, jdText, resumeText, selectedPanelIDs } = parsed.data;
+    const result = await aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText, selectedPanelIDs);
+    res.json(InterviewPlanSchema.parse(result));
   } catch (error: any) {
     console.error('[Interview] plan error:', error);
     res.status(500).json({ error: error.message || 'Could not create interview practice plan' });

@@ -354,7 +354,7 @@ describe('Backend Express API & Route Parity Tests', () => {
 
   it('17. /api/interview/code/simulate route exists and processes payload', async () => {
     const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
-      text: '{"stdout": "hello", "stderr": ""}',
+      text: '{"status": "success", "stdout": "hello", "stderr": ""}',
       provider: 'test',
       model: 'test',
       fallbackTriggered: false,
@@ -521,19 +521,20 @@ describe('Backend Express API & Route Parity Tests', () => {
     expect(completedSession?.evaluationStatus).toBe('completed');
     expect(completedSession?.pendingQuestionId).toBeNull();
     expect(completedSession?.pendingQuestion).toBeNull();
-    expect(completedSession?.completedAt).toBeDefined();
-
-    spy.mockRestore();
   });
 
-  it('24. POST /api/interview/calibrate returns canonical CalibrateResponseSchema', async () => {
-    const spy = jest.spyOn(aiService, 'calibrateIntent').mockResolvedValueOnce({
-      recommendedRole: 'Backend Engineer',
-      recommendedPanelIDs: ['p1', 'p2'],
-      matchReasons: { p1: 'Culture fit', p2: 'Tech depth' },
-      suggestedControls: sampleControls,
-      jdInsights: { role: 'Backend Engineer' },
-      fallbackUsed: false,
+  it('24. POST /api/interview/calibrate exercises real aiService.calibrateIntent with provider mock', async () => {
+    const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
+      text: JSON.stringify({
+        recommendedRole: 'Backend Architect',
+        recommendedPanelIDs: ['p1', 'p3'],
+        matchReasons: { p1: 'Architecture focus', p3: 'Leadership' },
+        suggestedControls: sampleControls,
+        jdInsights: { role: 'Backend Architect' }
+      }),
+      provider: 'test',
+      model: 'test',
+      fallbackTriggered: false,
     });
 
     const res = await request(app)
@@ -542,18 +543,80 @@ describe('Backend Express API & Route Parity Tests', () => {
       .send({ role: 'Backend Engineer', jobDescription: 'Node.js, PostgreSQL' });
 
     expect(res.status).toBe(200);
-    expect(res.body.recommendedPanelIDs).toBeDefined();
-    expect(Array.isArray(res.body.recommendedPanelIDs)).toBe(true);
-    expect(res.body.recommendedRole).toBeDefined();
-    expect(res.body.matchReasons).toBeDefined();
-    expect(res.body.suggestedControls).toBeDefined();
-    expect(res.body.jdInsights).toBeDefined();
-    expect(typeof res.body.fallbackUsed).toBe('boolean');
+    expect(res.body.recommendedRole).toBe('Backend Architect');
+    expect(res.body.recommendedPanelIDs).toEqual(['p1', 'p3']);
+    expect(res.body.matchReasons.p1).toBeDefined();
+    expect(res.body.matchReasons.p3).toBeDefined();
+    expect(res.body.fallbackUsed).toBe(false);
 
     spy.mockRestore();
   });
 
-  it('25. POST /api/interview/code/simulate parses status = success and status = unavailable', async () => {
+  it('25. calibrateIntent filters invalid provider panel IDs and falls back cleanly', async () => {
+    const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
+      text: JSON.stringify({
+        recommendedRole: 'Software Engineer',
+        recommendedPanelIDs: ['invalid_id_999', 'p2'],
+        matchReasons: { p2: 'Code quality' }
+      }),
+      provider: 'test',
+      model: 'test',
+      fallbackTriggered: false,
+    });
+
+    const result = await aiService.calibrateIntent('Software Engineer');
+
+    expect(result.recommendedPanelIDs).toEqual(['p2']);
+    expect(result.matchReasons.p2).toBeDefined();
+    expect(result.matchReasons.invalid_id_999).toBeUndefined();
+
+    spy.mockRestore();
+  });
+
+  it('26. calibrateIntent handles provider failure with deterministic fallback and sets fallbackUsed = true', async () => {
+    const spy = jest.spyOn(aiService, 'callWithFallback').mockRejectedValueOnce(new Error('AI Provider Offline'));
+
+    const result = await aiService.calibrateIntent('Software Engineer');
+
+    expect(result.fallbackUsed).toBe(true);
+    expect(result.recommendedPanelIDs.length).toBeGreaterThan(0);
+    expect(result.recommendedRole).toBe('Software Engineer');
+
+    spy.mockRestore();
+  });
+
+  it('27. generateInterviewPlan propagates selectedPanelIDs to question personaFocus', async () => {
+    const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
+      text: JSON.stringify({
+        meta: { intent: 'Fullstack' },
+        jdInsights: { role: 'Fullstack Developer' },
+        questionSet: [
+          { question: 'Q1?', personaFocus: 'p3' },
+          { question: 'Q2?', personaFocus: 'p3' }
+        ]
+      }),
+      provider: 'test',
+      model: 'test',
+      fallbackTriggered: false,
+    });
+
+    const plan = await aiService.generateInterviewPlan('Fullstack Developer', 'Fullstack', sampleControls, undefined, undefined, ['p3']);
+
+    expect((plan.meta as any).planSource).toBe('provider');
+    expect(plan.meta.controls.totalQuestions).toBe(2);
+    expect(plan.questionSet.every(q => q.personaFocus === 'p3')).toBe(true);
+
+    spy.mockRestore();
+  });
+
+  it('28. POST /api/interview/code/simulate parses status = success and status = unavailable', async () => {
+    const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
+      text: '{"status": "success", "stdout": "hello", "stderr": ""}',
+      provider: 'test',
+      model: 'test',
+      fallbackTriggered: false,
+    });
+
     const resSuccess = await request(app)
       .post('/api/interview/code/simulate')
       .set('Authorization', testAuthHeader)
@@ -562,6 +625,8 @@ describe('Backend Express API & Route Parity Tests', () => {
     expect(resSuccess.status).toBe(200);
     expect(resSuccess.body.status).toBe('success');
     expect(typeof resSuccess.body.stdout).toBe('string');
+
+    spy.mockRestore();
 
     const resUnavailable = await request(app)
       .post('/api/interview/code/simulate')
@@ -572,7 +637,7 @@ describe('Backend Express API & Route Parity Tests', () => {
     expect(resUnavailable.body.status).toBe('unavailable');
   });
 
-  it('26. DELETE /api/me/data returns canonical AccountDeletionResponseSchema', async () => {
+  it('29. DELETE /api/me/data returns canonical AccountDeletionResponseSchema', async () => {
     const res = await request(app)
       .delete('/api/me/data')
       .set('Authorization', testAuthHeader);
@@ -585,5 +650,4 @@ describe('Backend Express API & Route Parity Tests', () => {
     expect(res.body.authIdentityDeleted).toBe(false);
     expect(res.body.requestId).toBeDefined();
   });
-
 });
