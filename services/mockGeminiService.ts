@@ -16,7 +16,10 @@ import {
   HintResponseSchema,
   IdealResponseResponseSchema,
   TranscribeAudioResponseSchema,
-  CodeAnalysisResponseSchema
+  CodeAnalysisResponseSchema,
+  CodeAnalysisResponse,
+  CodeSimulationResponseSchema,
+  CodeSimulationResponse
 } from 'mockmate-shared';
 
 export const calibrateIntent = async (
@@ -31,14 +34,16 @@ export const generateInterviewPlan = async (
   intentText: string,
   sessionControls: any,
   jdText?: string,
-  resumeText?: string
+  resumeText?: string,
+  selectedPanelIDs?: string[]
 ): Promise<InterviewPlan> => {
   return apiClient.post('interview/plan', InterviewPlanSchema, { 
     role, 
     intent: intentText, 
     controls: sessionControls, 
     jdText, 
-    resumeText 
+    resumeText,
+    selectedPanelIDs
   });
 };
 
@@ -119,7 +124,7 @@ export default {
   analyzeCode,
   simulateExecution,
   getHintForQuestion,
+  generateIdealAnswer,
   transcribeAudio,
   generateFinalReport,
-  generateIdealAnswer
 };
