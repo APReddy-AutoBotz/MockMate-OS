@@ -78,10 +78,10 @@ async function runRuntimeVerification() {
         ('${user2Id}', 'user2@example.com')
       ON CONFLICT (id) DO NOTHING;
 
-      INSERT INTO public.profiles (id, full_name) VALUES
+      INSERT INTO public.profiles (user_id, full_name) VALUES
         ('${user1Id}', 'Test User 1'),
         ('${user2Id}', 'Test User 2')
-      ON CONFLICT (id) DO NOTHING;
+      ON CONFLICT (user_id) DO NOTHING;
     `);
 
     // 4. Create an interview session with pending question
