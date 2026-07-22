@@ -1,17 +1,17 @@
-# P0-1H Final Real-Runtime Quality Evidence Report
+# P0-1I Final Truthful-Evidence Quality Report
 
 ## Overview
-This document records empirical verification results for MockMate task **P0-1H: Final Real-Runtime Closure — Repair Calibration, Panel Propagation, Cardinality, Browser Simulation, Evaluative Filler, Browser Execution Testing, and Full-History Secret Scanning**.
+This document records empirical verification results for MockMate task **P0-1I: Final Truthful-Evidence Closure — Remove Fabricated Transcription, Correct Delete-App-Data Failure Semantics, Strengthen Browser Runtime Assertions, Use a Recognized Secret Scanner, and Align Exact-Head Evidence**.
 
 ---
 
 ## 1. Remote GitHub Actions CI Execution
 - **Repository Visibility**: Public (Full Actions execution enabled).
-- **Workflow Run ID**: `29924880217`
-- **Workflow URL**: [https://github.com/APReddy-AutoBotz/MockMate-OS/actions/runs/29924880217](https://github.com/APReddy-AutoBotz/MockMate-OS/actions/runs/29924880217)
-- **Head SHA**: `a50216a`
-- **Workflow Status & Conclusion**: `completed` / **`success`** (Duration: 2m48s)
-- **Executed Steps (21/21 PASSED)**:
+- **Workflow Run ID**: `29929457819`
+- **Workflow URL**: [https://github.com/APReddy-AutoBotz/MockMate-OS/actions/runs/29929457819](https://github.com/APReddy-AutoBotz/MockMate-OS/actions/runs/29929457819)
+- **Head SHA**: `49ca022` (Follow-up SHA `49ca0222956cf575db55aa614749f7e5229acb09`)
+- **Workflow Status & Conclusion**: `completed` / **`success`** (Duration: 2m56s)
+- **Executed Steps (22/22 PASSED)**:
   1. `Install root & workspace dependencies` (PASSED)
   2. `Shared typecheck` (PASSED)
   3. `Shared tests` (PASSED)
@@ -31,45 +31,49 @@ This document records empirical verification results for MockMate task **P0-1H: 
   17. `Install mobile dependencies` (PASSED)
   18. `Mobile typecheck` (PASSED)
   19. `Mobile lint` (PASSED)
-  20. `Full-history secret scan` (PASSED)
-  21. `Production config smoke check` (PASSED)
+  20. `Recognized full-history secret scan` (Gitleaks v2) (PASSED)
+  21. `Supplemental custom secret-pattern scan` (PASSED)
+  22. `Production config smoke check` (PASSED)
 
 ---
 
-## 2. API Origin Normalization & Browser Runtime Contract
-- **API Origin Contract**: `VITE_API_URL` is parsed through `normalizeApiOrigin`.
-- **Verified Normalization Cases**:
-  - `http://localhost:3001` -> `apiOrigin: "http://localhost:3001"`, `apiBase: "http://localhost:3001/api"`
-  - `http://localhost:3001/` -> `apiOrigin: "http://localhost:3001"`, `apiBase: "http://localhost:3001/api"`
-  - `http://localhost:3001/api` -> `apiOrigin: "http://localhost:3001"`, `apiBase: "http://localhost:3001/api"`
-  - Empty production value -> `apiOrigin: ""`, `apiBase: "/api"`
-- **Playwright Execution**: Launched headless Chromium against built `dist` using static web server on port 4173. Proved DOM renders cleanly without `pageerror` or missing configuration crashes.
+## 2. Audio Transcription Contract
+- **Explicit Response Schema**: `TranscribeAudioResponseSchema` enforces `status: 'transcribed' | 'unavailable'` and `transcript: string | null`.
+- **Rules & Truthfulness**:
+  - `status = 'transcribed'` requires non-empty real provider transcript.
+  - `status = 'unavailable'` returns `transcript: null`.
+  - Zero placeholder strings (`"Audio transcription is currently operating in fallback mode."` completely deleted).
+  - Provider failure returns `status = 'unavailable'` with `transcript: null` via HTTP 200/503.
+  - Frontend (`PushToTalkInput.tsx`) leaves input empty on failure and displays `"Transcription unavailable. Retry recording or type your answer."`
+  - Temporary audio files created for Groq Whisper fallback are removed inside a `finally` block (`fs.unlinkSync`).
 
 ---
 
-## 3. Real Calibration & Panel Propagation
-- **Calibrate Contract**: `aiService.calibrateIntent` outputs canonical `CalibrateResponseSchema` (`recommendedPanelIDs`, `recommendedRole`, `matchReasons`, `suggestedControls`, `jdInsights`, `fallbackUsed`). Validates persona IDs against `PERSONAS_CONFIG`, filters invalid IDs, deduplicates, and sets `fallbackUsed: true` on AI provider offline.
-- **End-to-End Propagation**: `selectedPanelIDs` flows from `SessionPrep` -> `generateInterviewPlan` -> `aiService` prompt -> `questionSet[].personaFocus`.
+## 3. Delete-App-Data Failure Semantics
+- **Unconfigured Supabase Behavior**: Returns HTTP 503 `{ success: false, authIdentityDeleted: false, authIdentityRetainedReason: "Server data deletion service unavailable. Supabase service role is unconfigured." }`.
+- **Browser Local Storage Integrity**: `deleteMyData()` in `services/accountService.ts` clears local storage ONLY when server returns HTTP 200 with `result.success === true`. On HTTP 500/503, local storage remains untouched.
+- **Identity Scope**: Documented that deletion purges user-owned application tables (`interview_sessions`, `interview_turns`, `resume_reviews`, `clearspeak_*`, `usage_ledger`, `profiles`) while retaining Supabase Auth identity for authentication.
 
 ---
 
-## 4. Authoritative Plan Cardinality & Fallback
-- **Cardinality**: `controls.totalQuestions = questionSet.length` enforced across normalization, session creation (`createSession`), and answer submission (`submitAnswer`).
-- **Deterministic Fallback**: `buildDeterministicInterviewPlan` generates exact requested question count (e.g. 5 questions) using enterprise question bank and marks `planSource: 'deterministic_fallback'`.
-- **State Integrity**: `submitAnswer` validates `nextQuestion` presence when `isLastQuestion = false`, returning HTTP 409 if next question is missing.
+## 4. Playwright Browser Visible-Runtime Assertions
+- **Execution Environment**: Launched headless Chromium against built `dist/` on port 4173 with local Supabase Auth stub & API stub server on port 3099.
+- **DOM & Text Assertions**: Proved `#root` is non-empty (`children.length > 0`) and rendered visible application UI text (`"MockMateResume, English, Interview Practice..."`).
+- **Target Route Verification**: Verified Supabase requests target `http://127.0.0.1:3099` and zero direct root `/interview/` requests occur.
+- **Fail-Closed Verification**: Verified unconfigured production build fails closed with explicit error `"Missing Supabase configuration"`.
 
 ---
 
-## 5. Report Truthfulness & Security Definer Lockdown
-- **Filler Removal**: Zero evaluative filler strings (`"Assessment recorded."`, `"Response recorded."`, `"Practice response."`) in output. `NOT_ASSESSED` reports output neutral statement: `"Session ended before a reliable evaluation could be completed."`
-- **Full-History Secret Scan**: Executed `scripts/scan-git-history.mjs` with `fetch-depth: 0` scanning 17 commits across all refs. **0 secrets found**.
+## 5. Secret Scanner Verification
+- **Recognized Full-History Scanner**: `gitleaks/gitleaks-action@v2` pinned in Step 20 of GitHub Actions workflow with `fetch-depth: 0`. **0 secrets found across all commits**.
+- **Supplemental Custom Scanner**: `scripts/scan-git-history.mjs` executed in Step 21 as additional regex check across 18 commits.
 
 ---
 
 ## 6. Test Suite Execution Summary
-- **Shared Tests**: 9/9 passed (`npm run shared:test`)
-- **Frontend Tests**: 41/41 passed (`npm test -- --runInBand`)
-- **Backend Tests**: 33/33 passed (`cd backend && npm test`)
-- **Browser Playwright Test**: 100% passed (`npm run test:browser-runtime`)
+- **Shared Tests**: 11/11 passed (`npm run shared:test`)
+- **Frontend Tests**: 43/43 passed (`npm test -- --runInBand`)
+- **Backend Tests**: 35/35 passed (`cd backend && npm test`)
+- **Playwright Test**: 100% passed (`npm run test:browser-runtime`)
 - **Static Precheck**: 100% passed (`npm run test:runtime-config-static`)
-- **Full-History Secret Scan**: 100% passed (`npm run scan:secrets`)
+- **Recognized & Supplemental Secret Scans**: 100% passed (`gitleaks` + `npm run scan:secrets`)
