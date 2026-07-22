@@ -16,6 +16,7 @@ import {
   HintResponseSchema,
   IdealResponseResponseSchema,
   TranscribeAudioResponseSchema,
+  TranscribeAudioResponse,
   CodeAnalysisResponseSchema,
   CodeAnalysisResponse,
   CodeSimulationResponseSchema,
