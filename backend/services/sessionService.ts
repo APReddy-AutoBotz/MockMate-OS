@@ -15,7 +15,7 @@ import {
   InterviewStage,
   QuestionKind,
 } from 'mockmate-shared';
-import { evaluateCandidateTurn } from './turnEvaluatorService';
+import * as turnEvaluatorService from './turnEvaluatorService';
 import { computeAdaptiveDecision, constructNextQuestion } from './adaptiveInterviewController';
 import { aggregateTurnEvidence } from './evidenceAggregationService';
 import { ACTIVE_DIMENSIONS_BY_MODE } from '../config/evaluationConfig';
@@ -285,7 +285,7 @@ export const submitAdaptiveTurn = async (
   const textToSave = answerKind === 'skipped' ? '[Question Skipped]' : (answerText || '');
 
   // 1. Evaluate candidate answer
-  const turnEval = await evaluateCandidateTurn(currentQuestion, textToSave, mode, session.currentStage);
+  const turnEval = await turnEvaluatorService.evaluateCandidateTurn(currentQuestion, textToSave, mode, session.currentStage);
 
   // 2. Prepare controller input
   const allRoots: QuestionBlueprint[] = session.context?.interviewPlan?.questionSet || [];
@@ -469,6 +469,12 @@ export const submitAnswer = async (
   if (!session) {
     const err: any = new Error('Session not found');
     err.status = 404;
+    throw err;
+  }
+
+  if (session.currentQuestionIndex !== expectedQuestionIndex) {
+    const err: any = new Error(`Stale or mismatched question index (expected: ${session.currentQuestionIndex}, got: ${expectedQuestionIndex})`);
+    err.status = 409;
     throw err;
   }
 

@@ -45,6 +45,13 @@ export type ReportGenerationState = z.infer<typeof ReportGenerationStateSchema>;
 export const EvidenceConfidenceSchema = z.enum(['low', 'medium', 'high']);
 export type EvidenceConfidence = z.infer<typeof EvidenceConfidenceSchema>;
 
+export const ProviderMetadataSchema = z.object({
+  provider: z.string(),
+  model: z.string(),
+  tokens: z.number().optional(),
+}).strict();
+export type ProviderMetadata = z.infer<typeof ProviderMetadataSchema>;
+
 // ============================================================================
 // INTERVIEW DIMENSION KEYS & SESSION CONTROLS
 // ============================================================================
@@ -134,7 +141,7 @@ export const DEFAULT_ADAPTIVE_POLICY: AdaptivePolicy = {
   maxTurns: 8,
   maxProbesPerRoot: 1,
   maxChallenges: 2,
-  requireReflection: true,
+  requireReflection: false,
 };
 
 export const ChallengeEventTypeSchema = z.enum([
@@ -333,6 +340,14 @@ export const InterviewTurnSchema = z.object({
   question: z.string(),
   candidateResponse: z.string().optional(),
   timestamp: z.number().optional(),
+  questionBlueprint: QuestionBlueprintSchema.optional(),
+  questionKind: QuestionKindSchema.optional(),
+  stage: InterviewStageSchema.optional(),
+  evaluationStatus: EvaluationStatusSchema.optional(),
+  turnEvaluation: TurnEvaluationSchema.optional(),
+  controllerDecision: AdaptiveControllerDecisionSchema.optional(),
+  challengeEvent: ChallengeEventSchema.optional(),
+  clientSubmissionId: z.string().optional(),
 }).strict();
 export type InterviewTurn = z.infer<typeof InterviewTurnSchema>;
 
@@ -461,13 +476,6 @@ export const PrioritizedActionSchema = z.object({
   impact: z.string(),
 }).strict();
 export type PrioritizedAction = z.infer<typeof PrioritizedActionSchema>;
-
-export const ProviderMetadataSchema = z.object({
-  provider: z.string(),
-  model: z.string(),
-  tokens: z.number().optional(),
-}).strict();
-export type ProviderMetadata = z.infer<typeof ProviderMetadataSchema>;
 
 export const QuestionPerformanceSchema = z.object({
   question_text: z.string(),

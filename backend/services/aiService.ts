@@ -732,13 +732,13 @@ REQUIRED OUTPUT SCHEMA (JSON):
     }
   ];
 
-  const biggestRiskArea = qualitativeNarrative.biggestRiskArea && typeof qualitativeNarrative.biggestRiskArea === 'object' && qualitativeNarrative.biggestRiskArea.title ? {
+  const biggestRiskArea = (scorecard.readinessStatus === 'NOT_ASSESSED') ? null : (qualitativeNarrative.biggestRiskArea && typeof qualitativeNarrative.biggestRiskArea === 'object' && qualitativeNarrative.biggestRiskArea.title ? {
     title: String(qualitativeNarrative.biggestRiskArea.title).trim(),
     observation: String(qualitativeNarrative.biggestRiskArea.observation || '').trim(),
     mitigation: String(qualitativeNarrative.biggestRiskArea.mitigation || '').trim(),
-  } : null;
+  } : null);
 
-  const coachPack = qualitativeNarrative.coachPack && typeof qualitativeNarrative.coachPack === 'object' && qualitativeNarrative.coachPack.title ? {
+  const coachPack = (scorecard.readinessStatus === 'NOT_ASSESSED') ? null : (qualitativeNarrative.coachPack && typeof qualitativeNarrative.coachPack === 'object' && qualitativeNarrative.coachPack.title ? {
     title: String(qualitativeNarrative.coachPack.title).trim(),
     redoNow: typeof qualitativeNarrative.coachPack.redoNow === 'object' && qualitativeNarrative.coachPack.redoNow?.question ? {
       question: String(qualitativeNarrative.coachPack.redoNow.question).trim(),
@@ -752,7 +752,7 @@ REQUIRED OUTPUT SCHEMA (JSON):
       drill_prompt: String(md.drill_prompt || 'Practice scaling limits').trim(),
       focus_point: String(md.focus_point || 'Resilience').trim(),
     })),
-  } : null;
+  } : null);
 
   const normalizedReport = {
     overallSummary,

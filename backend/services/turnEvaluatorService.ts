@@ -182,7 +182,7 @@ OUTPUT JSON SCHEMA:
       evaluationStatus: 'unavailable',
       answerSummary: null,
       observations: [],
-      missingSignals: question.expectedSignals || [],
+      missingSignals: [],
       contradictions: [],
       recommendedProbe: null,
     });

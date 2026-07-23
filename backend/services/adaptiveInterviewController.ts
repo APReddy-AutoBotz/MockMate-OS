@@ -77,7 +77,7 @@ export function computeAdaptiveDecision(input: AdaptiveControllerInput): Adaptiv
   }
 
   // Rule 4: Probe budget check if missing signals exist and probes allowed
-  const hasMissingSignals = evaluation.missingSignals.length > 0;
+  const hasMissingSignals = evaluation.evaluationStatus === 'evaluated' && evaluation.missingSignals.length > 0;
   const canProbe = state.probeCountForRoot < state.adaptivePolicy.maxProbesPerRoot && state.probeCountForRoot < policy.maxProbesPerRoot;
   if (hasMissingSignals && canProbe && currentKind === 'root') {
     return AdaptiveControllerDecisionSchema.parse({
@@ -89,7 +89,7 @@ export function computeAdaptiveDecision(input: AdaptiveControllerInput): Adaptiv
   }
 
   // Rule 5: Challenge budget check if initial reasoning exists and stage allows challenge
-  const hasGoodReasoning = evaluation.observations.some(o => typeof o.anchorScore === 'number' && o.anchorScore >= 2) || !hasMissingSignals;
+  const hasGoodReasoning = evaluation.observations.some(o => typeof o.anchorScore === 'number' && o.anchorScore >= 2);
   const canChallenge = state.challengeCount < state.adaptivePolicy.maxChallenges && state.challengeCount < policy.maxChallenges;
   const isChallengeStageAllowed = policy.allowedChallengeTypes.length > 0;
   if (hasGoodReasoning && canChallenge && isChallengeStageAllowed && currentKind !== 'challenge') {
