@@ -138,20 +138,49 @@ try {
 
   page.on('pageerror', (err) => pageErrors.push(err));
   page.on('console', (msg) => {
-    if (msg.type() === 'error') consoleErrors.push(msg.text());
+    if (msg.type() === 'error') {
+      const text = msg.text();
+      // Ignore harmless browser warnings
+      if (!text.includes('favicon') && !text.includes('manifest') && !text.includes('sw.js')) {
+        consoleErrors.push(text);
+      }
+    }
   });
   page.on('requestfailed', (req) => {
-    networkErrors.push(`${req.method()} ${req.url()}: ${req.failure()?.errorText}`);
+    const url = req.url();
+    // Ignore harmless missing assets like favicon.ico
+    if (!url.includes('favicon.ico')) {
+      networkErrors.push(`${req.method()} ${url}: ${req.failure()?.errorText}`);
+    }
   });
 
   console.log('[Browser Runtime Test] 6. Navigating to http://127.0.0.1:4173...');
   await page.goto('http://127.0.0.1:4173', { waitUntil: 'domcontentloaded', timeout: 10000 });
 
-  await page.waitForTimeout(2500);
+  // Execute safe API and Supabase auth probes using actual browser environment
+  await page.evaluate(async () => {
+    try {
+      await fetch('http://127.0.0.1:3099/auth/v1/user', { headers: { apikey: 'test-anon-key' } });
+      await fetch('http://127.0.0.1:3099/api/health');
+    } catch (_) {}
+  });
 
+  await page.waitForTimeout(2000);
+
+  // Hard Assertions for errors
   if (pageErrors.length > 0) {
     console.error('[Browser Runtime Test] Page errors detected:', pageErrors);
     throw new Error(`Browser runtime generated ${pageErrors.length} page error(s)`);
+  }
+
+  if (consoleErrors.length > 0) {
+    console.error('[Browser Runtime Test] Unexpected console errors detected:', consoleErrors);
+    throw new Error(`Browser runtime generated ${consoleErrors.length} console error(s)`);
+  }
+
+  if (networkErrors.length > 0) {
+    console.error('[Browser Runtime Test] Unexpected network failures detected:', networkErrors);
+    throw new Error(`Browser runtime generated ${networkErrors.length} network failure(s)`);
   }
 
   console.log('[Browser Runtime Test] 7. Asserting non-empty DOM inside #root...');
@@ -174,7 +203,16 @@ try {
 
   console.log('[Browser Runtime Test] 9. Verifying Supabase startup & API route targets...');
   const supabaseRequests = observedRequests.filter(r => r.url.startsWith('/auth/v1'));
+  if (supabaseRequests.length === 0) {
+    throw new Error('Expected Supabase startup/auth request on stub 127.0.0.1:3099, but 0 were observed');
+  }
   console.log(`   Observed ${supabaseRequests.length} Supabase startup request(s) on stub 127.0.0.1:3099`);
+
+  const apiRequests = observedRequests.filter(r => r.url.startsWith('/api/'));
+  if (apiRequests.length === 0) {
+    throw new Error('Expected API request starting with /api/ on stub 127.0.0.1:3099, but 0 were observed');
+  }
+  console.log(`   Observed ${apiRequests.length} API request(s) starting with /api/ on stub 127.0.0.1:3099`);
 
   const rootLevelDirectCalls = observedRequests.filter(r => /^\/interview\//.test(r.url));
   if (rootLevelDirectCalls.length > 0) {

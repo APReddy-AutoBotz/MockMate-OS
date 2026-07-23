@@ -154,7 +154,7 @@ export const calibrateIntent = async (role: string, jobDescription?: string): Pr
     mustHaveSkills: ['Problem Solving', 'Communication'],
     niceToHave: ['Domain Knowledge'],
     domains: isTechRole ? ['Software Engineering'] : [intentText],
-    tools: isTechRole ? ['Git'] : ['Standard Tools'],
+    tools: isTechRole ? ['Git'] : [],
     softSkills: ['Teamwork', 'Communication'],
     competencyWeights: { PROBLEM_FRAMING: 0.5, TRADEOFF_CLARITY: 0.5 }
   };

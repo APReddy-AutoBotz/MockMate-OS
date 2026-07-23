@@ -196,16 +196,15 @@ describe('Shared Canonical Runtime Contracts', () => {
     expect(ClearSpeakSessionScoreSchema.safeParse(score).success).toBe(true);
   });
 
-  it('validates TranscribeAudioResponseSchema for transcribed and unavailable states', () => {
-    const validTranscribed = { status: 'transcribed', transcript: 'Hello world' };
-    expect(TranscribeAudioResponseSchema.safeParse(validTranscribed).success).toBe(true);
+  it('validates TranscribeAudioResponseSchema discriminated union for valid and invalid combinations', () => {
+    // Valid cases
+    expect(TranscribeAudioResponseSchema.safeParse({ status: 'transcribed', transcript: 'Hello world' }).success).toBe(true);
+    expect(TranscribeAudioResponseSchema.safeParse({ status: 'unavailable', transcript: null }).success).toBe(true);
 
-    const validUnavailable = { status: 'unavailable', transcript: null };
-    expect(TranscribeAudioResponseSchema.safeParse(validUnavailable).success).toBe(true);
-
-    const invalidState = { status: 'unavailable', transcript: 'Fake text' };
-    // Schema enforces string|null but domain logic ensures transcript=null on unavailable
-    expect(TranscribeAudioResponseSchema.safeParse(invalidState).success).toBe(true);
+    // Invalid cases
+    expect(TranscribeAudioResponseSchema.safeParse({ status: 'transcribed', transcript: null }).success).toBe(false);
+    expect(TranscribeAudioResponseSchema.safeParse({ status: 'transcribed', transcript: '' }).success).toBe(false);
+    expect(TranscribeAudioResponseSchema.safeParse({ status: 'unavailable', transcript: 'Fake text' }).success).toBe(false);
   });
 
   it('enforces non-empty selectedPanelIDs in PlanGenerationRequestSchema', () => {

@@ -2,6 +2,7 @@ import request from 'supertest';
 import app from '../server';
 import * as sessionService from '../services/sessionService';
 import * as aiService from '../services/aiService';
+import * as supabaseAdminModule from '../supabaseAdmin';
 import { InterviewSessionContext } from 'mockmate-shared';
 
 const testAuthHeader = 'Bearer test-token';
@@ -689,5 +690,176 @@ describe('Backend Express API & Route Parity Tests', () => {
     expect(resEmpty.status).toBe(400);
     expect(resEmpty.body.status).toBe('unavailable');
     expect(resEmpty.body.transcript).toBeNull();
+  });
+
+  it('32. Non-technical calibration fallback is role-neutral with no Software/Git/Standard Tools filler', async () => {
+    const spy = jest.spyOn(aiService, 'callWithFallback').mockRejectedValueOnce(new Error('Provider offline'));
+
+    const res = await request(app)
+      .post('/api/interview/calibrate')
+      .set('Authorization', testAuthHeader)
+      .send({ role: 'Regulatory Affairs Specialist' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.fallbackUsed).toBe(true);
+    expect(res.body.suggestedControls.includeCoding).toBe(false);
+    expect(res.body.jdInsights.domains).not.toContain('Software Engineering');
+    expect(res.body.jdInsights.tools).not.toContain('Git');
+    expect(res.body.jdInsights.tools).not.toContain('Standard Tools');
+
+    spy.mockRestore();
+  });
+
+  it('33. Mocked Supabase deletion returns 200 and success=true when all table deletions succeed', async () => {
+    const mockFrom = jest.fn().mockImplementation((table: string) => {
+      if (table === 'interview_sessions') {
+        return {
+          select: jest.fn().mockReturnValue({
+            eq: jest.fn().mockResolvedValue({ data: [{ id: 'sess_1' }], error: null }),
+          }),
+          delete: jest.fn().mockReturnValue({
+            eq: jest.fn().mockResolvedValue({ error: null }),
+          }),
+        };
+      }
+      return {
+        delete: jest.fn().mockReturnValue({
+          eq: jest.fn().mockResolvedValue({ error: null }),
+          in: jest.fn().mockResolvedValue({ error: null }),
+        }),
+      };
+    });
+
+    const orig = supabaseAdminModule.supabaseAdmin;
+    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom };
+
+    try {
+      const res = await request(app)
+        .delete('/api/me/data')
+        .set('Authorization', testAuthHeader);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.operation).toBe('app_data_deleted');
+      expect(res.body.authIdentityDeleted).toBe(false);
+      expect(res.body.authIdentityRetainedReason).toContain('retained');
+      expect(res.body.failedTables).toEqual([]);
+    } finally {
+      (supabaseAdminModule as any).supabaseAdmin = orig;
+    }
+  });
+
+  it('34. Mocked Supabase deletion returns 500 when single table delete fails', async () => {
+    const mockFrom = jest.fn().mockImplementation((table: string) => {
+      if (table === 'interview_sessions') {
+        return {
+          select: jest.fn().mockReturnValue({
+            eq: jest.fn().mockResolvedValue({ data: [], error: null }),
+          }),
+          delete: jest.fn().mockReturnValue({
+            eq: jest.fn().mockResolvedValue({ error: null }),
+          }),
+        };
+      }
+      if (table === 'resume_reviews') {
+        return {
+          delete: jest.fn().mockReturnValue({
+            eq: jest.fn().mockResolvedValue({ error: new Error('DB delete failed') }),
+          }),
+        };
+      }
+      return {
+        delete: jest.fn().mockReturnValue({
+          eq: jest.fn().mockResolvedValue({ error: null }),
+        }),
+      };
+    });
+
+    const orig = supabaseAdminModule.supabaseAdmin;
+    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom };
+
+    try {
+      const res = await request(app)
+        .delete('/api/me/data')
+        .set('Authorization', testAuthHeader);
+
+      expect(res.status).toBe(500);
+      expect(res.body.success).toBe(false);
+      expect(res.body.failedTables).toContain('resume_reviews');
+      expect(res.body.deletedTables).not.toContain('resume_reviews');
+    } finally {
+      (supabaseAdminModule as any).supabaseAdmin = orig;
+    }
+  });
+
+  it('35. Mocked Supabase deletion returns 500 listing all failed tables when multiple table deletes fail', async () => {
+    const mockFrom = jest.fn().mockImplementation((table: string) => {
+      if (table === 'interview_sessions') {
+        return {
+          select: jest.fn().mockReturnValue({
+            eq: jest.fn().mockResolvedValue({ data: [], error: null }),
+          }),
+          delete: jest.fn().mockReturnValue({
+            eq: jest.fn().mockResolvedValue({ error: new Error('Sessions delete failed') }),
+          }),
+        };
+      }
+      if (table === 'resume_reviews') {
+        return {
+          delete: jest.fn().mockReturnValue({
+            eq: jest.fn().mockResolvedValue({ error: new Error('Resume reviews delete failed') }),
+          }),
+        };
+      }
+      return {
+        delete: jest.fn().mockReturnValue({
+          eq: jest.fn().mockResolvedValue({ error: null }),
+        }),
+      };
+    });
+
+    const orig = supabaseAdminModule.supabaseAdmin;
+    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom };
+
+    try {
+      const res = await request(app)
+        .delete('/api/me/data')
+        .set('Authorization', testAuthHeader);
+
+      expect(res.status).toBe(500);
+      expect(res.body.success).toBe(false);
+      expect(res.body.failedTables).toContain('resume_reviews');
+      expect(res.body.failedTables).toContain('interview_sessions');
+      expect(res.body.deletedTables).not.toContain('resume_reviews');
+      expect(res.body.deletedTables).not.toContain('interview_sessions');
+    } finally {
+      (supabaseAdminModule as any).supabaseAdmin = orig;
+    }
+  });
+
+  it('36. Repeated successful deletion is idempotent', async () => {
+    const mockFrom = jest.fn().mockImplementation(() => ({
+      select: jest.fn().mockReturnValue({
+        eq: jest.fn().mockResolvedValue({ data: [], error: null }),
+      }),
+      delete: jest.fn().mockReturnValue({
+        eq: jest.fn().mockResolvedValue({ error: null }),
+      }),
+    }));
+
+    const orig = supabaseAdminModule.supabaseAdmin;
+    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom };
+
+    try {
+      const res1 = await request(app).delete('/api/me/data').set('Authorization', testAuthHeader);
+      const res2 = await request(app).delete('/api/me/data').set('Authorization', testAuthHeader);
+
+      expect(res1.status).toBe(200);
+      expect(res1.body.success).toBe(true);
+      expect(res2.status).toBe(200);
+      expect(res2.body.success).toBe(true);
+    } finally {
+      (supabaseAdminModule as any).supabaseAdmin = orig;
+    }
   });
 });

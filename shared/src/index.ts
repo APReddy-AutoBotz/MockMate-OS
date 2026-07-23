@@ -717,13 +717,20 @@ export const BridgeTriggerStateSchema = z.object({
 }).strict();
 export type BridgeTriggerState = z.infer<typeof BridgeTriggerStateSchema>;
 
-export const TranscriptionStatusSchema = z.enum(['transcribed', 'unavailable']);
-export type TranscriptionStatus = z.infer<typeof TranscriptionStatusSchema>;
-
-export const TranscribeAudioResponseSchema = z.object({
-  status: TranscriptionStatusSchema,
-  transcript: z.string().nullable(),
+export const TranscribedAudioResponseSchema = z.object({
+  status: z.literal('transcribed'),
+  transcript: z.string().trim().min(1),
 }).strict();
+
+export const UnavailableAudioResponseSchema = z.object({
+  status: z.literal('unavailable'),
+  transcript: z.null(),
+}).strict();
+
+export const TranscribeAudioResponseSchema = z.discriminatedUnion('status', [
+  TranscribedAudioResponseSchema,
+  UnavailableAudioResponseSchema,
+]);
 export type TranscribeAudioResponse = z.infer<typeof TranscribeAudioResponseSchema>;
 
 export const CodeAnalysisResponseSchema = z.object({
