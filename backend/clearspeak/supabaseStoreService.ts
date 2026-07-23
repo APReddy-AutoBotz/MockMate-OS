@@ -11,7 +11,7 @@ import type {
   ClearSpeakProfile,
   ClearSpeakProgress,
   HardWordsLedger,
-} from './types';
+} from 'mockmate-shared';
 
 const TABLE_PROFILES = 'clearspeak_profiles';
 const TABLE_PROGRESS = 'clearspeak_progress';

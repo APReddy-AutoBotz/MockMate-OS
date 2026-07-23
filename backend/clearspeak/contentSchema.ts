@@ -10,7 +10,7 @@
  * Source of truth: implementation_plan.md §9
  */
 
-import type { ClearSpeakProfile, ClearSpeakSessionContent } from './types';
+import type { ClearSpeakProfile, ClearSpeakSessionContent } from 'mockmate-shared';
 
 // ─── WPM Targets (Level Bands) ────────────────────────────────────────────────
 // Source: implementation_plan.md §10

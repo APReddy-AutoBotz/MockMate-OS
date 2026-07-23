@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ResumeData } from '../../types';
+import { ResumeData } from 'mockmate-shared';
 import ErrorBoundary from '../ErrorBoundary';
 import { audioService } from '../../services/audioService';
 

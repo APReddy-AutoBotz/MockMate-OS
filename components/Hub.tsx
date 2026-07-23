@@ -1,7 +1,8 @@
+import { UserProfile } from "../types/ui";
 import React from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, BookOpen, FileText, Mic, Trash2, Users } from 'lucide-react';
-import { UserProfile } from '../types';
+;
 
 interface HubProps {
     userProfile: UserProfile | null;

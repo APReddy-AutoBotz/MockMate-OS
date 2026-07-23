@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowRight, CheckCircle, DownloadCloud, Printer, RotateCcw } from 'lucide-react';
-import { ResumeData } from '../../types';
+import { ResumeData } from 'mockmate-shared';
 import { generateDocx } from './exportUtils';
 import ResumePreview from './templates/ResumePreview';
 

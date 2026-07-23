@@ -49,9 +49,7 @@ export default function ResumeScreen() {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      // 1. Upload & Parse
       const formData = new FormData();
-      // On mobile, FormData expects an object for local file references
       formData.append('resume', {
         uri: file.uri,
         name: file.name,
@@ -69,7 +67,6 @@ export default function ResumeScreen() {
         throw new Error(parseData.error || 'Failed to parse resume.');
       }
 
-      // 2. Score with Job Description
       const scoreHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
       };
@@ -154,7 +151,9 @@ export default function ResumeScreen() {
         <View style={styles.reportContainer}>
           <View style={styles.scoreHeader}>
             <View style={styles.scoreRing}>
-              <Text style={styles.scoreNumber}>{report.score ?? report.overallScore ?? 80}%</Text>
+              <Text style={styles.scoreNumber}>
+                {(report.score ?? report.overallScore) != null ? `${report.score ?? report.overallScore}%` : 'INCOMPLETE'}
+              </Text>
               <Text style={styles.scoreLabel}>ATS SCORE</Text>
             </View>
           </View>
@@ -167,7 +166,7 @@ export default function ResumeScreen() {
                 <Text style={styles.bulletText}>{item}</Text>
               </View>
             )) || (
-              <Text style={styles.noDataText}>No negative findings detected. Good job!</Text>
+              <Text style={styles.noDataText}>ATS findings unavailable.</Text>
             )}
           </View>
 
@@ -179,7 +178,7 @@ export default function ResumeScreen() {
                 <Text style={styles.bulletText}>{item}</Text>
               </View>
             )) || (
-              <Text style={styles.noDataText}>Your resume matches the job description perfectly!</Text>
+              <Text style={styles.noDataText}>Recommended actions unavailable.</Text>
             )}
           </View>
 

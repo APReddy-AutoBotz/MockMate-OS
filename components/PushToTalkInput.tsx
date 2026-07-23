@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { MicrophoneIcon } from './icons/MicrophoneIcon';
 import * as mockGeminiService from '../services/mockGeminiService';
 import { motion, AnimatePresence } from 'framer-motion';
+import { TranscribeAudioResponse } from 'mockmate-shared';
 
 interface PushToTalkInputProps {
     onTranscriptSubmit: (transcript: string) => void;
@@ -88,18 +89,18 @@ const PushToTalkInput: React.FC<PushToTalkInputProps> = ({ onTranscriptSubmit, d
 
         setLiveStatus('transcribing');
         try {
-            const transcript = await (mockGeminiService as any).transcribeAudio(blob);
-            if (transcript.trim()) {
-                onTranscriptSubmit(transcript);
+            const res: TranscribeAudioResponse = await mockGeminiService.transcribeAudio(blob);
+            if (res.status === 'transcribed' && res.transcript && res.transcript.trim()) {
+                onTranscriptSubmit(res.transcript.trim());
                 setLiveStatus('idle');
                 setElapsedSeconds(0);
             } else {
-                setError("We could not hear an answer.");
+                setError("Transcription unavailable. Retry recording or type your answer.");
                 setLiveStatus('error');
                 resetToIdleAfterError();
             }
         } catch (e) {
-            setError("We could not prepare your answer. Please try again.");
+            setError("Transcription unavailable. Retry recording or type your answer.");
             setLiveStatus('error');
             resetToIdleAfterError();
         }

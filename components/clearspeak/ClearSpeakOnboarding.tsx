@@ -53,7 +53,7 @@ const ClearSpeakOnboarding: React.FC<ClearSpeakOnboardingProps> = ({ onComplete 
     audienceContext: '',
     mainStruggle: null,
     comfortLanguage: 'en',
-    practiceDuration: 5,
+    practiceDuration: 5 as const,
   });
 
   const canAdvance = (): boolean => {

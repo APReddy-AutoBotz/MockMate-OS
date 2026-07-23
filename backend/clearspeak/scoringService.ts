@@ -20,7 +20,7 @@ import type {
   ClearSpeakSessionContent,
   ClearSpeakSessionScore,
   HardWordEntry,
-} from './types';
+} from 'mockmate-shared';
 import { WPM_BANDS } from './contentSchema';
 
 // ─── Transcript Shape ─────────────────────────────────────────────────────────

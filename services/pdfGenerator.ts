@@ -1,6 +1,6 @@
 
 import { PDFDocument, rgb, StandardFonts, PDFFont } from 'pdf-lib';
-import { FinalReport, AdvisorAssessment, QuestionPerformance } from '../types';
+import { FinalReport, AdvisoryPanel, QuestionPerformance } from 'mockmate-shared';
 
 // Exact Brand Colors
 const colors = {
@@ -139,16 +139,16 @@ class PDFBuilder {
     }
 
     async drawQuantitativeSection(report: FinalReport) {
-        if (!report.quantitativeAnalysis?.competency_scores) return;
+        if (!report.quantitativeAnalysis?.dimension_scores) return;
         this.y -= 40;
         await this.checkNewPage(100);
         this.drawText('COMPETENCY RADAR (QUANTITATIVE)', MARGIN, this.y, this.helveticaBold, 10, colors.infoBlue);
         this.y -= 25;
 
-        for (const item of report.quantitativeAnalysis.competency_scores) {
-            const scoreColor = item.score > 80 ? colors.actionTeal : item.score > 60 ? colors.accentAmber : colors.alertCoral;
-            this.drawText(`${item.score}%`, MARGIN, this.y, this.helveticaBold, 10, scoreColor);
-            this.drawText(item.competency, MARGIN + 40, this.y, this.helveticaBold, 10, colors.textPrimary);
+        for (const item of report.quantitativeAnalysis.dimension_scores) {
+            const scoreColor = item.normalized_score > 80 ? colors.actionTeal : item.normalized_score > 60 ? colors.accentAmber : colors.alertCoral;
+            this.drawText(`${item.normalized_score}%`, MARGIN, this.y, this.helveticaBold, 10, scoreColor);
+            this.drawText(item.dimension, MARGIN + 40, this.y, this.helveticaBold, 10, colors.textPrimary);
             this.y -= 12;
             this.y = this.drawText(item.reason, MARGIN + 40, this.y, this.helvetica, 9, colors.textSecondary, PAGE_WIDTH - MARGIN * 2 - 40);
             this.y -= 15;

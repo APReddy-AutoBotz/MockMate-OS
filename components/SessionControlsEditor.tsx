@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { SessionControls } from '../types';
+import { SessionControls } from 'mockmate-shared';
 
 interface SessionControlsEditorProps {
     controls: SessionControls;
@@ -62,8 +62,8 @@ const SessionControlsEditor: React.FC<SessionControlsEditorProps> = ({ controls,
         {
             label: 'Coach mode',
             desc: 'Get hints and feedback after each answer.',
-            checked: controls.sessionMode === 'coach',
-            onToggle: () => onChange({ ...controls, sessionMode: controls.sessionMode === 'coach' ? 'exam' : 'coach' }),
+            checked: controls.deliveryMode === 'coach',
+            onToggle: () => onChange({ ...controls, deliveryMode: controls.deliveryMode === 'coach' ? 'exam' : 'coach' }),
         },
         {
             label: 'Coding questions',

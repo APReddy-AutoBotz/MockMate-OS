@@ -1,7 +1,7 @@
 const pdfParse = require('pdf-parse');
 import * as mammoth from 'mammoth';
 import Groq from "groq-sdk";
-import { ResumeData } from '../types';
+import { ResumeData } from 'mockmate-shared';
 
 const apiKey = process.env.GROQ_API_KEY || 'dummy';
 const groq = new Groq({ apiKey });

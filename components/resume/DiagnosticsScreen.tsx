@@ -1,6 +1,6 @@
 import React from 'react';
 import { CheckCircle2 } from 'lucide-react';
-import { ResumeData } from '../../types';
+import { ResumeData } from 'mockmate-shared';
 
 interface DiagnosticsScreenProps {
     resumeData: ResumeData;

@@ -1,110 +1,84 @@
-import { API_BASE } from './apiBase';
-import { getAccessToken } from './supabaseClient';
-
-const authHeader = async (): Promise<Record<string, string>> => {
-  const token = await getAccessToken();
-  return token ? { 'Authorization': `Bearer ${token}` } : {};
-};
-
-const postToBackend = async (endpoint: string, body: any) => {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(await authHeader()),
-  };
-
-  const response = await fetch(`${API_BASE}/ai/${endpoint}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Unknown Error' }));
-    throw new Error(err.error || `Backend request failed: ${response.statusText}`);
-  }
-  return response.json();
-};
+import { apiClient } from './apiClient';
+import {
+  InterviewPlan,
+  InterviewPlanSchema,
+  InterviewSessionContext,
+  FinalReport,
+  FinalReportSchema,
+  QuestionBlueprint,
+  CalibrateResponse,
+  CalibrateResponseSchema,
+  InterviewSessionStartResponseSchema,
+  AnswerSubmissionResponseSchema,
+  HintResponseSchema,
+  IdealResponseResponseSchema,
+  TranscribeAudioResponseSchema
+} from 'mockmate-shared';
 
 export const calibrateIntent = async (
-  intentText: string,
-  additionalContext?: string
-): Promise<{ recommendedPanelIDs: string[]; recommendedRole: string; matchReasons?: Record<string, string> }> => {
-  return postToBackend('calibrate-intent', { intent: intentText, context: additionalContext });
+  role: string,
+  jobDescription?: string
+): Promise<CalibrateResponse> => {
+  return apiClient.post('interview/calibrate', CalibrateResponseSchema, { role, jobDescription });
 };
 
 export const generateInterviewPlan = async (
+  role: string,
   intentText: string,
-  jdText: string | null,
   sessionControls: any,
-  selectedPanelIDs: string[]
-): Promise<any> => {
-  return postToBackend('generate-plan', {
+  jdText?: string
+): Promise<InterviewPlan> => {
+  return apiClient.post('interview/plan', InterviewPlanSchema, {
+    role,
     intent: intentText,
-    jdText,
     controls: sessionControls,
-    panelIDs: selectedPanelIDs,
+    jdText
   });
 };
 
 export const startInterviewSession = async (
-  context: any
-): Promise<{ firstQuestion: string; personaId: string; updatedContext: any }> => {
-  const { sessionId, firstMessage } = await postToBackend('start-session', { context });
+  context: InterviewSessionContext
+): Promise<{ firstQuestion: QuestionBlueprint; personaId: string; sessionId: string }> => {
+  const data = await apiClient.post('interview/sessions', InterviewSessionStartResponseSchema, { context });
   return {
-    firstQuestion: firstMessage,
+    firstQuestion: data.firstQuestion,
     personaId: context.selectedPanelIDs?.[0] || 'p1',
-    updatedContext: { ...context, sessionId },
+    sessionId: data.sessionId
   };
 };
 
 export const submitAnswerAndGetNext = async (
-  history: any[],
-  context: any,
-  personaId: string
-): Promise<{ nextQuestion: string; isLastQuestion: boolean }> => {
-  if (context.sessionId) {
-    try {
-      const { nextMessage, isLastQuestion } = await postToBackend('submit-answer', {
-        sessionId: context.sessionId,
-        answer: history[history.length - 1].candidateResponse,
-      });
-
-      return {
-        nextQuestion: nextMessage,
-        isLastQuestion: isLastQuestion,
-      };
-    } catch (error) {
-      console.error('Backend submit failed, falling back locally', error);
-    }
-  }
-
-  const totalExpected = context.interviewPlan?.meta?.controls?.totalQuestions || 5;
-  const isLastQuestion = history.length >= totalExpected;
-  if (isLastQuestion) {
-    return { nextQuestion: '', isLastQuestion: true };
-  }
-
+  sessionId: string,
+  questionId: string,
+  expectedQuestionIndex: number,
+  answerKind: 'answered' | 'skipped',
+  answerText?: string
+): Promise<{ nextQuestion: QuestionBlueprint | null; isLastQuestion: boolean }> => {
+  const data = await apiClient.post(
+    `interview/sessions/${sessionId}/answers`,
+    AnswerSubmissionResponseSchema,
+    { questionId, expectedQuestionIndex, answerKind, answerText }
+  );
   return {
-    nextQuestion: `Thank you. For the next question: Describe a challenging technical problem you solved recently.`,
-    isLastQuestion: false,
+    nextQuestion: data.nextQuestion,
+    isLastQuestion: data.isLastQuestion
   };
 };
 
-export const getHintForQuestion = async (question: string): Promise<string> => {
-  const data = await postToBackend('get-hint', { question });
+export const getHintForQuestion = async (questionText: string, expectedSignals?: string[]): Promise<string> => {
+  const data = await apiClient.post('interview/hint', HintResponseSchema, { questionText, expectedSignals: expectedSignals || [] });
   return data.hint;
 };
 
 export const generateIdealAnswer = async (
-  question: string,
-  blueprint: any | null,
-  userAnswer: string
+  questionText: string,
+  expectedSignals?: string[],
+  userAnswer?: string
 ): Promise<string> => {
-  const data = await postToBackend('generate-ideal', { question, blueprint, userAnswer });
-  return data.idealAnswer;
+  const data = await apiClient.post('interview/ideal-response', IdealResponseResponseSchema, { questionText, expectedSignals: expectedSignals || [], userAnswer });
+  return data.idealResponse;
 };
 
-// Helper to convert Local File URI to Base64 using standard FileReader
 const uriToBase64 = async (uri: string): Promise<string> => {
   const response = await fetch(uri);
   const blob = await response.blob();
@@ -112,7 +86,6 @@ const uriToBase64 = async (uri: string): Promise<string> => {
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64data = reader.result as string;
-      // split to remove the "data:*/*;base64," prefix
       resolve(base64data.split(',')[1]);
     };
     reader.onerror = reject;
@@ -123,19 +96,16 @@ const uriToBase64 = async (uri: string): Promise<string> => {
 export const transcribeAudio = async (uri: string, mimeType: string): Promise<string> => {
   try {
     const base64Audio = await uriToBase64(uri);
-    const data = await postToBackend('transcribe', { audioData: base64Audio, mimeType });
-    return data.transcript;
+    const data = await apiClient.post('interview/transcribe', TranscribeAudioResponseSchema, { audioBase64: base64Audio, mimeType });
+    return data.transcript || "";
   } catch (error) {
     console.error('Transcription failed', error);
-    return "I am ready for the next question. (Audio Transcription Unavailable)";
+    return "";
   }
 };
 
-export const generateFinalReport = async (
-  history: any[],
-  context: any
-): Promise<any> => {
-  return postToBackend('generate-report', { history, context });
+export const generateFinalReport = async (sessionId: string): Promise<FinalReport> => {
+  return apiClient.post(`interview/sessions/${sessionId}/report`, FinalReportSchema, {});
 };
 
 export default {
@@ -146,5 +116,5 @@ export default {
   getHintForQuestion,
   transcribeAudio,
   generateFinalReport,
-  generateIdealAnswer,
+  generateIdealAnswer
 };

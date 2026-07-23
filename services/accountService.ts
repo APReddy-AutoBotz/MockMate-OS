@@ -1,21 +1,12 @@
-import { apiRoute } from './apiBase';
-import { getAccessToken } from './supabaseClient';
+import { AccountDeletionResponse, AccountDeletionResponseSchema } from 'mockmate-shared';
+import { apiClient } from './apiClient';
 
-export async function deleteMyData(): Promise<void> {
-  const token = await getAccessToken();
-  if (!token) {
-    throw new Error('Please sign in before deleting your data.');
+export async function deleteMyData(): Promise<AccountDeletionResponse> {
+  const result = await apiClient.delete('me/data', AccountDeletionResponseSchema);
+  if (result.success) {
+    clearLocalPracticeData();
   }
-
-  const res = await fetch(apiRoute('/me/data'), {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${token}` },
-  });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new Error(body?.error || 'Could not delete your data.');
-  }
+  return result;
 }
 
 export function clearLocalPracticeData() {

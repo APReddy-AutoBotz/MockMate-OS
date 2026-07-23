@@ -11,57 +11,108 @@ jobs:
     name: Typecheck and build
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
-      - name: Install frontend dependencies
+      - name: 1. Install root & workspace dependencies
         run: npm ci
 
-      - name: Install backend dependencies
+      - name: 2. Shared typecheck
+        run: npm run check:contracts
+
+      - name: 3. Shared tests
+        run: npm run shared:test
+
+      - name: 4. Shared build
+        run: npm run shared:build
+
+      - name: 5. Frontend typecheck
+        run: npm run typecheck
+
+      - name: 6. Frontend unit tests
+        run: npm test -- --runInBand
+
+      - name: 7. Full static migration verification
+        run: npm run verify:supabase
+
+      - name: 8. Disposable PostgreSQL runtime migration verification
+        env:
+          POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: npm run verify:supabase:runtime
+
+      - name: 9. Frontend build
+        run: npm run build
+
+      - name: 9a. Static runtime configuration precheck
+        run: npm run test:runtime-config-static
+
+      - name: 9b. Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: 9c. Playwright browser runtime execution test
+        run: npm run test:browser-runtime
+
+      - name: 10. Backend tests
         working-directory: backend
-        run: npm ci
+        run: npm test
 
-      - name: Install mobile dependencies
+      - name: 11. Backend build
+        working-directory: backend
+        run: npm run build
+
+      - name: 12. Production smoke checks
+        run: npm run smoke:production
+
+      - name: 13. Dependency audit
+        run: npm run audit:production
+
+      - name: 14. Install mobile dependencies
         working-directory: mobile
         run: npm ci
 
-      - name: Frontend typecheck
-        run: npm run typecheck
-
-      - name: Supabase migration checks
-        run: npm run verify:supabase
-
-      - name: Frontend build
-        run: npm run build
-
-      - name: Backend build
-        working-directory: backend
-        run: npm run build
-
-      - name: Production smoke checks
-        run: npm run smoke:production
-
-      - name: Production dependency audits
-        run: npm run audit:production
-
-      - name: Mobile typecheck
+      - name: 15. Mobile typecheck
         run: npm run mobile:typecheck
 
-      - name: Mobile lint
+      - name: 16. Mobile lint
         run: npm run mobile:lint
 
-      - name: Production config smoke check
+      - name: 20. Recognized full-history secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 21. Supplemental custom secret-pattern scan
+        run: npm run scan:secrets
+
+      - name: 22. Production config smoke check
         shell: bash
         run: |
           test -f vercel.json
           test -f supabase/migrations/001_initial_schema.sql
+          test -f supabase/migrations/20260721_add_authoritative_session_fields.sql
           test -f public/manifest.json
           test -f mobile/eas.json
           grep -q '"/api/(.*)"' vercel.json

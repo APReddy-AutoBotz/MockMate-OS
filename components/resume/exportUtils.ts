@@ -1,6 +1,6 @@
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle, ShadingType, TableRow, TableCell, Table, WidthType, UnderlineType } from 'docx';
 import { saveAs } from 'file-saver';
-import { ResumeData } from '../../types';
+import { ResumeData } from 'mockmate-shared';
 
 type TemplateId = 'classic' | 'modern' | 'minimal' | 'graduate' | 'strategy';
 

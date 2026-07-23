@@ -11,7 +11,7 @@
 
 import { GoogleGenAI, Type } from '@google/genai';
 import OpenAI from 'openai';
-import type { ClearSpeakProfile, ClearSpeakSessionContent } from './types';
+import type { ClearSpeakProfile, ClearSpeakSessionContent } from 'mockmate-shared';
 import {
   buildSystemPrompt,
   CLEARSPEAK_CONTENT_SCHEMA,

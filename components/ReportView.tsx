@@ -1,6 +1,7 @@
+import { UserProfile } from "../types/ui";
 
 import React, { useState } from 'react';
-import { UserProfile } from '../types';
+;
 
 interface RoleCaptureProps {
     userProfile: UserProfile | null;

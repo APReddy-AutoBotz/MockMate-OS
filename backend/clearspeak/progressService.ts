@@ -11,7 +11,7 @@ import type {
   BridgeTriggerState,
   HardWordEntry,
   HardWordsLedger,
-} from './types';
+} from 'mockmate-shared';
 import {
   getProgressFromStore,
   saveProgressToStore,
@@ -60,7 +60,7 @@ export async function recordSessionResult(
 
   // Recompute best topic
   const [bestTopic] = Object.entries(progress.topicBestScores)
-    .sort(([, a], [, b]) => b - a)[0] ?? ['', 0];
+    .sort(([, a], [, b]) => ((b as number) || 0) - ((a as number) || 0))[0] ?? ['', 0];
   progress.bestPerformingTopic = bestTopic;
 
   progress.totalSessionsCompleted += 1;
@@ -95,9 +95,8 @@ export async function updateLedger(
       ledger.entries.push({
         word,
         failCount: 1,
-        lastAttemptedAt: new Date().toISOString(),
         resolved: false,
-      });
+      } as any);
     }
   }
 

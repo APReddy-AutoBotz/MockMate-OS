@@ -65,7 +65,7 @@ export default function JournalScreen() {
 
   if (selectedReport) {
     const report = selectedReport;
-    const score = report.overallScore ?? report.score ?? 80;
+    const score = report.overallScore ?? report.score ?? null;
 
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.scrollContainer}>
@@ -75,7 +75,7 @@ export default function JournalScreen() {
 
         <View style={styles.reportHeader}>
           <View style={styles.scoreCircle}>
-            <Text style={styles.scoreCircleText}>{score}%</Text>
+            <Text style={styles.scoreCircleText}>{score != null ? `${score}%` : 'INCOMPLETE'}</Text>
             <Text style={styles.scoreCircleLabel}>SCORE</Text>
           </View>
         </View>
@@ -88,7 +88,7 @@ export default function JournalScreen() {
               <Text style={styles.bulletText}>{item}</Text>
             </View>
           )) || (
-            <Text style={styles.bulletText}>Excellent speaking clarity and structure.</Text>
+            <Text style={styles.bulletText}>No evaluated strengths available.</Text>
           )}
         </View>
 
@@ -100,7 +100,7 @@ export default function JournalScreen() {
               <Text style={styles.bulletText}>{item}</Text>
             </View>
           )) || (
-            <Text style={styles.bulletText}>Improve conciseness and quantifiable impact.</Text>
+            <Text style={styles.bulletText}>No evaluated improvement areas available.</Text>
           )}
         </View>
       </ScrollView>
@@ -156,7 +156,7 @@ export default function JournalScreen() {
                 </View>
               </View>
               <View style={styles.historyScoreBox}>
-                <Text style={styles.historyScoreVal}>{record.avgScore}%</Text>
+                <Text style={styles.historyScoreVal}>{record.avgScore != null ? `${record.avgScore}%` : 'N/A'}</Text>
                 <Text style={styles.historyScoreLbl}>AVG SCORE</Text>
               </View>
             </TouchableOpacity>

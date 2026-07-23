@@ -1,824 +1,936 @@
-
-import { GoogleGenAI } from '@google/genai';
-import OpenAI from 'openai';
+import { 
+  SessionControls, 
+  JDInsights, 
+  InterviewPlan, 
+  InterviewPlanSchema, 
+  InterviewSessionContext, 
+  InterviewTurn, 
+  FinalReport, 
+  FinalReportSchema,
+  RawFinalReportSchema,
+  CalibrateResponseSchema,
+  CalibrateResponse,
+  RawCalibrateResponseSchema,
+  RawInterviewPlanSchema,
+  CodeSimulationResponseSchema,
+  CodeSimulationResponse,
+  CodeAnalysisResponseSchema,
+  CodeAnalysisResponse,
+  TranscribeAudioResponseSchema,
+  TranscribeAudioResponse
+} from 'mockmate-shared';
 import { PERSONAS_CONFIG } from '../config/personas';
-import { InterviewTurn, SessionContext, FinalReport, SessionControls, InterviewPlan, DimensionScore, TrajectoryPoint, AuditFinding } from '../types';
+import { GoogleGenAI } from '@google/genai';
 import * as sessionService from './sessionService';
-import { APPROVED_DIMENSIONS, ACTIVE_DIMENSIONS_BY_MODE, DEFAULT_WEIGHTS_BY_MODE } from '../config/evaluationConfig';
 
-// Initialize Primary (Gemini)
-const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-const ai = new GoogleGenAI({ apiKey: geminiApiKey || 'dummy' });
+// Approved competency dimensions for MockMate v1 evaluation
+export const APPROVED_DIMENSIONS = {
+  PROBLEM_FRAMING: { name: 'Problem Framing & Structuring', definition: 'Ability to deconstruct ambiguous challenges and establish scope.' },
+  TRADEOFF_CLARITY: { name: 'Trade-off & Constraint Clarity', definition: 'Explicit evaluation of technical and operational trade-offs.' },
+  STAR_EXECUTION: { name: 'STAR & Result Execution', definition: 'Clear situation, task, action, and measurable outcome articulation.' },
+  COMMUNICATION_PRESENCE: { name: 'Communication & Presence', definition: 'Concise, calm, and structured verbal delivery.' },
+  TECHNICAL_DEPTH: { name: 'Technical Depth & Domain Rigor', definition: 'Appropriate domain depth, correct terminology, and architectural accuracy.' }
+} as const;
 
-// Initialize Fallback (Groq via OpenAI Client)
-const groqApiKey = process.env.GROQ_API_KEY;
-const groq = groqApiKey ? new OpenAI({
-    apiKey: groqApiKey,
-    baseURL: 'https://api.groq.com/openai/v1'
-}) : null;
-
-const PROVIDER_CONFIG = {
-    primary: { id: 'gemini', model: 'gemini-2.0-flash' },
-    fallback: { id: 'groq', model: 'llama-3.3-70b-versatile' }
+export const ACTIVE_DIMENSIONS_BY_MODE: Record<string, (keyof typeof APPROVED_DIMENSIONS)[]> = {
+  classic_behavioral: ['PROBLEM_FRAMING', 'STAR_EXECUTION', 'COMMUNICATION_PRESENCE'],
+  classic_technical: ['PROBLEM_FRAMING', 'TRADEOFF_CLARITY', 'TECHNICAL_DEPTH'],
+  tradeoff_decision: ['PROBLEM_FRAMING', 'TRADEOFF_CLARITY', 'TECHNICAL_DEPTH'],
+  fast_check: ['PROBLEM_FRAMING', 'COMMUNICATION_PRESENCE']
 };
 
-const FEATURE_FLAGS = {
-    ENABLE_GROQ_FALLBACK: true // Feature gate as requested
+export const DEFAULT_WEIGHTS_BY_MODE: Record<string, Record<string, number>> = {
+  classic_behavioral: { PROBLEM_FRAMING: 0.35, STAR_EXECUTION: 0.35, COMMUNICATION_PRESENCE: 0.30 },
+  classic_technical: { PROBLEM_FRAMING: 0.30, TRADEOFF_CLARITY: 0.40, TECHNICAL_DEPTH: 0.30 },
+  tradeoff_decision: { PROBLEM_FRAMING: 0.30, TRADEOFF_CLARITY: 0.40, TECHNICAL_DEPTH: 0.30 },
+  fast_check: { PROBLEM_FRAMING: 0.50, COMMUNICATION_PRESENCE: 0.50 }
 };
 
-// --- Helpers ---
-
-const getResponseText = (response: any): string => {
-    if (!response) return '';
-    if (typeof response.text === 'function') return response.text();
-    if (typeof response.text === 'string') return response.text;
-    const candidateText = response?.candidates?.[0]?.content?.parts
-        ?.map((p: any) => p?.text)?.filter(Boolean)?.join('');
-    return candidateText || '';
-};
-
-const extractJson = (text: string): any => {
-    if (!text) return null;
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start === -1 || end === -1 || end <= start) return null;
-    try { return JSON.parse(text.slice(start, end + 1)); } catch { return null; }
-};
-
-const retryOperation = async <T>(
-    operation: () => Promise<T>,
-    maxRetries: number = 3,
-    initialDelay: number = 1000,
-    context?: any
-): Promise<T> => {
-    let lastError: any;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        try { return await operation(); }
-        catch (error: any) {
-            lastError = error;
-            if (attempt === maxRetries) throw error;
-            await new Promise(r => setTimeout(r, initialDelay * Math.pow(2, attempt)));
-        }
+export function extractJson(raw: string): any {
+  const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  try {
+    return JSON.parse(clean);
+  } catch (err) {
+    const jsonMatch = clean.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
     }
-    throw lastError;
-};
-
-export async function callProvider(providerId: string, prompt: string, schema?: any): Promise<{ text: string, provider: string, model: string }> {
-    const isPrimary = providerId === 'gemini';
-    const config = isPrimary ? PROVIDER_CONFIG.primary : PROVIDER_CONFIG.fallback;
-
-    if (isPrimary) {
-        const response = await ai.models.generateContent({
-            model: config.model,
-            contents: [{ parts: [{ text: prompt }] }],
-            config: { temperature: 0.3, maxOutputTokens: 5000, responseMimeType: 'application/json' }
-        });
-        return { text: getResponseText(response), provider: 'gemini', model: config.model };
-    } else {
-        if (!groq) throw new Error("Groq client not initialized");
-        const response = await groq.chat.completions.create({
-            model: config.model,
-            messages: [
-                { role: 'system', content: 'You are a world-class Interview Bar Raiser. Respond strictly in valid JSON matching the requested schema.' },
-                { role: 'user', content: prompt }
-            ],
-            response_format: { type: 'json_object' },
-            temperature: 0.2
-        });
-        return { text: response.choices[0]?.message?.content || '', provider: 'groq', model: config.model };
-    }
-}
-
-/**
- * Executes a resilient AI call with Gemini -> Groq fallback.
- */
-export async function callWithFallback(prompt: string, schema?: any): Promise<{ text: string, provider: string, model: string, fallbackTriggered: boolean }> {
-    const forceProvider = process.env.MOCKMATE_FORCE_PROVIDER;
-    let fallbackTriggered = false;
-
-    try {
-        if (forceProvider === 'groq') throw new Error("Forced Groq for testing");
-        
-        const result = await retryOperation(() => callProvider('gemini', prompt, schema));
-        return { ...result, fallbackTriggered: false };
-    } catch (primaryErr) {
-        if ((FEATURE_FLAGS.ENABLE_GROQ_FALLBACK || forceProvider === 'groq') && groq) {
-            console.warn(forceProvider === 'groq' ? "Forcing Groq for drift validation" : "Primary AI failed, triggering Groq fallback...", primaryErr);
-            fallbackTriggered = true;
-            try {
-                const fallbackResult = await retryOperation(() => callProvider('groq', prompt, schema));
-                return { ...fallbackResult, fallbackTriggered: true };
-            } catch (fallbackErr) {
-                console.error("All AI providers failed:", fallbackErr);
-                throw new Error("Resilient AI stack failure - Check API keys and quota.");
-            }
-        } else {
-            throw primaryErr;
-        }
-    }
-}
-
-// --- Logic ---
-
-export const calibrateIntent = async (intentText: string, additionalContext?: string) => {
-    // 1. Validation
-    if (!intentText || intentText.trim().length < 2) {
-        if (!additionalContext) throw new Error('Please provide a more detailed job description or career goal.');
-    }
-
-    const availablePersonas = PERSONAS_CONFIG.map(p =>
-        `- ID: ${p.id}
-         Name: ${p.name}
-         Title: ${p.title}
-         Focus: ${p.focus}
-         Keywords: ${p.keywords.join(', ')}
-         Seniority: ${p.seniority}
-         Style: ${p.style}`
-    ).join('\n\n');
-
-    const masterPrompt = `You are an expert talent acquisition strategist. Select the most appropriate interview panel (1-3 personas) for the candidate's goal.
-
-CANDIDATE GOAL: "${intentText}"
-ADDITIONAL CONTEXT (JD/Referral): "${additionalContext || 'None'}"
-
-AVAILABLE PERSONAS:
-${availablePersonas}
-
-INSTRUCTIONS:
-1. Analyze the candidate's role and seniority implied by the goal.
-2. Select 1-3 personas that best match the domain, seniority, and required soft/hard skills.
-3. For EVERY selection, provide a brief, professional "matchReason" (e.g., "Vikram is selected to probe your depth in architectural trade-offs and team leadership.").
-4. Also normalize the candidate's role title.
-
-OUTPUT JSON SCHEMA:
-{
-  "recommendedPanelIDs": ["id1", "id2"],
-  "recommendedRole": "Normalized Job Title",
-  "matchReasons": {
-    "id1": "Specific reason for id1",
-    "id2": "Specific reason for id2"
+    throw err;
   }
 }
 
-CRITICAL: Do not return empty reasons.`;
+export async function callWithFallback(prompt: string): Promise<{ text: string; provider: string; model: string; fallbackTriggered: boolean }> {
+  const geminiKey = process.env.GEMINI_API_KEY;
+  const groqKey = process.env.GROQ_API_KEY;
 
+  if (geminiKey) {
     try {
-        const { text } = await callWithFallback(masterPrompt, { type: 'json_object' });
-        const parsed = extractJson(text || '{}');
-        const validIDs = PERSONAS_CONFIG.map(p => p.id);
-        const filteredIDs = (parsed?.recommendedPanelIDs || [])
-            .filter((id: string) => validIDs.includes(id))
-            .slice(0, 3);
-
-        if (filteredIDs.length === 0) throw new Error("AI returned no valid IDs");
-
-        return {
-            recommendedPanelIDs: filteredIDs,
-            recommendedRole: parsed?.recommendedRole || 'Professional',
-            matchReasons: parsed?.matchReasons
-        };
-
-    } catch (err) {
-        console.error("AI Calibration failed:", err);
-        // Heuristic fallback if even Groq fails
-        return heuristicPersonaMatch(intentText, additionalContext);
+      const ai = new GoogleGenAI({ apiKey: geminiKey });
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: { responseMimeType: 'application/json' }
+      });
+      if (response.text) {
+        return { text: response.text, provider: 'gemini', model: 'gemini-2.5-flash', fallbackTriggered: false };
+      }
+    } catch (e: any) {
+      console.warn('[AI Service] Gemini call failed, trying Groq fallback...', e.message);
     }
-};
+  }
 
-const heuristicPersonaMatch = (intent: string, context?: string) => {
-    const fullText = (intent + " " + (context || "")).toLowerCase();
-    const scores: Record<string, number> = {};
-    const reasons: Record<string, string> = {};
+  if (groqKey) {
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${groqKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [{ role: 'user', content: prompt }],
+          response_format: { type: 'json_object' }
+        })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const text = data.choices?.[0]?.message?.content;
+        if (text) {
+          return { text, provider: 'groq', model: 'llama-3.3-70b-versatile', fallbackTriggered: true };
+        }
+      }
+    } catch (e: any) {
+      console.warn('[AI Service] Groq call failed...', e.message);
+    }
+  }
 
-    PERSONAS_CONFIG.forEach(p => {
-        let score = 0;
-        p.keywords.forEach(k => { if (fullText.includes(k.toLowerCase())) score += 5; });
-        if (fullText.includes(p.title.toLowerCase())) score += 10;
-        p.domain.forEach(d => { if (fullText.includes(d.toLowerCase())) score += 3; });
+  throw new Error('All AI providers failed or no API keys configured.');
+}
 
-        scores[p.id] = score;
-        if (score > 0) reasons[p.id] = `Matched on keywords: ${p.keywords.filter(k => fullText.includes(k.toLowerCase())).join(', ')}`;
+// --- Intent Calibration ---
+
+export function getDeterministicPanelIDs(intentText: string): string[] {
+  const text = (intentText || '').toLowerCase();
+  const validIDs = PERSONAS_CONFIG.map(p => p.id);
+  const matched: string[] = [];
+
+  for (const persona of PERSONAS_CONFIG) {
+    if (persona.keywords.some(kw => text.includes(kw.toLowerCase()))) {
+      matched.push(persona.id);
+    }
+  }
+
+  if (matched.length > 0) {
+    return [...new Set(matched)].slice(0, 3);
+  }
+
+  return ['p1', 'p3'].filter(id => validIDs.includes(id));
+}
+
+export const calibrateIntent = async (role: string, jobDescription?: string): Promise<CalibrateResponse> => {
+  const intentText = (role || '').trim();
+  if (!intentText || intentText.length < 2) {
+    throw new Error('Please provide a more detailed job description or career goal.');
+  }
+
+  const validPersonaIDs = PERSONAS_CONFIG.map(p => p.id);
+  const isTechRole = /engineer|developer|software|coding|backend|frontend|fullstack|devops|data scientist|programmer/i.test(intentText);
+
+  const defaultControls: SessionControls = {
+    difficulty: 'intermediate',
+    totalQuestions: 5,
+    includeBehavioral: true,
+    includeCoding: isTechRole,
+    timePerQuestion: '90s',
+    deliveryMode: 'exam',
+    reasoningMode: isTechRole ? 'classic_technical' : 'classic_behavioral',
+    sourceMode: jobDescription ? 'job_description' : 'question_bank'
+  };
+
+  const defaultJdInsights: JDInsights = {
+    role: intentText,
+    level: 'Mid-Level',
+    mustHaveSkills: ['Problem Solving', 'Communication'],
+    niceToHave: ['Domain Knowledge'],
+    domains: isTechRole ? ['Software Engineering'] : [intentText],
+    tools: isTechRole ? ['Git'] : [],
+    softSkills: ['Teamwork', 'Communication'],
+    competencyWeights: { PROBLEM_FRAMING: 0.5, TRADEOFF_CLARITY: 0.5 }
+  };
+
+  const personasSummary = PERSONAS_CONFIG.map(p => `- ID: ${p.id}, Name: ${p.name}, Title: ${p.title}, Focus: ${p.focus}, Domain: ${p.domain.join('/')}, Keywords: ${p.keywords.join(', ')}`).join('\n');
+
+  const masterPrompt = `You are an expert talent acquisition strategist.
+CANDIDATE GOAL/ROLE: "${intentText}"
+JOB DESCRIPTION: "${jobDescription || 'None'}"
+
+AVAILABLE INTERVIEW PANEL PERSONAS:
+${personasSummary}
+
+Select 1 to 3 best fitting panel persona IDs from the available list above.
+
+OUTPUT STRICT JSON ONLY:
+{
+  "recommendedRole": "Normalized Role Title",
+  "recommendedPanelIDs": ["p1", "p2"],
+  "matchReasons": {
+    "p1": "Reason for selecting p1",
+    "p2": "Reason for selecting p2"
+  },
+  "suggestedControls": {
+    "difficulty": "starter|intermediate|expert",
+    "totalQuestions": 5,
+    "includeBehavioral": true,
+    "includeCoding": ${isTechRole},
+    "timePerQuestion": "90s",
+    "deliveryMode": "exam",
+    "reasoningMode": "${isTechRole ? 'classic_technical' : 'classic_behavioral'}"
+  },
+  "jdInsights": {
+    "role": "Normalized Role Title",
+    "level": "Mid-Level",
+    "mustHaveSkills": ["Skill 1"],
+    "niceToHave": ["Skill 2"],
+    "domains": ["Domain 1"],
+    "tools": ["Tool 1"],
+    "softSkills": ["Communication"],
+    "competencyWeights": { "PROBLEM_FRAMING": 0.5, "TRADEOFF_CLARITY": 0.5 }
+  }
+}`;
+
+  try {
+    const { text } = await exports.callWithFallback(masterPrompt);
+    const rawData = extractJson(text || '{}');
+    const rawParsed = RawCalibrateResponseSchema.parse(rawData);
+
+    const rawIDs = rawParsed.recommendedPanelIDs || rawParsed.panelIDs || [];
+    let matchedIDs: string[] = [];
+    if (Array.isArray(rawIDs)) {
+      matchedIDs = [...new Set(rawIDs.filter((id: any) => typeof id === 'string' && validPersonaIDs.includes(id)))];
+    }
+
+    if (matchedIDs.length === 0) {
+      matchedIDs = getDeterministicPanelIDs(intentText);
+    }
+    matchedIDs = matchedIDs.slice(0, 3);
+
+    const matchReasons: Record<string, string> = {};
+    for (const id of matchedIDs) {
+      const persona = PERSONAS_CONFIG.find(p => p.id === id);
+      if (rawParsed.matchReasons && rawParsed.matchReasons[id] && typeof rawParsed.matchReasons[id] === 'string') {
+        matchReasons[id] = rawParsed.matchReasons[id];
+      } else {
+        matchReasons[id] = `Matched ${persona?.name || id} (${persona?.title || 'Evaluator'}) based on expertise in ${persona?.focus || intentText}.`;
+      }
+    }
+
+    const payload = {
+      recommendedPanelIDs: matchedIDs,
+      recommendedRole: String(rawParsed.recommendedRole || rawParsed.role || intentText),
+      matchReasons,
+      suggestedControls: {
+        ...defaultControls,
+        ...(rawParsed.suggestedControls && typeof rawParsed.suggestedControls === 'object' ? rawParsed.suggestedControls : {})
+      },
+      jdInsights: {
+        ...defaultJdInsights,
+        ...(rawParsed.jdInsights && typeof rawParsed.jdInsights === 'object' ? rawParsed.jdInsights : {})
+      },
+      fallbackUsed: false,
+    };
+
+    return CalibrateResponseSchema.parse(payload);
+  } catch (err) {
+    const fallbackIDs = getDeterministicPanelIDs(intentText);
+    const fallbackMatchReasons: Record<string, string> = {};
+    fallbackIDs.forEach(id => {
+      const persona = PERSONAS_CONFIG.find(p => p.id === id);
+      fallbackMatchReasons[id] = `Assigned ${persona?.name || id} for ${intentText} based on role keywords.`;
     });
 
-    if (!scores['p1']) scores['p1'] = 1;
-
-    const sortedIDs = Object.keys(scores).sort((a, b) => scores[b] - scores[a]).slice(0, 3);
-
-    return {
-        recommendedPanelIDs: sortedIDs.length > 0 ? sortedIDs : ['p1', 'p2', 's1'],
-        recommendedRole: intent || 'Candidate',
-        matchReasons: reasons
+    const fallbackPayload = {
+      recommendedPanelIDs: fallbackIDs,
+      recommendedRole: intentText,
+      matchReasons: fallbackMatchReasons,
+      suggestedControls: defaultControls,
+      jdInsights: defaultJdInsights,
+      fallbackUsed: true,
     };
+
+    return CalibrateResponseSchema.parse(fallbackPayload);
+  }
 };
 
-// --- Plan Generation ---
+export function createDeterministicQuestionId(role: string, mode: string, questionText: string, index: number): string {
+  const normRole = (role || 'role').toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const normMode = (mode || 'mode').toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const normText = (questionText || 'q').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 30);
+  let hash = 0;
+  for (let i = 0; i < normText.length; i++) {
+    hash = (hash * 31 + normText.charCodeAt(i)) >>> 0;
+  }
+  return `q_${normRole}_${normMode}_${index}_${hash.toString(16)}`;
+}
+
+// --- Plan Generation & Fallback ---
+
+export const buildDeterministicInterviewPlan = (
+  role: string,
+  intentText: string,
+  sessionControls: SessionControls,
+  selectedPanelIDs: string[] = ['p1', 'p3']
+): InterviewPlan => {
+  const safePanelIDs = selectedPanelIDs.length ? selectedPanelIDs : ['p1', 'p3'];
+  const total = Math.max(1, Math.min(sessionControls.totalQuestions || 5, 10));
+  const candidateRole = role || intentText || 'Candidate';
+  const isTechRole = /engineer|developer|software|coding|backend|frontend|fullstack|devops|data scientist|programmer/i.test(candidateRole);
+
+  const bank = [
+    {
+      phase: 'introduction',
+      question: `Walk me through your background and key experience relevant to the ${candidateRole} position.`,
+      expectedSignals: ['Role alignment', 'Clear communication', 'Relevant experience'],
+    },
+    {
+      phase: 'scenario',
+      question: `Describe a challenging problem or project in your recent work. What approach did you take to frame and solve it?`,
+      expectedSignals: ['Problem framing', 'Analytical thinking', 'Ownership'],
+    },
+    {
+      phase: isTechRole ? 'technical' : 'situational',
+      question: isTechRole
+        ? `What key technical trade-offs do you evaluate when designing architecture or choosing tools for scale?`
+        : `How do you prioritize competing tasks and manage stakeholder expectations when deadlines are tight?`,
+      expectedSignals: isTechRole ? ['Technical trade-offs', 'Architectural rigor'] : ['Prioritization', 'Stakeholder management'],
+    },
+    {
+      phase: 'behavioral',
+      question: `Tell me about a situation where you experienced disagreement within your team. How did you handle it to reach consensus?`,
+      expectedSignals: ['Conflict resolution', 'Empathy', 'Professionalism'],
+    },
+    {
+      phase: 'reflection',
+      question: `Looking back at a major project, what key lesson did you learn and what would you do differently next time?`,
+      expectedSignals: ['Self-reflection', 'Growth mindset', 'Continuous improvement'],
+    },
+  ];
+
+  const questionSet = Array.from({ length: total }, (_, i) => {
+    const template = bank[i % bank.length];
+    const personaFocus = safePanelIDs[i % safePanelIDs.length];
+    return {
+      id: createDeterministicQuestionId(candidateRole, sessionControls.reasoningMode || 'classic_behavioral', template.question, i + 1),
+      phase: template.phase,
+      difficulty: sessionControls.difficulty,
+      question: template.question,
+      expectedSignals: template.expectedSignals,
+      personaFocus,
+    };
+  });
+
+  const normalizedControls: SessionControls = {
+    ...sessionControls,
+    totalQuestions: questionSet.length,
+  };
+
+  const dimensionWeights = DEFAULT_WEIGHTS_BY_MODE[sessionControls.reasoningMode || 'classic_behavioral'] || DEFAULT_WEIGHTS_BY_MODE['classic_behavioral'];
+
+  return InterviewPlanSchema.parse({
+    meta: {
+      intent: intentText,
+      controls: normalizedControls,
+      planSource: 'deterministic_fallback',
+    },
+    jdInsights: {
+      source: 'question_bank',
+      role: candidateRole,
+      level: 'Mid-Level',
+      mustHaveSkills: ['Problem Solving', 'Communication'],
+      niceToHave: ['Domain Knowledge'],
+      domains: isTechRole ? ['Software Engineering'] : (candidateRole ? [candidateRole] : []),
+      tools: isTechRole ? ['Git'] : [],
+      softSkills: ['Teamwork', 'Communication'],
+      competencyWeights: dimensionWeights,
+    },
+    questionSet,
+  });
+};
 
 export const generateInterviewPlan = async (
-    intentText: string,
-    jdText: string | null,
-    sessionControls: SessionControls,
-    selectedPanelIDs: string[]
-) => {
+  role: string,
+  intentText: string,
+  sessionControls: SessionControls,
+  jdText?: string,
+  resumeText?: string,
+  selectedPanelIDs: string[] = ['p1', 'p3']
+): Promise<InterviewPlan> => {
+  if (!intentText || intentText.trim().length < 2) throw new Error('Goal too short');
 
-    if (!intentText || intentText.trim().length < 5) throw new Error('Goal too short');
-    if (!selectedPanelIDs || selectedPanelIDs.length === 0) throw new Error('No personas selected');
+  const validPersonaIDs = PERSONAS_CONFIG.map(p => p.id);
+  const safePanelIDs = (selectedPanelIDs || []).filter(id => validPersonaIDs.includes(id));
+  if (safePanelIDs.length === 0) {
+    safePanelIDs.push('p1', 'p3');
+  }
 
-    const selectedPersonas = PERSONAS_CONFIG.filter(p => selectedPanelIDs.includes(p.id));
+  const selectedPersonas = safePanelIDs.map(id => PERSONAS_CONFIG.find(p => p.id === id)).filter(Boolean);
+  const panelSummary = selectedPersonas.map(p => `- ID: ${p!.id}, Name: ${p!.name}, Title: ${p!.title}, Focus: ${p!.focus}, Domain: ${p!.domain.join('/')}, Keywords: ${p!.keywords.join(', ')}`).join('\n');
 
-    // TODO: Persist richer session history in Supabase.
-    const excludedQuestions: string[] = [];
+  const sessionMode = sessionControls.reasoningMode || 'classic_behavioral';
+  const activeDimensions = ACTIVE_DIMENSIONS_BY_MODE[sessionMode] || ACTIVE_DIMENSIONS_BY_MODE['classic_behavioral'];
+  const dimensionWeights = DEFAULT_WEIGHTS_BY_MODE[sessionMode] || DEFAULT_WEIGHTS_BY_MODE['classic_behavioral'];
 
-    const difficultyPrompt = sessionControls.difficulty === 'starter'
-        ? "Focus on basic concepts."
-        : sessionControls.difficulty === 'expert'
-            ? "Focus on advanced system design and edge cases."
-            : "Mixed difficulty.";
+  const masterPrompt = `You are an expert interview strategist. Create a comprehensive interview plan.
+  
+  CONTEXT:
+  Role: "${role}"
+  Intent: "${intentText}"
+  Difficulty: ${sessionControls.difficulty}
+  Session Mode: ${sessionMode}
+  Total Questions Requested: ${sessionControls.totalQuestions}
+  
+  SELECTED INTERVIEW PANEL PERSONAS (personaFocus MUST be one of these IDs):
+  ${panelSummary}
+  
+  INPUT MATERIAL:
+  JD: ${jdText ? `"""${jdText}"""` : 'None'}
+  Resume: ${resumeText ? `"""${resumeText}"""` : 'None'}
 
-    const codingInstruction = sessionControls.includeCoding
-        ? `MANDATORY: Include 2-3 coding questions. Assign 'language' (e.g., 'python').`
-        : "Do not include coding questions.";
+  ACTIVE DIMENSIONS:
+  ${activeDimensions.map(d => `- ${APPROVED_DIMENSIONS[d].name}: ${APPROVED_DIMENSIONS[d].definition}`).join('\n')}
 
-    const sessionMode = sessionControls.sessionMode || 'coach';
-    const activeDimensions = ACTIVE_DIMENSIONS_BY_MODE[sessionMode] || ACTIVE_DIMENSIONS_BY_MODE['classic_behavioral'];
-    const dimensionWeights = DEFAULT_WEIGHTS_BY_MODE[sessionMode] || DEFAULT_WEIGHTS_BY_MODE['classic_behavioral'];
+  OUTPUT SCHEMA (JSON):
+  {
+    "meta": {
+      "intent": "${intentText}"
+    },
+    "jdInsights": { 
+      "source": "job_description",
+      "role": "${role}", 
+      "level": "Senior", 
+      "mustHaveSkills": ["Problem Solving"],
+      "niceToHave": ["System Architecture"],
+      "domains": ["Software"],
+      "tools": ["Git"],
+      "softSkills": ["Leadership"],
+      "competencyWeights": ${JSON.stringify(dimensionWeights)}
+    },
+    "questionSet": [
+      {
+        "phase": "behavioral|scenario|technical",
+        "difficulty": "${sessionControls.difficulty}",
+        "question": "string question text",
+        "expectedSignals": ["signal 1", "signal 2"],
+        "personaFocus": "${safePanelIDs[0]}"
+      }
+    ]
+  }`;
 
-    const masterPrompt = `You are an expert interview strategist. Create a comprehensive interview plan.
-    
-    CONTEXT:
-    User Intent: "${intentText}"
-    Difficulty: ${sessionControls.difficulty}
-    Session Mode: ${sessionMode}
-    ${codingInstruction}
-    
-    PANEL:
-    ${selectedPersonas.map(p => `- ${p.name} (${p.title}): ${p.focus} | Style: ${p.style}`).join('\n')}
+  try {
+    const { text } = await exports.callWithFallback(masterPrompt);
+    const rawData = extractJson(text || '{}');
+    const rawParsed = RawInterviewPlanSchema.parse(rawData);
 
-    INPUT MATERIAL:
-    ${jdText ? `"""\n${jdText}\n"""` : 'None'}
-
-    ACTIVE DIMENSIONS FOR THIS MODE:
-    ${activeDimensions.map(d => `- ${APPROVED_DIMENSIONS[d].name}: ${APPROVED_DIMENSIONS[d].definition}`).join('\n')}
-
-    CONTROLS:
-    - Total Questions: ${sessionControls.totalQuestions}
-    - Ignore these recent questions: ${JSON.stringify(excludedQuestions)}
-    
-    1. Extract granular skill categories.
-    2. Define weights for the ACTIVE DIMENSIONS.
-    3. Generate the question set.
-       - Each question must test one or more ACTIVE DIMENSIONS.
-       - Ensure every question has 'expectedSignals' mapped to sub-signals of the dimensions.
-
-    OUTPUT SCHEMA (JSON):
-    {
-      "jdInsights": { 
-        "role": "string", 
-        "level": "string", 
-        "mustHaveSkills": ["string"],
-        "niceToHave": ["string"],
-        "domains": ["string"],
-        "tools": ["string"],
-        "softSkills": ["string"],
-        "competencyWeights": ${JSON.stringify(dimensionWeights)}
-      },
-      "questionSet": [
-        {
-          "phase": "knowledge|process|scenario|behavioral|coding",
-          "dimension": "Dimension Name",
-          "difficulty": "L1-L5",
-          "question": "string",
-          "expectedSignals": ["string"],
-          "personaFocus": "string (Persona ID)",
-          "why": "string",
-          "language": "string (optional)",
-          "timeAllocation": 60
-        }
-      ],
-      "meta": { "estimatedDuration": "string", "focusAreas": ["string"] }
-    }`;
-
-    try {
-        const { text } = await callWithFallback(masterPrompt, { type: 'json_object' });
-        const rawPlan = extractJson(text || '{}');
-        if (!rawPlan || !rawPlan.questionSet) throw new Error("AI returned incomplete plan");
-
-        return rawPlan;
-
-    } catch (err: any) {
-        console.error("Plan Generation Failed:", err);
-        throw new Error(err.message || "Failed to generate plan");
+    if (!rawParsed.questionSet || rawParsed.questionSet.length === 0) {
+      return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs);
     }
+
+    const normalizedQuestions = rawParsed.questionSet.map((q, idx) => {
+      let focus = (q.personaFocus || '').trim();
+      if (!safePanelIDs.includes(focus)) {
+        focus = safePanelIDs[idx % safePanelIDs.length];
+      }
+      return {
+        id: createDeterministicQuestionId(role, sessionMode, q.question, idx + 1),
+        phase: q.phase || 'scenario',
+        difficulty: q.difficulty || sessionControls.difficulty,
+        question: q.question,
+        expectedSignals: q.expectedSignals && q.expectedSignals.length > 0 ? q.expectedSignals : ['Clear reasoning', 'Structured response'],
+        personaFocus: focus,
+        type: q.type,
+        failureModes: q.failureModes,
+        evaluationCriteria: q.evaluationCriteria,
+        rubric: q.rubric,
+        sourceBullets: q.sourceBullets,
+        language: q.language,
+        timeAllocation: q.timeAllocation
+      };
+    });
+
+    const normalizedControls: SessionControls = {
+      ...sessionControls,
+      totalQuestions: normalizedQuestions.length,
+    };
+
+    const normalizedPlan = {
+      meta: {
+        intent: intentText,
+        controls: normalizedControls,
+        planSource: 'provider' as const,
+      },
+      jdInsights: {
+        source: (rawParsed.jdInsights?.source as string) || 'job_description',
+        role: (rawParsed.jdInsights?.role as string) || role,
+        level: (rawParsed.jdInsights?.level as string) || 'Intermediate',
+        mustHaveSkills: Array.isArray(rawParsed.jdInsights?.mustHaveSkills) ? rawParsed.jdInsights.mustHaveSkills as string[] : ['Communication'],
+        niceToHave: Array.isArray(rawParsed.jdInsights?.niceToHave) ? rawParsed.jdInsights.niceToHave as string[] : [],
+        domains: Array.isArray(rawParsed.jdInsights?.domains) ? rawParsed.jdInsights.domains as string[] : ['Engineering'],
+        tools: Array.isArray(rawParsed.jdInsights?.tools) ? rawParsed.jdInsights.tools as string[] : [],
+        softSkills: Array.isArray(rawParsed.jdInsights?.softSkills) ? rawParsed.jdInsights.softSkills as string[] : ['Teamwork'],
+        competencyWeights: dimensionWeights,
+      },
+      questionSet: normalizedQuestions,
+    };
+
+    return InterviewPlanSchema.parse(normalizedPlan);
+  } catch (err) {
+    return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs);
+  }
+};
+
+// --- Assistive Tools ---
+
+export const getHintForQuestion = async (questionText: string, expectedSignals?: string[]): Promise<string> => {
+  if (!questionText) return 'Hint unavailable.';
+  try {
+    const prompt = `Give a concise 1-2 sentence hint for answering this interview question effectively: "${questionText}". Expected signals: ${expectedSignals?.join(', ') || 'None'}. Return JSON: { "hint": "..." }`;
+    const { text } = await exports.callWithFallback(prompt);
+    const parsed = extractJson(text || '{}');
+    return String(parsed.hint || 'Hint unavailable.');
+  } catch (err) {
+    return 'Hint unavailable.';
+  }
+};
+
+export const generateIdealAnswer = async (questionText: string, expectedSignals?: string[], userAnswer?: string): Promise<string> => {
+  if (!questionText) return 'Sample response unavailable.';
+  try {
+    const prompt = `Generate a top-tier STAR format ideal response for this interview question: "${questionText}". Expected signals: ${expectedSignals?.join(', ') || 'None'}. Return JSON: { "idealResponse": "..." }`;
+    const { text } = await exports.callWithFallback(prompt);
+    const parsed = extractJson(text || '{}');
+    return String(parsed.idealResponse || 'Sample response unavailable.');
+  } catch (err) {
+    return 'Sample response unavailable.';
+  }
+};
+
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+
+export const transcribeAudio = async (
+  audioBase64: string,
+  mimeType: string = 'audio/webm'
+): Promise<TranscribeAudioResponse> => {
+  if (!audioBase64 || !audioBase64.trim()) {
+    return TranscribeAudioResponseSchema.parse({
+      status: 'unavailable',
+      transcript: null,
+    });
+  }
+
+  const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  const groqKey = process.env.GROQ_API_KEY;
+
+  if (geminiKey) {
+    try {
+      const ai = new GoogleGenAI({ apiKey: geminiKey });
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  data: audioBase64,
+                  mimeType: mimeType || 'audio/webm',
+                },
+              },
+              {
+                text: 'Transcribe the spoken speech in this audio clip accurately. Return JSON strictly: { "transcript": "exact spoken text" }',
+              },
+            ],
+          },
+        ],
+        config: { responseMimeType: 'application/json' },
+      });
+      if (response.text) {
+        const parsed = extractJson(response.text);
+        const text = (parsed?.transcript || '').trim();
+        if (text) {
+          return TranscribeAudioResponseSchema.parse({
+            status: 'transcribed',
+            transcript: text,
+          });
+        }
+      }
+    } catch (err: any) {
+      console.warn('[AI Service] Gemini audio transcription failed, trying Groq fallback...', err.message);
+    }
+  }
+
+  if (groqKey) {
+    let tmpFilePath: string | null = null;
+    try {
+      const ext = mimeType.includes('wav') ? '.wav' : mimeType.includes('mp3') ? '.mp3' : mimeType.includes('m4a') ? '.m4a' : '.webm';
+      tmpFilePath = path.join(os.tmpdir(), `mockmate_audio_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
+      const buffer = Buffer.from(audioBase64, 'base64');
+      fs.writeFileSync(tmpFilePath, buffer);
+
+      const formData = new FormData();
+      const fileBlob = new Blob([buffer], { type: mimeType });
+      formData.append('file', fileBlob, path.basename(tmpFilePath));
+      formData.append('model', 'whisper-large-v3-turbo');
+      formData.append('response_format', 'json');
+
+      const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${groqKey}`,
+        },
+        body: formData,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const text = (data.text || '').trim();
+        if (text) {
+          return TranscribeAudioResponseSchema.parse({
+            status: 'transcribed',
+            transcript: text,
+          });
+        }
+      }
+    } catch (err: any) {
+      console.warn('[AI Service] Groq Whisper audio transcription failed...', err.message);
+    } finally {
+      if (tmpFilePath && fs.existsSync(tmpFilePath)) {
+        try {
+          fs.unlinkSync(tmpFilePath);
+        } catch (_) {}
+      }
+    }
+  }
+
+  return TranscribeAudioResponseSchema.parse({
+    status: 'unavailable',
+    transcript: null,
+  });
 };
 
 // --- Report Generation ---
 
 export const generateFinalReport = async (
-    history: InterviewTurn[],
-    context: SessionContext
+  history: InterviewTurn[],
+  context: InterviewSessionContext
 ): Promise<FinalReport> => {
-    if (!history || history.length === 0) throw new Error('No interview history to analyze.');
+  if (!history || history.length === 0) throw new Error('No interview history to analyze.');
 
-    // Flatten context to get what we need
-    const jdInsights = context.jdInsights || context.interviewPlan?.jdInsights;
-    if (!jdInsights) throw new Error('Missing job insights to generate report.');
+  const roleParam = context.candidateRole || "Candidate";
+  const sessionMode = context.controls?.reasoningMode || 'classic_behavioral';
+  const activeDimensions = ACTIVE_DIMENSIONS_BY_MODE[sessionMode] || ACTIVE_DIMENSIONS_BY_MODE['classic_behavioral'];
 
-    const roleParam = context.candidateRole || "Candidate";
-    const selectedPersonas = PERSONAS_CONFIG.filter(p => context.selectedPanelIDs?.includes(p.id));
-    const panelNames = selectedPersonas.map(p => `${p.name} (${p.title})`).join(", ");
+  const transcriptText = history.map((turn, i) => `
+  TURN ${i + 1}:
+  Interviewer (${turn.interviewer}): "${turn.question}"
+  Candidate: "${turn.candidateResponse || '[No response provided]'}"
+  `).join('\n');
 
-    const transcriptText = history.map((turn, i) => `
-    TURN ${i + 1}:
-    Interviewer (${turn.interviewer}): "${turn.question}"
-    Candidate: "${turn.candidateResponse}"
-    `).join('\n');
+  const masterPrompt = `You are a world-class Interview Bar Raiser. Analyze this mock interview session and generate a canonical report.
 
-    const sessionMode = context.controls?.sessionMode || 'coach';
-    const activeDimensions = ACTIVE_DIMENSIONS_BY_MODE[sessionMode] || ACTIVE_DIMENSIONS_BY_MODE['classic_behavioral'];
+  TRANSCRIPT:
+  ${transcriptText}
 
-    const masterPrompt = `You are a world-class Interview Bar Raiser. Analyze this mock interview session and generate a "Hiring Committee" report.
-    
-    PANEL OF EXPERTS:
-    ${selectedPersonas.map(p => `- ${p.name} (${p.title}): ${p.focus}`).join('\n')}
+  ACTIVE DIMENSIONS:
+  ${activeDimensions.map(d => `- ${APPROVED_DIMENSIONS[d].name}`).join('\n')}
 
-    TRANSCRIPT:
-    ${transcriptText}
-
-    TASK:
-    Analyze the candidate's performance across exactly these 10 Approved Dimensions.
-    The primary focus for this "${sessionMode}" session are these ACTIVE DIMENSIONS:
-    ${activeDimensions.map(d => `- ${APPROVED_DIMENSIONS[d].name}`).join('\n')}
-
-    SCORING RUBRIC (Anchor 1-5):
-    1: Panic/Rush - Jumps to solutions, bluffs, or collapses under minor pushback.
-    2: Surface - Generic, basic pros/cons, fails to adapt when probed.
-    3: Standard - Practical, STAR-based, defines scope, identifies main dependencies.
-    4: Insightful - Identifies hidden risks, make GAPs explicit, recalibrates mid-stream.
-    5: Elite - Anticipates failure modes, challenges premises, turns pushback into deep reasoning.
-
-    ANTI-GAMING RULES:
-    1. NO REWARD FOR VERBOSITY: Ignore rambling that adds no reasoning value.
-    2. TONE VS CONTENT: Do not infer elite performance from polished language or confidence theater alone.
-    3. EVIDENCE-FIRST: Scores >3 require EXPLICIT logic-level evidence (not generic praise).
-    4. REJECT JARGON: Keywords without functional explanation do NOT count as evidence.
-
-    REQUIRED OUTPUT SCHEMA (JSON):
-    {
-      "overallSummary": "string (Executive summary)",
-      "evaluationModel": "v1_dimensions",
-      "readiness": { "status": "INTERVIEW_READY|ALMOST_READY|NOT_READY", "reasoning": "string" },
-      "quantitativeAnalysis": {
-        "dimension_scores": [
-          {
-            "dimension": "Dimension Name",
-            "score_status": "scored|insufficient_evidence|not_tested",
-            "anchor_score": 1-5 (null if not scored),
-            "normalized_score": 0-100 (null if not scored),
-            "reason": "string",
-            "evidence": ["Quote or observation 1", "Quote or observation 2"],
-            "confidence": "low|medium|high"
-          }
-        ]
-      },
-      "trajectoryReplay": [
+  REQUIRED OUTPUT SCHEMA (JSON):
+  {
+    "overallSummary": "Executive summary of interview performance",
+    "evaluationModel": "mockmate_v1_canonical",
+    "readiness": { "status": "INTERVIEW_READY|ALMOST_READY|NOT_READY|NOT_ASSESSED", "reasoning": "Reasoning summary" },
+    "quantitativeAnalysis": {
+      "dimension_scores": [
         {
-          "turnRange": [start, end],
-          "dimension": "Dimension Name",
-          "observation": "string",
-          "delta": "improving|declining|stable",
-          "reasoning": "string"
+          "dimension": "PROBLEM_FRAMING",
+          "score_status": "scored|insufficient_evidence|not_tested",
+          "anchor_score": 4,
+          "normalized_score": 80,
+          "reason": "Clear structured approach",
+          "evidence": ["Candidate outlined assumptions"],
+          "confidence": "high"
         }
-      ],
-      "auditLayer": [
-        {
-          "title": "string",
-          "dimension": "Dimension Name",
-          "gap": "string",
-          "impact": "critical|moderate|marginal",
-          "mitigation": "string"
-        }
-      ],
-      "advisoryPanel": [
-        { "persona": "Persona ID", "summary": "string", "dimensionScores": [ { "dimension": "string", "anchor_score": 1-5 } ] }
-      ],
-      "questionPerformance": [
-        { "question_text": "string", "user_transcript": "string", "feedback": "string", "strengths": ["string"], "improvements": ["string"] }
-      ],
-      "biggestRiskArea": { "title": "string", "observation": "string", "mitigation": "string" },
-      "coachPack": {
-        "title": "string",
-        "redoNow": { "question": "string", "instruction": "string" },
-        "micro_drills": [{ "weakness": "string", "drill_prompt": "string", "focus_point": "string" }]
+      ]
+    },
+    "advisoryPanel": [
+      { "name": "Lead Evaluator", "assessment": "Performance assessment", "hireRecommendation": true }
+    ],
+    "questionPerformance": [
+      { 
+        "question_text": "Q1 text", 
+        "user_transcript": "Candidate text", 
+        "feedback": "Detailed feedback",
+        "strengths": ["Structured response"],
+        "improvements": ["More specific metrics"]
       }
-    }`;
+    ],
+    "biggestRiskArea": { "title": "Risk Title", "observation": "Observed gap", "mitigation": "Recommended fix" },
+    "coachPack": {
+      "title": "Action Plan",
+      "redoNow": { "question": "Q1", "instruction": "Try again with STAR format" },
+      "micro_drills": [{ "weakness": "System bounds", "drill_prompt": "Practice scale limits", "focus_point": "Latency constraints" }]
+    },
+    "trajectoryReplay": [
+      { "summary": "Turn 1-2 summary", "keyMoments": ["Key moment 1"] }
+    ],
+    "auditLayer": [
+      { "biasDetected": false, "notes": "No evaluation bias detected" }
+    ],
+    "simplifiedScore": 80,
+    "topStrength": "Clear problem structuring",
+    "topWeakness": "Quantified result metrics",
+    "estimatedSessionsToReady": 2,
+    "quickWins": ["State assumptions early"],
+    "prioritizedActions": [{ "action": "Practice metric articulation", "impact": "high" }]
+  }`;
 
-    const { text: responseText, provider: providerUsed, model: modelName, fallbackTriggered } = await callWithFallback(masterPrompt, { type: 'json_object' });
+  const { text } = await exports.callWithFallback(masterPrompt);
+  const reportData = extractJson(text || '{}');
+  if (!reportData || !reportData.overallSummary) throw new Error("Incomplete or invalid report returned by provider");
 
-    try {
-        const reportData = extractJson(responseText || '{}');
-        if (!reportData.overallSummary) throw new Error("Incomplete report generated by AI");
+  const rawReport = RawFinalReportSchema.parse(reportData);
 
-        // --- Post-Processing / Validation ---
+  const validStatuses = ['INTERVIEW_READY', 'ALMOST_READY', 'NOT_READY', 'NOT_ASSESSED'];
+  const providerStatus = rawReport.readiness?.status;
+  const readinessStatus = validStatuses.includes(providerStatus || '') ? providerStatus : 'NOT_ASSESSED';
 
-        // 1. Validate Dimensions
-        if (reportData.quantitativeAnalysis?.dimension_scores) {
-            reportData.quantitativeAnalysis.dimension_scores = reportData.quantitativeAnalysis.dimension_scores.filter(
-                (s: any) => Object.keys(APPROVED_DIMENSIONS).includes(s.dimension.toUpperCase().replace(/\s/g, '_')) ||
-                            Object.values(APPROVED_DIMENSIONS).some(ad => ad.name === s.dimension)
-            );
-        }
+  const rawDimensionScores = rawReport.quantitativeAnalysis?.dimension_scores || [];
+  let scoredTotal = 0;
+  let scoredCount = 0;
 
-        // 2. Validate Turn Ranges in Trajectory
-        if (reportData.trajectoryReplay) {
-            reportData.trajectoryReplay = reportData.trajectoryReplay.map((p: any) => {
-                if (p.turnRange && Array.isArray(p.turnRange)) return p;
-                return { ...p, turnRange: [p.turnIndex || 1, p.turnIndex || 1] };
-            });
-        }
+  const dimensionScores = rawDimensionScores.map((ds: any) => {
+    const hasCanonicalKey = Boolean(ds.dimension && APPROVED_DIMENSIONS[ds.dimension as keyof typeof APPROVED_DIMENSIONS]);
+    const isScoreStatusScored = ds.score_status === 'scored';
+    const isAnchorScoreValid = typeof ds.anchor_score === 'number' && ds.anchor_score >= 0 && ds.anchor_score <= 5;
+    const isNormalizedScoreValid = typeof ds.normalized_score === 'number' && ds.normalized_score >= 0 && ds.normalized_score <= 100;
+    const hasReason = typeof ds.reason === 'string' && ds.reason.trim().length > 0;
+    const hasEvidence = Array.isArray(ds.evidence) && ds.evidence.length > 0 && ds.evidence.every((e: any) => typeof e === 'string' && e.trim().length > 0);
+    const hasConfidence = typeof ds.confidence === 'string' && ['high', 'medium', 'low'].includes(ds.confidence);
 
-        const dimensionScores = reportData.quantitativeAnalysis?.dimension_scores || [];
-        const activeScores = dimensionScores.filter((s: any) => s.score_status === 'scored');
-        
-        const avgNormalizedScore = activeScores.length > 0
-            ? activeScores.reduce((sum: number, s: any) => sum + (s.normalized_score || 0), 0) / activeScores.length
-            : 0;
-        
-        const simplifiedScore = Math.round(avgNormalizedScore);
+    const isValidScored = hasCanonicalKey && isScoreStatusScored && isAnchorScoreValid && isNormalizedScoreValid && hasReason && hasEvidence && hasConfidence;
 
-        // Extract top strength and weakness
-        const sortedByScore = [...activeScores].sort((a: any, b: any) => (b.normalized_score || 0) - (a.normalized_score || 0));
-        const topStrength = sortedByScore[0]?.dimension || 'Consistent Delivery';
-        const topWeakness = sortedByScore[sortedByScore.length - 1]?.dimension ||
-            reportData.biggestRiskArea?.title || 'Systemic Depth';
-
-        // Estimate sessions to ready based on score
-        let estimatedSessionsToReady = 0;
-        if (simplifiedScore < 60) estimatedSessionsToReady = 4;
-        else if (simplifiedScore < 70) estimatedSessionsToReady = 3;
-        else if (simplifiedScore < 80) estimatedSessionsToReady = 2;
-        else if (simplifiedScore < 90) estimatedSessionsToReady = 1;
-
-        // Generate quick wins from improvements
-        const quickWins: string[] = [];
-        const allImprovements = (reportData.questionPerformance || [])
-            .flatMap((q: any) => q.improvements || [])
-            .filter((improvement: string) => improvement && improvement.length > 0)
-            .slice(0, 3);
-
-        if (allImprovements.length > 0) {
-            quickWins.push(...allImprovements);
-        } else {
-            quickWins.push('Practice the STAR method for behavioral questions');
-            quickWins.push('Add specific metrics and numbers to your examples');
-        }
-
-        // Generate prioritized actions
-        const prioritizedActions: any[] = [];
-
-        // Action 1: From biggest risk
-        if (reportData.biggestRiskArea) {
-            prioritizedActions.push({
-                title: reportData.biggestRiskArea.title,
-                impact: 'high',
-                timeEstimate: '15 min',
-                exercise: reportData.biggestRiskArea.mitigation || 'Practice answering questions in this area with specific examples'
-            });
-        }
-
-        // Actions 2-3: From coach pack drills
-        if (reportData.coachPack?.micro_drills) {
-            reportData.coachPack.micro_drills.slice(0, 2).forEach((drill: any, i: number) => {
-                const impactLevel = i === 0 ? 'high' : 'medium';
-                prioritizedActions.push({
-                    title: drill.weakness,
-                    impact: impactLevel,
-                    timeEstimate: '10 min',
-                    exercise: drill.drill_prompt
-                });
-            });
-        }
-
-        const report = {
-            ...reportData,
-            evaluationModel: "v1_dimensions",
-            jdInsights: jdInsights,
-            competencyWeights: context.competencyWeights || [],
-            // Enhanced fields
-            simplifiedScore,
-            topStrength,
-            topWeakness,
-            estimatedSessionsToReady,
-            quickWins,
-            prioritizedActions: prioritizedActions.slice(0, 3),
-            // Provider Metadata
-            _metadata: {
-                provider_used: providerUsed,
-                model_name: modelName,
-                fallback_triggered: fallbackTriggered,
-                session_mode: context.controls?.sessionMode || 'unknown',
-                role_family: context.candidateRole || 'unknown',
-                active_dimensions: dimensionScores.map((d: any) => d.dimension),
-                status_counts: {
-                    scored: dimensionScores.filter((d: any) => d.score_status === 'scored').length,
-                    insufficient_evidence: dimensionScores.filter((d: any) => d.score_status === 'insufficient_evidence').length,
-                    not_tested: dimensionScores.filter((d: any) => d.score_status === 'not_tested').length
-                }
-            }
-        } as FinalReport;
-
-        // Validation against v1.1 requirements
-        const isValid = !!(report.overallSummary && report.quantitativeAnalysis?.dimension_scores);
-        if (!isValid) throw new Error("Generated report failed v1.1 schema validation");
-
-        return report;
-
-    } catch (err: any) {
-        console.error("Report Generation Failed:", err);
-        throw new Error(err.message || "Failed to generate report");
+    if (isValidScored) {
+      scoredTotal += ds.normalized_score;
+      scoredCount++;
+      return {
+        dimension: ds.dimension as any,
+        dimensionName: ds.dimensionName || APPROVED_DIMENSIONS[ds.dimension as keyof typeof APPROVED_DIMENSIONS]?.name || 'Dimension',
+        score_status: 'scored' as const,
+        anchor_score: ds.anchor_score,
+        normalized_score: ds.normalized_score,
+        reason: String(ds.reason).trim(),
+        evidence: ds.evidence.map((e: any) => String(e).trim()),
+        confidence: ds.confidence as any
+      };
+    } else {
+      const dimKey = hasCanonicalKey ? ds.dimension : 'PROBLEM_FRAMING';
+      return {
+        dimension: dimKey as any,
+        dimensionName: APPROVED_DIMENSIONS[dimKey as keyof typeof APPROVED_DIMENSIONS]?.name || 'Problem Framing',
+        score_status: (ds.score_status === 'not_tested' ? 'not_tested' : 'insufficient_evidence') as any,
+        anchor_score: null,
+        normalized_score: null,
+        reason: ds.reason ? String(ds.reason).trim() : 'Insufficient evidence to evaluate dimension.',
+        evidence: [],
+        confidence: 'low' as const
+      };
     }
+  });
+
+  const isUnscored = scoredCount === 0;
+  const finalSimplifiedScore = isUnscored ? null : Math.round(scoredTotal / scoredCount);
+  const finalReadinessStatus = isUnscored ? 'NOT_ASSESSED' : readinessStatus;
+  const finalReadinessReasoning = isUnscored 
+    ? 'Session evaluation could not be completed due to insufficient evidence or unscored dimensions.'
+    : (rawReport.readiness?.reasoning || 'Session evaluation complete.');
+  const finalOverallSummary = isUnscored
+    ? 'Session ended before a reliable evaluation could be completed.'
+    : rawReport.overallSummary;
+
+  const normalizedReport = {
+    overallSummary: finalOverallSummary,
+    evaluationModel: 'mockmate_v1_canonical' as const,
+    readiness: {
+      status: finalReadinessStatus as any,
+      reasoning: finalReadinessReasoning
+    },
+    quantitativeAnalysis: {
+      dimension_scores: dimensionScores
+    },
+    advisoryPanel: isUnscored ? [] : (rawReport.advisoryPanel || [])
+      .filter((ap: any) => ap && typeof ap.name === 'string' && ap.name.trim().length > 0 && typeof ap.assessment === 'string' && ap.assessment.trim().length > 0)
+      .map((ap: any) => ({
+        name: String(ap.name).trim(),
+        assessment: String(ap.assessment).trim(),
+        hireRecommendation: typeof ap.hireRecommendation === 'boolean' ? ap.hireRecommendation : null
+      })),
+    questionPerformance: (rawReport.questionPerformance || []).map((qp: any, idx: number) => ({
+      question_text: qp.question_text || history[idx]?.question || 'Question',
+      question_phase: qp.question_phase || 'scenario',
+      user_transcript: qp.user_transcript || history[idx]?.candidateResponse || '',
+      max_impact_response: qp.max_impact_response,
+      feedback: qp.feedback ? String(qp.feedback).trim() : 'Evaluation unavailable.',
+      strengths: Array.isArray(qp.strengths) ? qp.strengths.filter((s: any) => typeof s === 'string' && s.trim().length > 0) : [],
+      improvements: Array.isArray(qp.improvements) ? qp.improvements.filter((i: any) => typeof i === 'string' && i.trim().length > 0) : []
+    })),
+    biggestRiskArea: (isUnscored || !rawReport.biggestRiskArea || !rawReport.biggestRiskArea.title || !rawReport.biggestRiskArea.observation || !rawReport.biggestRiskArea.mitigation) ? null : {
+      title: String(rawReport.biggestRiskArea.title).trim(),
+      observation: String(rawReport.biggestRiskArea.observation).trim(),
+      mitigation: String(rawReport.biggestRiskArea.mitigation).trim()
+    },
+    coachPack: (isUnscored || !rawReport.coachPack || !rawReport.coachPack.title || !rawReport.coachPack.redoNow) ? null : {
+      title: String(rawReport.coachPack.title).trim(),
+      redoNow: typeof rawReport.coachPack.redoNow === 'object' && rawReport.coachPack.redoNow?.question && rawReport.coachPack.redoNow?.instruction ? {
+        question: String(rawReport.coachPack.redoNow.question).trim(),
+        instruction: String(rawReport.coachPack.redoNow.instruction).trim()
+      } : {
+        question: history[0]?.question || 'Question',
+        instruction: String(rawReport.coachPack.redoNow).trim()
+      },
+      micro_drills: (rawReport.coachPack.micro_drills || [])
+        .filter((md: any) => md && typeof md === 'object' && md.weakness && md.drill_prompt)
+        .map((md: any) => ({
+          weakness: String(md.weakness).trim(),
+          drill_prompt: String(md.drill_prompt).trim(),
+          focus_point: String(md.focus_point || 'Clarity').trim()
+        }))
+    },
+    trajectoryReplay: isUnscored ? [] : (rawReport.trajectoryReplay || [])
+      .filter((tr: any) => tr && typeof tr.summary === 'string' && tr.summary.trim().length > 0)
+      .map((tr: any) => ({
+        summary: String(tr.summary).trim(),
+        keyMoments: Array.isArray(tr.keyMoments) ? tr.keyMoments.filter((km: any) => typeof km === 'string' && km.trim().length > 0) : []
+      })),
+    auditLayer: isUnscored ? [] : (rawReport.auditLayer || [])
+      .filter((al: any) => al && typeof al.notes === 'string' && al.notes.trim().length > 0 && typeof al.biasDetected === 'boolean')
+      .map((al: any) => ({
+        biasDetected: Boolean(al.biasDetected),
+        notes: String(al.notes).trim()
+      })),
+    simplifiedScore: finalSimplifiedScore,
+    topStrength: isUnscored ? undefined : (rawReport.topStrength ? String(rawReport.topStrength).trim() : undefined),
+    topWeakness: isUnscored ? undefined : (rawReport.topWeakness ? String(rawReport.topWeakness).trim() : undefined),
+    estimatedSessionsToReady: isUnscored ? null : (typeof rawReport.estimatedSessionsToReady === 'number' ? rawReport.estimatedSessionsToReady : null),
+    quickWins: isUnscored ? [] : (Array.isArray(rawReport.quickWins) ? rawReport.quickWins.filter((qw: any) => typeof qw === 'string' && qw.trim().length > 0) : []),
+    prioritizedActions: isUnscored ? [] : (rawReport.prioritizedActions || [])
+      .filter((pa: any) => pa && typeof pa.action === 'string' && pa.action.trim().length > 0 && typeof pa.impact === 'string')
+      .map((pa: any) => ({
+        action: String(pa.action).trim(),
+        impact: pa.impact as any
+      }))
+  };
+
+  return FinalReportSchema.parse(normalizedReport);
 };
 
-export const startInterviewSession = async (
-    userId: string,
-    context: SessionContext
-): Promise<{ sessionId: string; firstMessage: string }> => {
+export const generateAuthoritativeReport = async (userId: string, sessionId: string): Promise<FinalReport> => {
+  await sessionService.markSessionEvaluationProcessing(userId, sessionId);
+  const session = await sessionService.getSession(userId, sessionId);
+  if (!session) throw new Error('Session not found');
 
-    // 1. Generate opening message
-    const leadId = context.selectedPanelIDs?.[0];
-    const leadPersona = PERSONAS_CONFIG.find(p => p.id === leadId) || PERSONAS_CONFIG[0];
+  const history = session.history || [];
+  if (history.length === 0) {
+    await sessionService.markSessionEvaluationFailed(userId, sessionId, 'NO_HISTORY');
+    throw new Error('No interview history to analyze.');
+  }
 
-    const prompt = `You are ${leadPersona.name}, a ${leadPersona.title}.
-    The candidate is here for a ${context.candidateRole || 'role'}.
+  try {
+    const report = await generateFinalReport(history, session.context);
+    await sessionService.completeSession(userId, sessionId, report);
+    return report;
+  } catch (err: any) {
+    await sessionService.markSessionEvaluationFailed(userId, sessionId, err.code || err.message || 'REPORT_FAILED');
+    throw err;
+  }
+};
+
+export const simulateExecution = async (code: string, language: string): Promise<CodeSimulationResponse> => {
+  if (!code || !code.trim()) {
+    return CodeSimulationResponseSchema.parse({
+      status: 'unavailable',
+      stdout: '',
+      stderr: 'No code provided for execution.'
+    });
+  }
+
+  try {
+    const prompt = `Simulate execution of this ${language} code strictly and return JSON output:
     
-    Your Style: ${leadPersona.style}
-    
-    Task: Welcome the candidate briefly and professionally. Start the interview.
-    Limit to 2 sentences.`;
-
-    let firstMessage = '';
-    try {
-        const { text } = await callWithFallback(prompt);
-        firstMessage = text || `Hello, I'm ${leadPersona.name}. Let's get started.`;
-    } catch {
-        firstMessage = `Hello, I'm ${leadPersona.name}. Ready to begin?`;
-    }
-
-    // 2. Create session record in Supabase when persistence is enabled.
-    const session = await sessionService.createSession(userId, context);
-
-    // 3. Save first AI turn (optional, or just return it. Let's save it as a "system" or "interviewer" init turn if we want, but usually history starts with Q1)
-    // Actually, usually the welcome is just intro. The first REAL question comes next. 
-    // But if we want to capture this, we can add it to history with empty candidate response?
-    // For now, let's keep it simple: Return message, frontend displays it. 
-    // The REAL first question usually generated by `submitAnswer` (which triggers next question) OR we generate Q1 here.
-
-    // Frontend `startInterviewSession` returns `firstQuestion`.
-    // Let's ensure we return a QUESTION, not just a "Hello".
-
-    return {
-        sessionId: session.id,
-        firstMessage
-    };
-};
-
-export const submitAnswer = async (
-    userId: string,
-    sessionId: string,
-    candidateAnswer: string
-): Promise<{ nextQuestion: string; isLastQuestion: boolean }> => {
-
-    // 1. Fetch Session
-    const session = await sessionService.getSession(sessionId);
-    if (!session) throw new Error("Session not found");
-    if (session.userId !== userId) throw new Error("Unauthorized access to session");
-
-    // 2. Append User Answer to History (if this is a response to a previous question)
-    // Complexity: We need to know WHAT question they answered.
-    // Simpler approach: The frontend sends the *context* or we assume the last question in history is what they answered?
-    // If backend is stateful, we should look at the last turn in history?
-    // Issue: initial history is empty.
-
-    // Let's assume the frontend flow is:
-    // 1. Start -> Get Greeting/Q1.
-    // 2. User answers -> Call Submit -> Get Q2.
-
-    // We need to know what the PREVIOUS question was to save the turn: { Q: prev, A: answer }.
-    // If history is empty, maybe the "firstMessage" from Start was the question?
-
-    // REFACTOR: `startInterviewSession` should probably generate Q1 and save it as a "pending" turn or similar?
-    // OR: `submitAnswer` takes `currentQuestion` as param? 
-    // Trusting client with `currentQuestion` is okay for this stage.
-
-    // BUT, let's look at `mockGeminiService.ts`: `submitAnswerAndGetNext(history, ...)`
-    // It calculates next question based on history length.
-
-    // Let's implement a robust `generateNextQuestion` logic here using Gemini.
-
-    const history = session.history || [];
-    const plan = session.context.interviewPlan;
-    const totalQuestions = session.context.controls?.totalQuestions || 5;
-
-    // Add the user's answer to the *previous* turn if it exists/pending?
-    // Actually, persistence usually means we append a COMPLETED turn { Q, A }.
-    // So we need the Question that was just answered.
-    // We can re-derive it from Plan if the Plan is deterministic (it is).
-
-    const answeredQuestionIndex = history.length; // If 0 items, we are answering Q1 (index 0).
-
-    const answeredQuestion = (plan as InterviewPlan)?.questionSet?.[answeredQuestionIndex]?.question || "Intro Question";
-
-    const turn: InterviewTurn = {
-        interviewer: (plan as InterviewPlan)?.questionSet?.[answeredQuestionIndex]?.personaFocus || 'Interviewer',
-        question: answeredQuestion,
-        candidateResponse: candidateAnswer,
-        timestamp: Date.now()
-    };
-
-    await sessionService.updateSessionHistory(sessionId, turn);
-
-    // Now generate Q(next)
-    const newHistoryLength = history.length + 1;
-    if (newHistoryLength >= totalQuestions) {
-        return { nextQuestion: "That concludes our interview. Thank you.", isLastQuestion: true };
-    }
-
-    const nextQ = (plan as InterviewPlan)?.questionSet?.[newHistoryLength]?.question || "Tell me more.";
-
-    return {
-        nextQuestion: nextQ,
-        isLastQuestion: false
-    };
-};
-
-// --- Code & Hints ---
-
-export const analyzeCode = async (blueprint: any, code: string): Promise<string> => {
-    const lang = blueprint.language || 'python';
-
-    // Validate inputs
-    if (!code || code.trim().length < 10) return "Code too short for analysis.";
-
-    const masterPrompt = `You are a Senior Staff Engineer. Analyze the following candidate code for a job interview.
-
-    LANGUAGE: ${lang}
-    QUESTION:
-    ${blueprint.question}
-
-    EXPECTED SIGNALS:
-    ${JSON.stringify(blueprint.expectedSignals)}
-
-    CANDIDATE CODE:
-    \`\`\`${lang}
+    CODE:
+    \`\`\`${language}
     ${code}
     \`\`\`
-
-    TASK:
-    1. Evaluate code correctness and logic.
-    2. Assess time/space complexity.
-    3. Identify edge cases handled vs missed.
-    4. Provide concise, high-bar suggestions for improvement.
     
-    Format: Return a professional, encouraging but rigorous critique (max 300 words).`;
-
-    try {
-        const { text } = await callWithFallback(masterPrompt);
-        return text || "Unable to analyze code logic.";
-    } catch (e) {
-        console.error("Code Analysis Error:", e);
-        return "Internal review engine timeout. The code seems syntactically valid.";
-    }
-};
-
-export const simulateExecution = async (code: string, language: string): Promise<{ stdout: string; stderr: string }> => {
-    const prompt = `You are a universal code execution kernel. Mental-run the following code and return the expected standard output and standard error.
-    
-    LANGUAGE: ${language}
-    CODE:
-    ${code}
-    
-    TASK:
-    Generate realistic terminal logs. If the code has syntax errors or runtime exceptions, put them in stderr. If it runs correctly, put output in stdout.
-    Do NOT include code in the response. ONLY the logs.
-    
-    RETURN JSON ONLY:
+    OUTPUT SCHEMA (JSON):
     {
-      "stdout": "...",
-      "stderr": "..."
+      "status": "success",
+      "stdout": "output text",
+      "stderr": ""
     }`;
 
-    try {
-        const { text } = await callWithFallback(prompt, { type: 'json_object' });
-        return extractJson(text) || { stdout: '', stderr: 'Kernel Panic: Unable to simulate execution.' };
-    } catch (e) {
-        return { stdout: '', stderr: 'Kernel Timeout: AI simulation failed.' };
-    }
+    const { text } = await exports.callWithFallback(prompt);
+    const parsed = extractJson(text || '{}');
+    return CodeSimulationResponseSchema.parse({
+      status: parsed.status === 'success' ? 'success' : 'unavailable',
+      stdout: String(parsed.stdout || ''),
+      stderr: String(parsed.stderr || '')
+    });
+  } catch (err) {
+    return CodeSimulationResponseSchema.parse({
+      status: 'unavailable',
+      stdout: '',
+      stderr: 'Code simulation unavailable.'
+    });
+  }
 };
 
-export const getHintForQuestion = async (question: string): Promise<string> => {
-    try {
-        const hintPrompt = `You are a supportive interview coach. The candidate is stuck on this question:
+export const analyzeCode = async (blueprint: any, code: string): Promise<CodeAnalysisResponse> => {
+  if (!code || !code.trim()) {
+    return CodeAnalysisResponseSchema.parse({
+      status: 'unavailable',
+      feedback: 'No code provided for analysis.',
+      passed: null
+    });
+  }
 
-"${question}"
+  try {
+    const prompt = `Analyze this code against blueprint requirements.
+    QUESTION: "${blueprint?.question || 'Technical Problem'}"
+    CODE:
+    \`\`\`
+    ${code}
+    \`\`\`
+    
+    OUTPUT SCHEMA (JSON):
+    {
+      "status": "analyzed",
+      "feedback": "Detailed code analysis feedback",
+      "passed": true
+    }`;
 
-Provide a SHORT, encouraging hint (max 2 sentences) that:
-1. Does NOT give away the answer
-2. Guides their thinking direction
-3. Suggests what framework or approach to use (e.g., STAR, problem-solving steps)
-4. Is specific to THIS question, not generic
-
-Return ONLY the hint text, no intro.`;
-
-        const { text } = await callWithFallback(hintPrompt);
-        return text.trim() || 'Think about a specific example from your experience.';
-    } catch (error) {
-        console.error('Hint generation failed:', error);
-        return 'Break this down into steps: What was the situation? What action did you take?';
-    }
-};
-
-export const generateIdealAnswer = async (
-    question: string,
-    blueprint: any | null,
-    userAnswer: string
-): Promise<string> => {
-    const expectedSignals = blueprint?.expectedSignals || [];
-    const competency = blueprint?.phase || 'Professional Communication';
-
-    const prompt = `You are a senior interview coach. A candidate just answered this interview question:
-
-QUESTION: "${question}"
-COMPETENCY TESTED: ${competency}
-EXPECTED SIGNALS: ${JSON.stringify(expectedSignals)}
-
-CANDIDATE'S ANSWER: "${userAnswer}"
-
-TASK: Generate an IDEAL, HIGH-BAR response (2-4 sentences) that would impress interviewers. This should:
-1. Demonstrate the competency being tested
-2. Hit the expected signals
-3. Use the STAR method if behavioral
-4. Include specific metrics/numbers where possible
-5. Sound natural and conversational (not robotic)
-
-Return ONLY the ideal response text, no intro or framing.`;
-
-    try {
-        const { text } = await callWithFallback(prompt);
-        return text || "A strong answer would focus on clear signals and measurable impact.";
-    } catch (e) {
-        return "Focus on the core competency and provide a structured, evidence-based response.";
-    }
-};
-
-export const transcribeAudio = async (base64Audio: string, mimeType: string = 'audio/webm'): Promise<string> => {
-    try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.0-flash',
-            contents: [{
-                parts: [
-                    { inlineData: { mimeType, data: base64Audio } },
-                    { text: "Transcribe this interview answer exactly as spoken. Return ONLY the text, no intro/outro." }
-                ]
-            }],
-            config: { temperature: 0.1 }
-        });
-
-        const transcript = getResponseText(response).trim();
-        if (transcript) return transcript;
-        throw new Error("Gemini returned empty transcript");
-    } catch (primaryError) {
-        console.warn("Primary transcription failed, trying Groq fallback...", primaryError);
-        
-        if (groq && groqApiKey) {
-            try {
-                const fs = await import('fs');
-                const os = await import('os');
-                const path = await import('path');
-                
-                // Groq Whisper requires a file or readable stream with metadata
-                const tempDir = os.tmpdir();
-                const ext = mimeType.split('/')[1]?.split(';')[0] || 'webm';
-                const tempFilePath = path.join(tempDir, `mockmate_audio_${Date.now()}.${ext}`);
-                
-                const buffer = Buffer.from(base64Audio, 'base64');
-                fs.writeFileSync(tempFilePath, buffer);
-                
-                const transcription = await groq.audio.transcriptions.create({
-                    file: fs.createReadStream(tempFilePath),
-                    model: 'whisper-large-v3',
-                    language: 'en',
-                    response_format: 'text',
-                });
-                
-                // Cleanup
-                try { fs.unlinkSync(tempFilePath); } catch (e) { /* ignore cleanup error */ }
-                
-                if (typeof transcription === 'string') return transcription.trim();
-                return (transcription as any).text?.trim() || "I'm ready to move to the next question. (Transcription Unavailable)";
-            } catch (fallbackError) {
-                console.error("All transcription providers failed:", fallbackError);
-                return "I'm ready to move to the next question. (Transcription Unavailable)";
-            }
-        }
-        
-        return "I'm ready to move to the next question. (Transcription Unavailable)";
-    }
+    const { text } = await exports.callWithFallback(prompt);
+    const parsed = extractJson(text || '{}');
+    return CodeAnalysisResponseSchema.parse({
+      status: parsed.status === 'analyzed' ? 'analyzed' : 'unavailable',
+      feedback: String(parsed.feedback || 'Code analysis completed.'),
+      passed: typeof parsed.passed === 'boolean' ? parsed.passed : null
+    });
+  } catch (err) {
+    return CodeAnalysisResponseSchema.parse({
+      status: 'unavailable',
+      feedback: 'Code analysis unavailable.',
+      passed: null
+    });
+  }
 };

@@ -1,6 +1,6 @@
 
 import OpenAI from 'openai';
-import { FinalReport, InterviewTurn } from '../types';
+import { FinalReport, InterviewTurn } from 'mockmate-shared';
 
 // Use Groq for the Reviewer to ensure provider independence from Gemini (Primary Scorer)
 const groqApiKey = process.env.GROQ_API_KEY;

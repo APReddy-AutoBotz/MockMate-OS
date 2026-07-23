@@ -1,13 +1,9 @@
-const normalizeBase = (value: string | undefined, fallback: string) => {
-  const base = (value || fallback).trim().replace(/\/+$/, '');
-  return base || fallback;
-};
+import { getRuntimeConfig, normalizeApiOrigin } from './runtimeConfig';
 
-const isDev = process.env.NODE_ENV === 'development';
-const configuredApiUrl = process.env.VITE_API_URL;
+const config = getRuntimeConfig();
 
-export const API_ORIGIN = normalizeBase(configuredApiUrl, isDev ? 'http://localhost:3001' : '');
-export const API_BASE = `${API_ORIGIN}/api`;
+export const API_ORIGIN = config.apiOrigin;
+export const API_BASE = config.apiBase;
 
 export const apiUrl = (path: string) => {
   const safePath = path.startsWith('/') ? path : `/${path}`;
@@ -16,5 +12,8 @@ export const apiUrl = (path: string) => {
 
 export const apiRoute = (path: string) => {
   const safePath = path.startsWith('/') ? path : `/${path}`;
+  if (safePath.startsWith('/api/')) {
+    return `${API_BASE}${safePath.slice(4)}`;
+  }
   return `${API_BASE}${safePath}`;
 };
