@@ -73,21 +73,21 @@ export const toSession = async (row: any): Promise<any> => {
     status: row.status || 'active',
     report: row.report_summary || row.report || undefined,
     pilotFeedback: row.pilot_feedback || row.pilotFeedback || undefined,
-    engineVersion: row.engine_version || row.engineVersion || 'v2',
-    sessionVersion: row.session_version ?? row.sessionVersion ?? 1,
-    currentQuestionIndex: row.current_root_question_index ?? row.current_question_index ?? row.currentQuestionIndex ?? 0,
-    currentTurnIndex: row.current_turn_index ?? row.currentTurnIndex ?? 0,
-    currentStage: row.current_stage || row.currentStage || 'framing',
-    pendingQuestionKind: row.pending_question_kind || row.pendingQuestionKind || 'root',
-    activeRootQuestionId: row.active_root_question_id || row.activeRootQuestionId || null,
-    probeCountForRoot: row.probe_count_for_root ?? row.probeCountForRoot ?? 0,
-    challengeCount: row.challenge_count ?? row.challengeCount ?? 0,
+    engineVersion: row.engineVersion || row.engine_version || 'v2',
+    sessionVersion: row.sessionVersion ?? row.session_version ?? 1,
+    currentQuestionIndex: row.currentQuestionIndex ?? row.current_root_question_index ?? row.current_question_index ?? 0,
+    currentTurnIndex: row.currentTurnIndex ?? row.current_turn_index ?? 0,
+    currentStage: row.currentStage || row.current_stage || 'framing',
+    pendingQuestionKind: row.pendingQuestionKind || row.pending_question_kind || 'root',
+    activeRootQuestionId: row.activeRootQuestionId || row.active_root_question_id || null,
+    probeCountForRoot: row.probeCountForRoot ?? row.probe_count_for_root ?? 0,
+    challengeCount: row.challengeCount ?? row.challenge_count ?? 0,
     adaptivePolicy: policy,
-    dimensionState: row.dimension_state || row.dimensionState || {},
-    pendingQuestionId: row.pending_question_id ?? row.pendingQuestionId ?? null,
-    pendingQuestion: row.pending_question ? normalizeQuestionBlueprint(row.pending_question) : (row.pendingQuestion ? normalizeQuestionBlueprint(row.pendingQuestion) : null),
-    evaluationStatus: row.evaluation_status ?? row.evaluationStatus ?? 'not_tested',
-    evaluationErrorCode: row.evaluation_error_code ?? row.evaluationErrorCode ?? null,
+    dimensionState: row.dimensionState || row.dimension_state || {},
+    pendingQuestionId: row.pendingQuestionId ?? row.pending_question_id ?? null,
+    pendingQuestion: row.pendingQuestion ? normalizeQuestionBlueprint(row.pendingQuestion) : (row.pending_question ? normalizeQuestionBlueprint(row.pending_question) : null),
+    evaluationStatus: row.evaluationStatus ?? row.evaluation_status ?? 'not_tested',
+    evaluationErrorCode: row.evaluationErrorCode ?? row.evaluation_error_code ?? null,
     completedAt: row.completed_at || row.completedAt || undefined,
   };
 };
@@ -153,19 +153,33 @@ export const createSession = async (
       createdAt: now,
       updatedAt: now,
       status: 'active',
+      engineVersion: 'v2',
       engine_version: 'v2',
+      sessionVersion: 1,
       session_version: 1,
+      currentQuestionIndex: 0,
       current_root_question_index: 0,
+      currentTurnIndex: 0,
       current_turn_index: 0,
+      currentStage: modePolicy.stageSequence[0] || 'framing',
       current_stage: modePolicy.stageSequence[0] || 'framing',
+      pendingQuestionKind: 'root',
       pending_question_kind: 'root',
+      activeRootQuestionId: firstQuestion.id,
       active_root_question_id: firstQuestion.id,
+      probeCountForRoot: 0,
       probe_count_for_root: 0,
+      challengeCount: 0,
       challenge_count: 0,
+      adaptivePolicy: policy,
       adaptive_policy: policy,
+      dimensionState: initialDimensionState,
       dimension_state: initialDimensionState,
+      pendingQuestionId: firstQuestion.id,
       pending_question_id: firstQuestion.id,
+      pendingQuestion: firstQuestion,
       pending_question: firstQuestion,
+      evaluationStatus: 'not_tested',
       evaluation_status: 'not_tested',
       totalQuestions,
     };
@@ -236,10 +250,11 @@ export const submitAdaptiveTurn = async (
   userId: string,
   sessionId: string,
   questionId: string,
-  expectedSessionVersion: number,
-  clientSubmissionId: string,
-  answerKind: 'answered' | 'skipped',
-  answerText?: string
+  expectedSessionVersion?: number,
+  clientSubmissionId?: string,
+  answerKind: 'answered' | 'skipped' = 'answered',
+  answerText?: string,
+  expectedQuestionIndex?: number
 ): Promise<AdaptiveAnswerSubmissionResponse> => {
   const session = await getSession(userId, sessionId);
   if (!session) {
@@ -254,28 +269,19 @@ export const submitAdaptiveTurn = async (
   }
 
   // Idempotency check for local in-memory fallback
-  if (!supabaseAdmin) {
+  if (!supabaseAdmin && clientSubmissionId) {
     const existingTurn = session.history.find((t: any) => t.clientSubmissionId === clientSubmissionId);
-    if (existingTurn) {
-      return {
-        completedTurnId: existingTurn.id,
-        sessionVersion: session.sessionVersion,
-        evaluationStatus: existingTurn.evaluationStatus || 'evaluated',
-        nextQuestion: session.pendingQuestion,
-        nextAction: existingTurn.controllerDecision?.action || 'advance_root_question',
-        challengeEvent: existingTurn.challengeEvent,
-        isSessionComplete: session.status === 'awaiting_report',
-        rootQuestionIndex: session.currentQuestionIndex,
-        rootQuestionCount: session.context?.interviewPlan?.questionSet?.length || 1,
-        turnIndex: session.currentTurnIndex,
-        maxTurns: session.adaptivePolicy.maxTurns,
-        stage: session.currentStage,
-      };
+    if (existingTurn && existingTurn.adaptiveResponse) {
+      return existingTurn.adaptiveResponse;
     }
   }
 
-  if (session.pendingQuestionId !== questionId || session.sessionVersion !== expectedSessionVersion) {
-    const err: any = new Error(`Stale or mismatched question submission (expected version: ${session.sessionVersion}, got: ${expectedSessionVersion})`);
+  if (
+    session.pendingQuestionId !== questionId ||
+    (expectedSessionVersion !== undefined && session.sessionVersion !== expectedSessionVersion) ||
+    (expectedQuestionIndex !== undefined && session.currentQuestionIndex !== expectedQuestionIndex)
+  ) {
+    const err: any = new Error(`Stale or mismatched question submission (expected question: '${session.pendingQuestionId}', got: '${questionId}')`);
     err.status = 409;
     throw err;
   }
@@ -283,6 +289,7 @@ export const submitAdaptiveTurn = async (
   const mode: ReasoningMode = session.context?.controls?.reasoningMode || 'classic_behavioral';
   const currentQuestion: QuestionBlueprint = session.pendingQuestion;
   const textToSave = answerKind === 'skipped' ? '[Question Skipped]' : (answerText || '');
+  const serverTurnId = crypto.randomUUID();
 
   // 1. Evaluate candidate answer
   const turnEval = await turnEvaluatorService.evaluateCandidateTurn(currentQuestion, textToSave, mode, session.currentStage);
@@ -301,6 +308,9 @@ export const submitAdaptiveTurn = async (
     activeRootQuestionId: session.activeRootQuestionId || currentQuestion.id,
     probeCountForRoot: session.probeCountForRoot,
     challengeCount: session.challengeCount,
+    reflectionCompletedForRoot: session.reflectionCompletedForRoot,
+    finalReflectionAsked: session.finalReflectionAsked,
+    challengeAnsweredForRoot: session.challengeAnsweredForRoot,
     adaptivePolicy: session.adaptivePolicy,
     dimensionState: session.dimensionState,
   };
@@ -312,6 +322,7 @@ export const submitAdaptiveTurn = async (
     currentQuestion,
     evaluation: turnEval,
     remainingRootQuestions: remainingRoots,
+    answerKind,
   });
 
   // 4. Build next question
@@ -327,7 +338,8 @@ export const submitAdaptiveTurn = async (
     currentQuestion,
     evaluation: turnEval,
     remainingRootQuestions: remainingRoots,
-  });
+    answerKind,
+  }, undefined, serverTurnId);
 
   // Calculate new state counters
   let nextRootIndex = session.currentQuestionIndex;
@@ -348,11 +360,57 @@ export const submitAdaptiveTurn = async (
   const nextKind = decision.nextQuestionKind;
   const totalRoots = allRoots.length;
 
-  // 5. Update local in-memory session if no Supabase DB
+  // 5. Update session dimension state with this new turn before persistence
+  const newTurnCandidate = {
+    turnId: serverTurnId,
+    evaluation: turnEval,
+    stage: session.currentStage,
+    questionKind: currentQuestion.questionKind || 'root',
+  };
+  const { dimensionStates: updatedDimensionState } = aggregateTurnEvidence(
+    [...session.history, newTurnCandidate],
+    mode
+  );
+
+  // 6. Truthful coach feedback (no filler defaults!)
+  let coachFeedback: { strength?: string; nextFocus?: string } | undefined = undefined;
+  if (session.context?.controls?.deliveryMode === 'coach') {
+    const strengthObs = turnEval.observations.find(o => typeof o.anchorScore === 'number' && o.anchorScore >= 3 && o.signal?.trim());
+    const strength = strengthObs ? strengthObs.signal.trim() : undefined;
+    const nextFocus = (turnEval.missingSignals && turnEval.missingSignals.length > 0 && turnEval.missingSignals[0].trim())
+      ? turnEval.missingSignals[0].trim()
+      : undefined;
+
+    if (strength || nextFocus) {
+      coachFeedback = {
+        ...(strength ? { strength } : {}),
+        ...(nextFocus ? { nextFocus } : {}),
+      };
+    }
+  }
+
+  const responsePayload: AdaptiveAnswerSubmissionResponse & { isLastQuestion?: boolean; questionIndex?: number } = {
+    completedTurnId: serverTurnId,
+    sessionVersion: session.sessionVersion + 1,
+    evaluationStatus: turnEval.evaluationStatus,
+    nextQuestion,
+    nextAction: decision.action,
+    challengeEvent: challengeEvent || undefined,
+    isSessionComplete: isComplete,
+    isLastQuestion: isComplete,
+    questionIndex: nextRootIndex,
+    rootQuestionIndex: nextRootIndex,
+    rootQuestionCount: totalRoots,
+    turnIndex: session.currentTurnIndex + 1,
+    maxTurns: session.adaptivePolicy.maxTurns,
+    stage: nextStage,
+    coachFeedback,
+  };
+
+  // 7. Update local in-memory session if no Supabase DB
   if (!supabaseAdmin) {
-    const turnId = `turn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const turn = {
-      id: turnId,
+      id: serverTurnId,
       interviewer: currentQuestion.personaFocus || 'Interviewer',
       question: currentQuestion.question,
       candidateResponse: textToSave,
@@ -365,45 +423,45 @@ export const submitAdaptiveTurn = async (
       controllerDecision: decision,
       challengeEvent,
       clientSubmissionId,
+      adaptiveResponse: responsePayload,
     };
 
     session.history.push(turn);
-    session.sessionVersion += 1;
-    session.currentTurnIndex += 1;
+    session.sessionVersion = (session.sessionVersion || session.session_version || 1) + 1;
+    session.session_version = session.sessionVersion;
+    session.currentTurnIndex = (session.currentTurnIndex || session.current_turn_index || 0) + 1;
+    session.current_turn_index = session.currentTurnIndex;
     session.currentQuestionIndex = nextRootIndex;
+    session.current_root_question_index = nextRootIndex;
+    session.current_question_index = nextRootIndex;
     session.currentStage = nextStage;
+    session.current_stage = nextStage;
     session.pendingQuestionKind = nextKind;
+    session.pending_question_kind = nextKind;
     session.pendingQuestion = nextQuestion;
+    session.pending_question = nextQuestion;
     session.pendingQuestionId = nextQuestion?.id || null;
+    session.pending_question_id = nextQuestion?.id || null;
     session.probeCountForRoot = nextProbeCount;
+    session.probe_count_for_root = nextProbeCount;
     session.challengeCount = nextChallengeCount;
+    session.challenge_count = nextChallengeCount;
+    session.dimensionState = updatedDimensionState;
+    session.dimension_state = updatedDimensionState;
+    if (currentQuestion.questionKind === 'challenge') {
+      session.challengeAnsweredForRoot = true;
+    }
+    if (decision.action === 'ask_reflection' && nextQuestion?.questionKind === 'reflection') {
+      session.finalReflectionAsked = true;
+    }
     if (isComplete) session.status = 'awaiting_report';
     session.updatedAt = new Date().toISOString();
     fallbackSessions.set(sessionId, session);
 
-    const coachFeedback = session.context?.controls?.deliveryMode === 'coach' ? {
-      strength: turnEval.observations.find(o => typeof o.anchorScore === 'number' && o.anchorScore >= 3)?.signal || 'Structured communication observed.',
-      nextFocus: turnEval.missingSignals[0] || 'Focus on stating key assumptions explicitly.',
-    } : undefined;
-
-    return {
-      completedTurnId: turnId,
-      sessionVersion: session.sessionVersion,
-      evaluationStatus: turnEval.evaluationStatus,
-      nextQuestion,
-      nextAction: decision.action,
-      challengeEvent,
-      isSessionComplete: isComplete,
-      rootQuestionIndex: nextRootIndex,
-      rootQuestionCount: totalRoots,
-      turnIndex: session.currentTurnIndex,
-      maxTurns: session.adaptivePolicy.maxTurns,
-      stage: nextStage,
-      coachFeedback,
-    };
+    return responsePayload;
   }
 
-  // 6. Invoke atomic_submit_adaptive_turn RPC in Supabase
+  // 8. Invoke atomic_submit_adaptive_turn RPC in Supabase
   const { data, error } = await supabaseAdmin.rpc('atomic_submit_adaptive_turn', {
     p_session_id: sessionId,
     p_user_id: userId,
@@ -415,7 +473,7 @@ export const submitAdaptiveTurn = async (
     p_turn_evaluation: turnEval,
     p_controller_decision: decision,
     p_challenge_event: challengeEvent || null,
-    p_dimension_state: session.dimensionState,
+    p_dimension_state: updatedDimensionState,
     p_next_question_json: nextQuestion,
     p_next_question_id: nextQuestion?.id || null,
     p_next_stage: nextStage,
@@ -426,6 +484,8 @@ export const submitAdaptiveTurn = async (
     p_is_complete: isComplete,
     p_max_turns: session.adaptivePolicy.maxTurns,
     p_total_roots: totalRoots,
+    p_turn_id: serverTurnId,
+    p_adaptive_response: responsePayload,
   });
 
   if (error) {
@@ -434,26 +494,7 @@ export const submitAdaptiveTurn = async (
     throw err;
   }
 
-  const coachFeedback = session.context?.controls?.deliveryMode === 'coach' ? {
-    strength: turnEval.observations.find(o => typeof o.anchorScore === 'number' && o.anchorScore >= 3)?.signal || 'Structured communication observed.',
-    nextFocus: turnEval.missingSignals[0] || 'Focus on stating key assumptions explicitly.',
-  } : undefined;
-
-  return {
-    completedTurnId: data.completedTurnId,
-    sessionVersion: data.sessionVersion,
-    evaluationStatus: data.evaluationStatus,
-    nextQuestion: data.nextQuestion ? normalizeQuestionBlueprint(data.nextQuestion) : null,
-    nextAction: data.nextAction,
-    challengeEvent: data.challengeEvent || undefined,
-    isSessionComplete: data.isSessionComplete,
-    rootQuestionIndex: data.rootQuestionIndex,
-    rootQuestionCount: data.rootQuestionCount,
-    turnIndex: data.turnIndex,
-    maxTurns: data.maxTurns,
-    stage: data.stage as InterviewStage,
-    coachFeedback,
-  };
+  return data as AdaptiveAnswerSubmissionResponse;
 };
 
 export const submitAnswer = async (

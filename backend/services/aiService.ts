@@ -23,90 +23,12 @@ import { PERSONAS_CONFIG } from '../config/personas';
 import { GoogleGenAI } from '@google/genai';
 import * as sessionService from './sessionService';
 
-// Approved competency dimensions for MockMate v1 evaluation
-export const APPROVED_DIMENSIONS = {
-  PROBLEM_FRAMING: { name: 'Problem Framing & Structuring', definition: 'Ability to deconstruct ambiguous challenges and establish scope.' },
-  TRADEOFF_CLARITY: { name: 'Trade-off & Constraint Clarity', definition: 'Explicit evaluation of technical and operational trade-offs.' },
-  STAR_EXECUTION: { name: 'STAR & Result Execution', definition: 'Clear situation, task, action, and measurable outcome articulation.' },
-  COMMUNICATION_PRESENCE: { name: 'Communication & Presence', definition: 'Concise, calm, and structured verbal delivery.' },
-  TECHNICAL_DEPTH: { name: 'Technical Depth & Domain Rigor', definition: 'Appropriate domain depth, correct terminology, and architectural accuracy.' }
-} as const;
+import { APPROVED_DIMENSIONS, ACTIVE_DIMENSIONS_BY_MODE, DEFAULT_WEIGHTS_BY_MODE } from '../config/evaluationConfig';
+import { callWithFallback, extractJson } from './llmProviderGateway';
 
-export const ACTIVE_DIMENSIONS_BY_MODE: Record<string, (keyof typeof APPROVED_DIMENSIONS)[]> = {
-  classic_behavioral: ['PROBLEM_FRAMING', 'STAR_EXECUTION', 'COMMUNICATION_PRESENCE'],
-  classic_technical: ['PROBLEM_FRAMING', 'TRADEOFF_CLARITY', 'TECHNICAL_DEPTH'],
-  tradeoff_decision: ['PROBLEM_FRAMING', 'TRADEOFF_CLARITY', 'TECHNICAL_DEPTH'],
-  fast_check: ['PROBLEM_FRAMING', 'COMMUNICATION_PRESENCE']
-};
+export { APPROVED_DIMENSIONS, ACTIVE_DIMENSIONS_BY_MODE, callWithFallback, extractJson };
 
-export const DEFAULT_WEIGHTS_BY_MODE: Record<string, Record<string, number>> = {
-  classic_behavioral: { PROBLEM_FRAMING: 0.35, STAR_EXECUTION: 0.35, COMMUNICATION_PRESENCE: 0.30 },
-  classic_technical: { PROBLEM_FRAMING: 0.30, TRADEOFF_CLARITY: 0.40, TECHNICAL_DEPTH: 0.30 },
-  tradeoff_decision: { PROBLEM_FRAMING: 0.30, TRADEOFF_CLARITY: 0.40, TECHNICAL_DEPTH: 0.30 },
-  fast_check: { PROBLEM_FRAMING: 0.50, COMMUNICATION_PRESENCE: 0.50 }
-};
 
-export function extractJson(raw: string): any {
-  const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  try {
-    return JSON.parse(clean);
-  } catch (err) {
-    const jsonMatch = clean.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    throw err;
-  }
-}
-
-export async function callWithFallback(prompt: string): Promise<{ text: string; provider: string; model: string; fallbackTriggered: boolean }> {
-  const geminiKey = process.env.GEMINI_API_KEY;
-  const groqKey = process.env.GROQ_API_KEY;
-
-  if (geminiKey) {
-    try {
-      const ai = new GoogleGenAI({ apiKey: geminiKey });
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: { responseMimeType: 'application/json' }
-      });
-      if (response.text) {
-        return { text: response.text, provider: 'gemini', model: 'gemini-2.5-flash', fallbackTriggered: false };
-      }
-    } catch (e: any) {
-      console.warn('[AI Service] Gemini call failed, trying Groq fallback...', e.message);
-    }
-  }
-
-  if (groqKey) {
-    try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${groqKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
-          messages: [{ role: 'user', content: prompt }],
-          response_format: { type: 'json_object' }
-        })
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const text = data.choices?.[0]?.message?.content;
-        if (text) {
-          return { text, provider: 'groq', model: 'llama-3.3-70b-versatile', fallbackTriggered: true };
-        }
-      }
-    } catch (e: any) {
-      console.warn('[AI Service] Groq call failed...', e.message);
-    }
-  }
-
-  throw new Error('All AI providers failed or no API keys configured.');
-}
 
 // --- Intent Calibration ---
 
@@ -695,24 +617,24 @@ REQUIRED OUTPUT SCHEMA (JSON):
   const overallSummary = typeof qualitativeNarrative.overallSummary === 'string' && qualitativeNarrative.overallSummary.trim().length > 0
     ? qualitativeNarrative.overallSummary.trim()
     : (scorecard.simplifiedScore !== null
-        ? `Session complete. Calculated practice score: ${scorecard.simplifiedScore}/100 based on verified candidate turn evidence.`
-        : 'Session completed with insufficient evidence to generate a full readiness score.');
+        ? `Session complete. Practice score: ${scorecard.simplifiedScore}/100 based on verified candidate turn evidence.`
+        : 'Session completed. Evaluation based on verified candidate turn evidence.');
 
   const topStrength = typeof qualitativeNarrative.topStrength === 'string' && qualitativeNarrative.topStrength.trim().length > 0
     ? qualitativeNarrative.topStrength.trim()
-    : (scorecard.dimensionScores.find(d => d.score_status === 'scored')?.dimensionName ? `Demonstrated signals in ${scorecard.dimensionScores.find(d => d.score_status === 'scored')?.dimensionName}` : undefined);
+    : undefined;
 
   const topWeakness = typeof qualitativeNarrative.topWeakness === 'string' && qualitativeNarrative.topWeakness.trim().length > 0
     ? qualitativeNarrative.topWeakness.trim()
-    : 'State underlying assumptions and evaluation criteria more explicitly.';
+    : undefined;
 
-  const quickWins = Array.isArray(qualitativeNarrative.quickWins) && qualitativeNarrative.quickWins.length > 0
+  const quickWins = Array.isArray(qualitativeNarrative.quickWins)
     ? qualitativeNarrative.quickWins.filter((qw: any) => typeof qw === 'string' && qw.trim().length > 0)
-    : ['State assumptions explicitly before solving', 'Compare alternative approaches using trade-offs'];
+    : [];
 
-  const prioritizedActions = Array.isArray(qualitativeNarrative.prioritizedActions) && qualitativeNarrative.prioritizedActions.length > 0
+  const prioritizedActions = Array.isArray(qualitativeNarrative.prioritizedActions)
     ? qualitativeNarrative.prioritizedActions.filter((pa: any) => pa && typeof pa.action === 'string' && pa.action.trim().length > 0)
-    : [{ action: 'Practice trade-off articulation in technical scenarios', impact: 'high' as const }];
+    : [];
 
   const questionPerformance = history.map((turn, idx) => ({
     question_text: turn.question || `Scenario ${idx + 1}`,
@@ -723,10 +645,9 @@ REQUIRED OUTPUT SCHEMA (JSON):
     improvements: turn.turnEvaluation?.missingSignals || [],
   }));
 
-  // Build advisory panel assessments without hire/no-hire recommendations (hireRecommendation: null)
   const advisoryPanel = [
     {
-      name: 'Reasoning Evaluator',
+      name: 'Reasoning Review',
       assessment: scorecard.readinessReasoning,
       hireRecommendation: null,
     }
@@ -762,7 +683,16 @@ REQUIRED OUTPUT SCHEMA (JSON):
       reasoning: scorecard.readinessReasoning,
     },
     quantitativeAnalysis: {
-      dimension_scores: scorecard.dimensionScores,
+      dimension_scores: scorecard.dimensionScores.map(ds => ({
+        dimension: ds.dimension,
+        dimensionName: ds.dimensionName,
+        score_status: ds.score_status,
+        anchor_score: ds.anchor_score,
+        normalized_score: ds.normalized_score,
+        reason: ds.reason,
+        evidence: ds.evidence,
+        confidence: ds.confidence,
+      })),
     },
     advisoryPanel,
     questionPerformance,
@@ -770,12 +700,15 @@ REQUIRED OUTPUT SCHEMA (JSON):
     coachPack,
     trajectoryReplay: [],
     auditLayer: [
-      { biasDetected: false, notes: 'Evaluated using verified evidence aggregation rules.' }
+      {
+        biasDetected: false,
+        notes: 'Automated report generation audit log',
+      }
     ],
     simplifiedScore: scorecard.simplifiedScore,
     topStrength,
     topWeakness,
-    estimatedSessionsToReady: scorecard.simplifiedScore !== null ? Math.max(1, Math.ceil((100 - scorecard.simplifiedScore) / 10)) : null,
+    estimatedSessionsToReady: null,
     quickWins,
     prioritizedActions,
   };

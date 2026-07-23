@@ -36,8 +36,23 @@ export const CanonicalErrorSchema = z.object({
   error: ApiErrorSchema
 }).strict();
 
-export const EvaluationStatusSchema = z.enum(['scored', 'insufficient_evidence', 'not_tested']);
-export type EvaluationStatus = z.infer<typeof EvaluationStatusSchema>;
+export const DimensionEvaluationStatusSchema = z.enum(['scored', 'insufficient_evidence', 'not_tested']);
+export type DimensionEvaluationStatus = z.infer<typeof DimensionEvaluationStatusSchema>;
+
+export const EvaluationStatusSchema = DimensionEvaluationStatusSchema;
+export type EvaluationStatus = DimensionEvaluationStatus;
+
+export const TurnEvaluationStatusSchema = z.enum(['evaluated', 'insufficient_evidence', 'unavailable']);
+export type TurnEvaluationStatus = z.infer<typeof TurnEvaluationStatusSchema>;
+
+export const AnchorScoreSchema = z.union([
+  z.literal(0),
+  z.literal(1),
+  z.literal(2),
+  z.literal(3),
+  z.literal(4)
+]);
+export type AnchorScore = z.infer<typeof AnchorScoreSchema>;
 
 export const ReportGenerationStateSchema = z.enum(['pending', 'processing', 'completed', 'failed']);
 export type ReportGenerationState = z.infer<typeof ReportGenerationStateSchema>;
@@ -141,7 +156,7 @@ export const DEFAULT_ADAPTIVE_POLICY: AdaptivePolicy = {
   maxTurns: 8,
   maxProbesPerRoot: 1,
   maxChallenges: 2,
-  requireReflection: false,
+  requireReflection: true,
 };
 
 export const ChallengeEventTypeSchema = z.enum([
@@ -161,9 +176,9 @@ export const ChallengeEventSchema = z.object({
   type: ChallengeEventTypeSchema,
   prompt: z.string(),
   rationale: z.string(),
-  targetDimensions: z.array(DimensionKeySchema),
-  triggeringTurnId: z.string().optional(),
-  triggeringEvidence: z.string().optional(),
+  targetDimensions: z.array(DimensionKeySchema).min(1),
+  triggeringTurnId: z.string(),
+  triggeringEvidence: z.string().nullable().optional(),
   stage: InterviewStageSchema,
   severity: z.enum(['low', 'medium', 'high']),
 }).strict();
@@ -171,7 +186,7 @@ export type ChallengeEvent = z.infer<typeof ChallengeEventSchema>;
 
 export const DimensionObservationSchema = z.object({
   dimension: DimensionKeySchema,
-  anchorScore: z.number().min(0).max(4).nullable(),
+  anchorScore: AnchorScoreSchema.nullable(),
   confidence: EvidenceConfidenceSchema,
   evidenceExcerpt: z.string().nullable(),
   signal: z.string(),
@@ -182,7 +197,7 @@ export const DimensionObservationSchema = z.object({
 export type DimensionObservation = z.infer<typeof DimensionObservationSchema>;
 
 export const TurnEvaluationSchema = z.object({
-  evaluationStatus: z.enum(['evaluated', 'insufficient_evidence', 'unavailable']),
+  evaluationStatus: TurnEvaluationStatusSchema,
   answerSummary: z.string().nullable(),
   observations: z.array(DimensionObservationSchema),
   missingSignals: z.array(z.string()),
@@ -204,7 +219,7 @@ export type AdaptiveControllerAction = z.infer<typeof AdaptiveControllerActionSc
 export const AdaptiveControllerDecisionSchema = z.object({
   action: AdaptiveControllerActionSchema,
   rationale: z.string(),
-  nextQuestionKind: QuestionKindSchema,
+  nextQuestionKind: QuestionKindSchema.nullable(),
   targetStage: InterviewStageSchema,
   challengeType: ChallengeEventTypeSchema.optional(),
 }).strict();
@@ -236,6 +251,9 @@ export const AdaptiveSessionStateSchema = z.object({
   activeRootQuestionId: z.string(),
   probeCountForRoot: z.number().int(),
   challengeCount: z.number().int(),
+  reflectionCompletedForRoot: z.boolean().optional(),
+  finalReflectionAsked: z.boolean().optional(),
+  challengeAnsweredForRoot: z.boolean().optional(),
   adaptivePolicy: AdaptivePolicySchema,
   dimensionState: z.record(DimensionKeySchema, DimensionEvidenceStateSchema),
   lastControllerDecision: AdaptiveControllerDecisionSchema.optional(),
@@ -268,6 +286,20 @@ export const QuestionBlueprintSchema = z.object({
   challengeEventId: z.string().optional(),
 }).strict();
 export type QuestionBlueprint = z.infer<typeof QuestionBlueprintSchema>;
+
+export const AdaptiveQuestionBlueprintSchema = z.object({
+  id: z.string(),
+  questionKind: QuestionKindSchema,
+  rootQuestionId: z.string(),
+  stage: InterviewStageSchema,
+  question: z.string(),
+  expectedSignals: z.array(z.string()),
+  targetDimensions: z.array(DimensionKeySchema),
+  personaFocus: z.string(),
+  difficulty: z.string(),
+  challengeEventId: z.string().nullable().optional(),
+}).strict();
+export type AdaptiveQuestionBlueprint = z.infer<typeof AdaptiveQuestionBlueprintSchema>;
 
 export function normalizeQuestionBlueprint(raw: any): QuestionBlueprint {
   const id = String(raw?.id || `q_${Date.now()}`);
@@ -343,7 +375,7 @@ export const InterviewTurnSchema = z.object({
   questionBlueprint: QuestionBlueprintSchema.optional(),
   questionKind: QuestionKindSchema.optional(),
   stage: InterviewStageSchema.optional(),
-  evaluationStatus: EvaluationStatusSchema.optional(),
+  evaluationStatus: TurnEvaluationStatusSchema.optional(),
   turnEvaluation: TurnEvaluationSchema.optional(),
   controllerDecision: AdaptiveControllerDecisionSchema.optional(),
   challengeEvent: ChallengeEventSchema.optional(),
@@ -646,23 +678,36 @@ export const AnswerSubmissionResponseSchema = z.object({
 }).strict();
 export type AnswerSubmissionResponse = z.infer<typeof AnswerSubmissionResponseSchema>;
 
-export const AdaptiveAnswerSubmissionRequestSchema = z.object({
-  questionId: z.string(),
-  expectedSessionVersion: z.number().int(),
-  clientSubmissionId: z.string().uuid(),
-  answerKind: z.enum(['answered', 'skipped']),
-  answerText: z.string().optional(),
-}).strict();
+export const AdaptiveAnswerSubmissionRequestSchema = z.discriminatedUnion('answerKind', [
+  z.object({
+    questionId: z.string(),
+    expectedSessionVersion: z.number().int().optional(),
+    expectedQuestionIndex: z.number().int().optional(),
+    clientSubmissionId: z.string().uuid().optional(),
+    answerKind: z.literal('answered'),
+    answerText: z.string().min(1),
+  }),
+  z.object({
+    questionId: z.string(),
+    expectedSessionVersion: z.number().int().optional(),
+    expectedQuestionIndex: z.number().int().optional(),
+    clientSubmissionId: z.string().uuid().optional(),
+    answerKind: z.literal('skipped'),
+    answerText: z.string().optional().nullable(),
+  }),
+]);
 export type AdaptiveAnswerSubmissionRequest = z.infer<typeof AdaptiveAnswerSubmissionRequestSchema>;
 
 export const AdaptiveAnswerSubmissionResponseSchema = z.object({
   completedTurnId: z.string(),
   sessionVersion: z.number().int(),
-  evaluationStatus: z.enum(['evaluated', 'insufficient_evidence', 'unavailable']),
+  evaluationStatus: TurnEvaluationStatusSchema,
   nextQuestion: QuestionBlueprintSchema.nullable(),
-  nextAction: z.string(),
+  nextAction: AdaptiveControllerActionSchema,
   challengeEvent: ChallengeEventSchema.optional(),
   isSessionComplete: z.boolean(),
+  isLastQuestion: z.boolean().optional(),
+  questionIndex: z.number().int().optional(),
   rootQuestionIndex: z.number().int(),
   rootQuestionCount: z.number().int(),
   turnIndex: z.number().int(),
@@ -674,6 +719,28 @@ export const AdaptiveAnswerSubmissionResponseSchema = z.object({
   }).strict().optional(),
 }).strict();
 export type AdaptiveAnswerSubmissionResponse = z.infer<typeof AdaptiveAnswerSubmissionResponseSchema>;
+
+export const RawDimensionObservationSchema = z.object({
+  dimension: z.string().optional(),
+  anchorScore: z.number().nullable().optional(),
+  confidence: z.string().optional(),
+  evidenceExcerpt: z.string().nullable().optional(),
+  signal: z.string().optional(),
+  rationale: z.string().optional(),
+  stage: z.string().optional(),
+  turnKind: z.string().optional(),
+}).passthrough();
+
+export const RawTurnEvaluationSchema = z.object({
+  evaluationStatus: z.string().optional(),
+  answerSummary: z.string().nullable().optional(),
+  observations: z.array(RawDimensionObservationSchema).optional(),
+  missingSignals: z.array(z.string()).optional(),
+  contradictions: z.array(z.string()).optional(),
+  recommendedProbe: z.string().nullable().optional(),
+  providerMetadata: ProviderMetadataSchema.optional(),
+}).passthrough();
+export type RawTurnEvaluation = z.infer<typeof RawTurnEvaluationSchema>;
 
 export const HintRequestSchema = z.object({
   questionText: z.string(),

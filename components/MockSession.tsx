@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   InterviewSessionContext,
@@ -9,7 +9,14 @@ import {
   InterviewStage,
   QuestionKind,
 } from 'mockmate-shared';
-import * as mockGeminiService from '../services/mockGeminiService';
+import {
+  startInterviewSession,
+  submitAdaptiveTurn,
+  analyzeCode,
+  getHintForQuestion,
+  generateIdealAnswer,
+  generateFinalReport
+} from '../services/mockGeminiService';
 import PushToTalkInput from './PushToTalkInput';
 import CodeEditor from './CodeEditor';
 import { PERSONAS_CONFIG } from '../personas.config';
@@ -67,7 +74,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     const startSession = async () => {
       setSessionPhase('loading_question');
       try {
-        const data = await mockGeminiService.startInterviewSession(sessionContext);
+        const data = await startInterviewSession(sessionContext);
         setSessionId(data.sessionId);
         setOpeningMessage(data.openingMessage);
         setCurrentQuestion(data.firstQuestion);
@@ -109,7 +116,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     setIsAnalyzingCode(true);
     audioService.playStart();
     try {
-      const result = await mockGeminiService.analyzeCode(currentQuestion, code);
+      const result = await analyzeCode(currentQuestion, code);
       setCodeFeedback(result.feedback);
       setLastTranscript(code);
       setSessionPhase('reviewing');
@@ -121,29 +128,43 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     }
   };
 
-  const handleAnswerSuccess = (res: AdaptiveAnswerSubmissionResponse) => {
+  const pendingSubmissionIdRef = useRef<string | null>(null);
+
+  const getOrCreateSubmissionId = () => {
+    if (!pendingSubmissionIdRef.current) {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        pendingSubmissionIdRef.current = crypto.randomUUID();
+      } else {
+        pendingSubmissionIdRef.current = `sub_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      }
+    }
+    return pendingSubmissionIdRef.current;
+  };
+
+  const clearSubmissionId = () => {
+    pendingSubmissionIdRef.current = null;
+  };
+
+  const handleAnswerSuccess = async (res: AdaptiveAnswerSubmissionResponse) => {
+    clearSubmissionId();
     setLastSubmissionResult(res);
-    setSubmissionError('');
     setSessionVersion(res.sessionVersion);
-    setTurnIndex(res.turnIndex);
-    setMaxTurns(res.maxTurns);
     setRootQuestionIndex(res.rootQuestionIndex);
     setRootQuestionCount(res.rootQuestionCount);
+    setTurnIndex(res.turnIndex);
+    setMaxTurns(res.maxTurns);
     setCurrentStage(res.stage);
-    setActiveChallengeEvent(res.challengeEvent || null);
     setCoachFeedback(res.coachFeedback);
+    setActiveChallengeEvent(res.challengeEvent || null);
+    setIdealAnswer(null);
 
-    if (isCoachMode) {
+    const deliveryMode = sessionContext.controls?.deliveryMode || 'exam';
+
+    if (deliveryMode === 'coach' && (res.coachFeedback || res.challengeEvent)) {
       setSessionPhase('feedback_shown');
-      setIsGeneratingIdeal(true);
-      mockGeminiService
-        .generateIdealAnswer(currentQuestion!.question, currentQuestion!.expectedSignals, lastTranscript)
-        .then(sample => setIdealAnswer(sample || 'Sample response unavailable.'))
-        .catch(() => setIdealAnswer('Sample response unavailable.'))
-        .finally(() => setIsGeneratingIdeal(false));
     } else {
       if (res.isSessionComplete || !res.nextQuestion) {
-        generateReport();
+        await generateReport();
       } else {
         setCurrentQuestion(res.nextQuestion);
         setSessionPhase('loading_question');
@@ -160,10 +181,10 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     if (!currentQuestion || !sessionId) return;
     audioService.playConfirm();
     setSubmissionError('');
-    const clientSubmissionId = crypto.randomUUID();
+    const clientSubmissionId = getOrCreateSubmissionId();
 
     try {
-      const res = await mockGeminiService.submitAdaptiveTurn(
+      const res = await submitAdaptiveTurn(
         sessionId,
         currentQuestion.id,
         sessionVersion,
@@ -182,10 +203,10 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
   const handleConfirmSkip = async () => {
     if (!currentQuestion || !sessionId) return;
     setSubmissionError('');
-    const clientSubmissionId = crypto.randomUUID();
+    const clientSubmissionId = getOrCreateSubmissionId();
 
     try {
-      const res = await mockGeminiService.submitAdaptiveTurn(
+      const res = await submitAdaptiveTurn(
         sessionId,
         currentQuestion.id,
         sessionVersion,
@@ -196,6 +217,19 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     } catch (err: any) {
       console.error('Skip turn submission failed:', err);
       setSubmissionError(err.message || 'Could not skip turn.');
+    }
+  };
+
+  const handleRequestIdealAnswer = async () => {
+    if (!currentQuestion || isGeneratingIdeal) return;
+    setIsGeneratingIdeal(true);
+    try {
+      const ideal = await generateIdealAnswer(currentQuestion.question, currentQuestion.expectedSignals, lastTranscript);
+      setIdealAnswer(ideal || 'Sample response unavailable.');
+    } catch (e) {
+      setIdealAnswer('Sample response unavailable.');
+    } finally {
+      setIsGeneratingIdeal(false);
     }
   };
 
@@ -219,7 +253,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     setIsHintLoading(true);
     audioService.playConfirm();
     try {
-      const nudge = await mockGeminiService.getHintForQuestion(currentQuestion.question, currentQuestion.expectedSignals);
+      const nudge = await getHintForQuestion(currentQuestion.question, currentQuestion.expectedSignals);
       setHint(nudge || 'Hint unavailable.');
     } catch (e) {
       setHint('Hint unavailable.');
@@ -232,7 +266,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     setSessionPhase('generating_report');
     setReportError('');
     try {
-      const report = await mockGeminiService.generateFinalReport(sessionId);
+      const report = await generateFinalReport(sessionId);
       onReportGenerated(report);
     } catch (error) {
       setReportError('Report generation failed. Please try again, or exit without results.');
@@ -302,7 +336,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
               <div className="max-w-sm w-full p-8 text-center space-y-6 bg-brand-dark border border-white/[0.1] rounded-3xl shadow-2xl">
                 <h3 className="text-xl md:text-2xl font-medium text-white tracking-tight">End session early?</h3>
                 <p className="text-xs text-brand-tint leading-relaxed">
-                  {turnIndex > 0 ? "You can still generate a scorecard report from completed turns." : "No turns completed yet."}
+                  Exiting will return you to the dashboard. You can resume or start a new session.
                 </p>
                 {reportError && (
                   <div className="rounded-2xl border border-brand-primary/20 bg-brand-primary/10 px-4 py-3 text-left text-xs font-medium leading-relaxed text-brand-primary">
@@ -310,10 +344,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
                   </div>
                 )}
                 <div className="flex flex-col gap-3">
-                  {turnIndex > 0 && (
-                    <button onClick={generateReport} className="bg-brand-primary text-brand-dark font-bold py-4 rounded-xl text-[10px] uppercase tracking-widest shadow-lg shadow-brand-primary/10">Get partial scorecard</button>
-                  )}
-                  <button onClick={onCancel} className="bg-white/5 text-white/40 font-bold py-4 rounded-xl border border-white/10 text-[10px] uppercase tracking-widest hover:bg-white/10">Exit completely</button>
+                  <button onClick={onCancel} className="bg-white/5 text-white font-bold py-4 rounded-xl border border-white/10 text-[10px] uppercase tracking-widest hover:bg-white/10">Exit without report</button>
                   <button onClick={() => setSessionPhase('asking')} className="text-[10px] font-bold text-brand-primary uppercase py-2 tracking-[0.12em]">Resume practice</button>
                 </div>
               </div>
@@ -366,7 +397,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
             <motion.div key="feedback" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 z-50 flex items-start justify-center overflow-y-auto bg-brand-dark/98 p-4 backdrop-blur-2xl sm:p-5 md:items-center">
               <div className="w-full max-w-2xl space-y-5 py-6 md:space-y-6 md:py-10">
                 <div className="text-center space-y-2">
-                  <span className="text-[9px] font-bold text-brand-primary uppercase tracking-[0.14em] opacity-90">Coach Guidance & Sample Path</span>
+                  <span className="text-[9px] font-bold text-brand-primary uppercase tracking-[0.14em] opacity-90">Coach Guidance</span>
                   <h3 className="text-2xl font-medium tracking-tight text-white md:text-4xl">Turn Reflection</h3>
                 </div>
 
@@ -390,7 +421,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
                 <div className="bg-brand-primary/[0.03] border border-brand-primary/10 rounded-2xl p-6 md:p-8 text-left relative overflow-hidden shadow-2xl">
                   <div className="flex items-center gap-3 mb-4">
                     <div className="w-7 h-7 rounded-full bg-brand-primary/10 flex items-center justify-center text-brand-primary text-xs font-bold">✦</div>
-                    <span className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.12em]">One Defensible Reasoning Path</span>
+                    <span className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.12em]">Defensible Reasoning Path</span>
                   </div>
 
                   {isGeneratingIdeal ? (
@@ -398,10 +429,17 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
                       <div className="w-5 h-5 rounded-full border-2 border-brand-primary/10 border-t-brand-primary animate-spin" />
                       <p className="text-[10px] text-brand-primary/70 font-bold tracking-[0.12em] uppercase">Generating reasoning path...</p>
                     </div>
-                  ) : (
+                  ) : idealAnswer ? (
                     <p className="text-sm md:text-lg text-white font-normal leading-relaxed">
-                      "{idealAnswer || 'Sample response unavailable.'}"
+                      "{idealAnswer}"
                     </p>
+                  ) : (
+                    <button
+                      onClick={handleRequestIdealAnswer}
+                      className="bg-brand-primary/10 hover:bg-brand-primary/20 text-brand-primary border border-brand-primary/30 font-bold py-3 px-6 rounded-xl text-[10px] uppercase tracking-widest transition-all"
+                    >
+                      Show one defensible reasoning path
+                    </button>
                   )}
                 </div>
 

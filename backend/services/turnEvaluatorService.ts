@@ -7,9 +7,10 @@ import {
   InterviewStage,
   QuestionKind,
   ProviderMetadata,
+  RawTurnEvaluationSchema,
 } from 'mockmate-shared';
 import { ACTIVE_DIMENSIONS_BY_MODE, APPROVED_DIMENSIONS } from '../config/evaluationConfig';
-import { callWithFallback, extractJson } from './aiService';
+import { callWithFallback, extractJson } from './llmProviderGateway';
 
 export function normalizeWhitespace(str: string): string {
   return (str || '').replace(/\s+/g, ' ').trim();
@@ -28,6 +29,9 @@ export function sanitizeAndVerifyEvaluation(
   question: QuestionBlueprint,
   mode: ReasoningMode
 ): TurnEvaluation {
+  const parsedRaw = RawTurnEvaluationSchema.safeParse(rawEval);
+  const rawData = parsedRaw.success ? parsedRaw.data : {};
+
   const activeDims = ACTIVE_DIMENSIONS_BY_MODE[mode] || ACTIVE_DIMENSIONS_BY_MODE.classic_behavioral;
   const normCandidateText = normalizeWhitespace(candidateResponse);
   const normQuestionText = normalizeWhitespace(question.question);
@@ -43,22 +47,38 @@ export function sanitizeAndVerifyEvaluation(
     });
   }
 
-  const status = rawEval?.evaluationStatus === 'evaluated' ? 'evaluated' : 'insufficient_evidence';
-  const rawObsArray = Array.isArray(rawEval?.observations) ? rawEval.observations : [];
+  const rawStatus = rawData.evaluationStatus;
+  const status = rawStatus === 'evaluated' ? 'evaluated' : 'insufficient_evidence';
+  const rawObsArray = Array.isArray(rawData.observations) ? rawData.observations : [];
 
   const verifiedObservations: DimensionObservation[] = [];
 
   for (const obs of rawObsArray) {
     if (!obs || typeof obs !== 'object') continue;
     const dim = obs.dimension;
-    if (!dim || !activeDims.includes(dim)) continue;
+    if (!dim || !activeDims.includes(dim as any)) continue;
     if (!APPROVED_DIMENSIONS[dim as keyof typeof APPROVED_DIMENSIONS]) continue;
 
-    let anchorScore = typeof obs.anchorScore === 'number' && obs.anchorScore >= 0 && obs.anchorScore <= 4 ? obs.anchorScore : null;
-    const confidence = ['high', 'medium', 'low'].includes(obs.confidence) ? obs.confidence : 'medium';
-    let excerpt = typeof obs.evidenceExcerpt === 'string' ? obs.evidenceExcerpt.trim() : null;
+    // Anchor score must be an exact integer 0, 1, 2, 3, or 4
+    let anchorScore: 0 | 1 | 2 | 3 | 4 | null = null;
+    if (
+      typeof obs.anchorScore === 'number' &&
+      Number.isInteger(obs.anchorScore) &&
+      obs.anchorScore >= 0 &&
+      obs.anchorScore <= 4
+    ) {
+      anchorScore = obs.anchorScore as 0 | 1 | 2 | 3 | 4;
+    }
 
-    if (excerpt) {
+    // Confidence handling: retain provider confidence if low/medium/high, else low (never upgrade missing to medium)
+    let confidence: 'low' | 'medium' | 'high' = 'low';
+    if (typeof obs.confidence === 'string' && ['low', 'medium', 'high'].includes(obs.confidence)) {
+      confidence = obs.confidence as 'low' | 'medium' | 'high';
+    }
+
+    let excerpt: string | null = typeof obs.evidenceExcerpt === 'string' ? obs.evidenceExcerpt.trim() : null;
+
+    if (excerpt && excerpt.length > 0) {
       const normExcerpt = normalizeWhitespace(excerpt);
       const isCandidateExcerpt = isExactSubstring(normExcerpt, normCandidateText);
       const isQuestionExcerpt = isExactSubstring(normExcerpt, normQuestionText);
@@ -70,40 +90,54 @@ export function sanitizeAndVerifyEvaluation(
       }
     } else {
       anchorScore = null;
+      excerpt = null;
     }
 
+    const signal = typeof obs.signal === 'string' ? obs.signal.trim() : '';
+    const rationale = typeof obs.rationale === 'string' ? obs.rationale.trim() : '';
+
+    // If signal or rationale are missing/empty, observation cannot be scored
+    if (!signal || !rationale) {
+      anchorScore = null;
+      excerpt = null;
+    }
+
+    const validSignal = signal || 'Unverified observation signal';
+    const validRationale = rationale || 'Insufficient evidence or grounding rationale.';
+
     verifiedObservations.push({
-      dimension: dim,
+      dimension: dim as any,
       anchorScore,
-      confidence: confidence as any,
+      confidence,
       evidenceExcerpt: excerpt,
-      signal: typeof obs.signal === 'string' ? obs.signal.trim() : 'Observation',
-      rationale: typeof obs.rationale === 'string' ? obs.rationale.trim() : 'Observed candidate response.',
+      signal: validSignal,
+      rationale: validRationale,
       stage: (obs.stage || question.stage || 'framing') as InterviewStage,
       turnKind: (obs.turnKind || question.questionKind || 'root') as QuestionKind,
     });
   }
 
-  const missingSignals = Array.isArray(rawEval?.missingSignals)
-    ? rawEval.missingSignals.filter((s: any) => typeof s === 'string' && s.trim().length > 0)
+  const missingSignals = Array.isArray(rawData.missingSignals)
+    ? rawData.missingSignals.filter((s: any) => typeof s === 'string' && s.trim().length > 0)
     : [];
 
-  const contradictions = Array.isArray(rawEval?.contradictions)
-    ? rawEval.contradictions.filter((c: any) => typeof c === 'string' && c.trim().length > 0)
+  const contradictions = Array.isArray(rawData.contradictions)
+    ? rawData.contradictions.filter((c: any) => typeof c === 'string' && c.trim().length > 0)
     : [];
 
-  const recommendedProbe = typeof rawEval?.recommendedProbe === 'string' && rawEval.recommendedProbe.trim().length > 0
-    ? rawEval.recommendedProbe.trim()
-    : null;
+  const recommendedProbe =
+    typeof rawData.recommendedProbe === 'string' && rawData.recommendedProbe.trim().length > 0
+      ? rawData.recommendedProbe.trim()
+      : null;
 
   return TurnEvaluationSchema.parse({
     evaluationStatus: verifiedObservations.some(o => o.anchorScore !== null) ? 'evaluated' : status,
-    answerSummary: typeof rawEval?.answerSummary === 'string' ? rawEval.answerSummary.trim() : null,
+    answerSummary: typeof rawData.answerSummary === 'string' ? rawData.answerSummary.trim() : null,
     observations: verifiedObservations,
     missingSignals,
     contradictions,
     recommendedProbe,
-    providerMetadata: rawEval?.providerMetadata,
+    providerMetadata: rawData.providerMetadata,
   });
 }
 

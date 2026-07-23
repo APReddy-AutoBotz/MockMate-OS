@@ -144,6 +144,7 @@ export default {
   calibrateIntent,
   generateInterviewPlan,
   startInterviewSession,
+  submitAdaptiveTurn,
   submitAnswerAndGetNext,
   analyzeCode,
   simulateExecution,

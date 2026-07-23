@@ -2,7 +2,13 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import MockSession from '../MockSession';
-import * as mockGeminiService from '../../services/mockGeminiService';
+import {
+  startInterviewSession,
+  submitAdaptiveTurn,
+  getHintForQuestion,
+  generateIdealAnswer,
+  generateFinalReport
+} from '../../services/mockGeminiService';
 import { InterviewSessionContext, FinalReport } from 'mockmate-shared';
 
 jest.mock('../../services/mockGeminiService');
@@ -44,7 +50,7 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
 
   // 1. Structured session setup calls POST /api/interview/sessions
   test('1. Structured session setup calls startInterviewSession API endpoint', async () => {
-    (mockGeminiService.startInterviewSession as jest.Mock).mockResolvedValueOnce({
+    (startInterviewSession as jest.Mock).mockResolvedValueOnce({
       sessionId: 'sess_1',
       openingMessage: 'Welcome to your mock interview.',
       firstQuestion: mockContext.interviewPlan.questionSet[0],
@@ -55,14 +61,14 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
     render(<MockSession sessionContext={mockContext} onReportGenerated={jest.fn()} onCancel={jest.fn()} />);
 
     await waitFor(() => {
-      expect(mockGeminiService.startInterviewSession).toHaveBeenCalledWith(mockContext);
+      expect(startInterviewSession).toHaveBeenCalledWith(mockContext);
       expect(screen.getByText(/What is Virtual DOM\?/i)).toBeInTheDocument();
     });
   });
 
   // 2. Conversational session setup calls POST /api/interview/sessions
   test('2. Conversational session setup calls startInterviewSession API endpoint', async () => {
-    (mockGeminiService.startInterviewSession as jest.Mock).mockResolvedValueOnce({
+    (startInterviewSession as jest.Mock).mockResolvedValueOnce({
       sessionId: 'sess_conv_1',
       openingMessage: 'Welcome to conversational mode.',
       firstQuestion: mockConversationalContext.interviewPlan.questionSet[0],
@@ -73,14 +79,14 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
     render(<MockSession sessionContext={mockConversationalContext} onReportGenerated={jest.fn()} onCancel={jest.fn()} />);
 
     await waitFor(() => {
-      expect(mockGeminiService.startInterviewSession).toHaveBeenCalledWith(mockConversationalContext);
+      expect(startInterviewSession).toHaveBeenCalledWith(mockConversationalContext);
       expect(screen.getByText(/What is Virtual DOM\?/i)).toBeInTheDocument();
     });
   });
 
   // 3 & 4. Submission failure on answer keeps current question active (no local question progression)
   test('3 & 4. Answer submission failure keeps current question active without local progression', async () => {
-    (mockGeminiService.startInterviewSession as jest.Mock).mockResolvedValueOnce({
+    (startInterviewSession as jest.Mock).mockResolvedValueOnce({
       sessionId: 'sess_1',
       openingMessage: 'Welcome',
       firstQuestion: mockContext.interviewPlan.questionSet[0],
@@ -98,8 +104,12 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
     const skipBtn = screen.getByRole('button', { name: /Skip/i });
     fireEvent.click(skipBtn);
 
-    (mockGeminiService.submitAnswerAndGetNext as jest.Mock).mockRejectedValueOnce(new Error('Network submission error'));
-    const confirmSkipBtn = screen.getByRole('button', { name: /Yes, Skip/i });
+    await waitFor(() => {
+      expect(screen.getByText(/Skip this turn\?/i)).toBeInTheDocument();
+    });
+
+    (submitAdaptiveTurn as jest.Mock).mockRejectedValueOnce(new Error('Network submission error'));
+    const confirmSkipBtn = screen.getByRole('button', { name: /Yes, skip turn/i });
     fireEvent.click(confirmSkipBtn);
 
     await waitFor(() => {
@@ -109,7 +119,7 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
 
   // 5. Submission failure on skip keeps current question active
   test('5. Skip submission failure keeps current question active', async () => {
-    (mockGeminiService.startInterviewSession as jest.Mock).mockResolvedValueOnce({
+    (startInterviewSession as jest.Mock).mockResolvedValueOnce({
       sessionId: 'sess_1',
       openingMessage: 'Welcome',
       firstQuestion: mockContext.interviewPlan.questionSet[0],
@@ -126,8 +136,12 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
     const skipBtn = screen.getByRole('button', { name: /Skip/i });
     fireEvent.click(skipBtn);
 
-    const confirmSkipBtn = screen.getByRole('button', { name: /Yes, Skip/i });
-    (mockGeminiService.submitAnswerAndGetNext as jest.Mock).mockRejectedValueOnce(new Error('Skip failed on server'));
+    await waitFor(() => {
+      expect(screen.getByText(/Skip this turn\?/i)).toBeInTheDocument();
+    });
+
+    const confirmSkipBtn = screen.getByRole('button', { name: /Yes, skip turn/i });
+    (submitAdaptiveTurn as jest.Mock).mockRejectedValueOnce(new Error('Skip failed on server'));
     fireEvent.click(confirmSkipBtn);
 
     await waitFor(() => {
@@ -138,7 +152,7 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
   // 6. No final report generated following answer/skip submission failure
   test('6. No final report generated after answer/skip submission failure', async () => {
     const onReportGenerated = jest.fn();
-    (mockGeminiService.startInterviewSession as jest.Mock).mockResolvedValueOnce({
+    (startInterviewSession as jest.Mock).mockResolvedValueOnce({
       sessionId: 'sess_1',
       openingMessage: 'Welcome',
       firstQuestion: mockContext.interviewPlan.questionSet[0],
@@ -155,8 +169,12 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
     const skipBtn = screen.getByRole('button', { name: /Skip/i });
     fireEvent.click(skipBtn);
 
-    (mockGeminiService.submitAnswerAndGetNext as jest.Mock).mockRejectedValueOnce(new Error('Server error'));
-    const confirmSkipBtn = screen.getByRole('button', { name: /Yes, Skip/i });
+    await waitFor(() => {
+      expect(screen.getByText(/Skip this turn\?/i)).toBeInTheDocument();
+    });
+
+    (submitAdaptiveTurn as jest.Mock).mockRejectedValueOnce(new Error('Server error'));
+    const confirmSkipBtn = screen.getByRole('button', { name: /Yes, skip turn/i });
     fireEvent.click(confirmSkipBtn);
 
     await waitFor(() => {
@@ -167,14 +185,14 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
 
   // 8. Hint generation failure presents 'Hint unavailable.'
   test("8. Hint generation failure presents 'Hint unavailable.'", async () => {
-    (mockGeminiService.startInterviewSession as jest.Mock).mockResolvedValueOnce({
+    (startInterviewSession as jest.Mock).mockResolvedValueOnce({
       sessionId: 'sess_1',
       openingMessage: 'Welcome',
       firstQuestion: mockContext.interviewPlan.questionSet[0],
       questionIndex: 0,
       totalQuestions: 2
     });
-    (mockGeminiService.getHintForQuestion as jest.Mock).mockRejectedValueOnce(new Error('AI hint offline'));
+    (getHintForQuestion as jest.Mock).mockRejectedValueOnce(new Error('AI hint offline'));
 
     render(<MockSession sessionContext={mockContext} onReportGenerated={jest.fn()} onCancel={jest.fn()} />);
 
@@ -192,14 +210,14 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
 
   // 9. Ideal-response generation failure presents 'Sample response unavailable.'
   test("9. Ideal-response generation failure presents 'Sample response unavailable.'", async () => {
-    (mockGeminiService.startInterviewSession as jest.Mock).mockResolvedValueOnce({
+    (startInterviewSession as jest.Mock).mockResolvedValueOnce({
       sessionId: 'sess_1',
       openingMessage: 'Welcome',
       firstQuestion: mockContext.interviewPlan.questionSet[0],
       questionIndex: 0,
       totalQuestions: 2
     });
-    (mockGeminiService.generateIdealAnswer as jest.Mock).mockRejectedValueOnce(new Error('AI sample offline'));
+    (generateIdealAnswer as jest.Mock).mockRejectedValueOnce(new Error('AI sample offline'));
 
     render(<MockSession sessionContext={mockContext} onReportGenerated={jest.fn()} onCancel={jest.fn()} />);
 
@@ -207,12 +225,12 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
       expect(screen.getByText(/What is Virtual DOM\?/i)).toBeInTheDocument();
     });
 
-    await expect(mockGeminiService.generateIdealAnswer('What is Virtual DOM?', [])).rejects.toThrow('AI sample offline');
+    await expect(generateIdealAnswer('What is Virtual DOM?', [])).rejects.toThrow('AI sample offline');
   });
 
   // 10. Question-count mismatch between plan and controls never produces undefined nextQuestion
   test('10. Question-count mismatch returns null nextQuestion on last turn safely', async () => {
-    (mockGeminiService.startInterviewSession as jest.Mock).mockResolvedValueOnce({
+    (startInterviewSession as jest.Mock).mockResolvedValueOnce({
       sessionId: 'sess_1',
       openingMessage: 'Welcome',
       firstQuestion: mockContext.interviewPlan.questionSet[0],
@@ -229,22 +247,49 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
     const skipBtn = screen.getByRole('button', { name: /Skip/i });
     fireEvent.click(skipBtn);
 
-    (mockGeminiService.submitAnswerAndGetNext as jest.Mock).mockResolvedValueOnce({
-      completedTurnId: 't1',
-      nextQuestion: null,
-      isLastQuestion: true,
-      questionIndex: 1,
-      totalQuestions: 1
+    await waitFor(() => {
+      expect(screen.getByText(/Skip this turn\?/i)).toBeInTheDocument();
     });
 
-    const confirmSkipBtn = screen.getByRole('button', { name: /Yes, Skip/i });
+    (generateFinalReport as jest.Mock).mockResolvedValueOnce({
+      overallSummary: 'Evaluation could not be completed.',
+      evaluationModel: 'mockmate_v1_canonical',
+      readiness: { status: 'NOT_ASSESSED', reasoning: 'Insufficient evidence.' },
+      quantitativeAnalysis: { dimension_scores: [] },
+      advisoryPanel: [],
+      questionPerformance: [],
+      biggestRiskArea: null,
+      coachPack: null,
+      trajectoryReplay: [],
+      auditLayer: [],
+      simplifiedScore: null,
+      quickWins: [],
+      prioritizedActions: []
+    });
+
+    (submitAdaptiveTurn as jest.Mock).mockResolvedValueOnce({
+      completedTurnId: 't1',
+      sessionVersion: 2,
+      evaluationStatus: 'evaluated',
+      nextQuestion: null,
+      nextAction: 'complete_session',
+      isSessionComplete: true,
+      rootQuestionIndex: 0,
+      rootQuestionCount: 1,
+      turnIndex: 1,
+      maxTurns: 8,
+      stage: 'reflection',
+    });
+
+    const confirmSkipBtn = screen.getByRole('button', { name: /Yes, skip turn/i });
     fireEvent.click(confirmSkipBtn);
 
     await waitFor(() => {
-      expect(mockGeminiService.submitAnswerAndGetNext).toHaveBeenCalledWith(
+      expect(submitAdaptiveTurn).toHaveBeenCalledWith(
         'sess_1',
         'q1',
-        0,
+        1,
+        expect.any(String),
         'skipped'
       );
     });

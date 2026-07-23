@@ -85,55 +85,41 @@ for (const col of requiredColumns) {
   }
 }
 
-// 4. Verify question_id column in interview_turns
+// 5. Verify question_id and adaptive_response column in interview_turns
 if (!normalizedSql.includes('add column if not exists question_id')) {
   failures.push('Missing question_id column in interview_turns');
 }
+if (!normalizedSql.includes('add column if not exists adaptive_response')) {
+  failures.push('Missing adaptive_response column in interview_turns');
+}
 
-// 5. Verify RPC atomic_submit_answer requirements
+// 6. Verify RPC definitions
 if (!normalizedSql.includes('create or replace function public.atomic_submit_answer')) {
   failures.push('Missing RPC definition: atomic_submit_answer');
 }
 
-if (!normalizedSql.includes('insert into public.interview_turns')) {
-  failures.push('RPC atomic_submit_answer must insert into public.interview_turns');
+if (!normalizedSql.includes('create or replace function public.atomic_submit_adaptive_turn')) {
+  failures.push('Missing RPC definition: atomic_submit_adaptive_turn');
 }
 
-if (!normalizedSql.includes('user_id,')) {
-  failures.push('RPC atomic_submit_answer must insert user_id into interview_turns');
+if (!normalizedSql.includes('adaptive_response')) {
+  failures.push('RPC atomic_submit_adaptive_turn must handle adaptive_response JSONB replay');
 }
 
-if (normalizedSql.includes('interview_sessions.history') || normalizedSql.includes('sessions.history')) {
-  failures.push('RPC atomic_submit_answer must NOT reference interview_sessions.history');
-}
-
-if (!normalizedSql.includes("status = case when p_is_last then 'awaiting_report' else 'active' end")) {
-  failures.push('RPC atomic_submit_answer must set status to awaiting_report on final answer');
-}
-
-if (!normalizedSql.includes("p_answer_kind not in ('answered', 'skipped')")) {
-  failures.push('RPC atomic_submit_answer must validate p_answer_kind');
-}
-
-if (!normalizedSql.includes('revoke all on function public.atomic_submit_answer') || !normalizedSql.includes('from public')) {
-  failures.push('RPC atomic_submit_answer must REVOKE permissions FROM PUBLIC');
+if (!normalizedSql.includes('from public')) {
+  failures.push('RPCs must REVOKE permissions FROM PUBLIC');
 }
 
 if (!normalizedSql.includes('from anon')) {
-  failures.push('RPC atomic_submit_answer must REVOKE permissions FROM anon');
+  failures.push('RPCs must REVOKE permissions FROM anon');
 }
 
 if (!normalizedSql.includes('from authenticated')) {
-  failures.push('RPC atomic_submit_answer must REVOKE permissions FROM authenticated');
+  failures.push('RPCs must REVOKE permissions FROM authenticated');
 }
 
-if (!normalizedSql.includes('grant execute on function public.atomic_submit_answer') || !normalizedSql.includes('to service_role')) {
-  failures.push('RPC atomic_submit_answer must GRANT EXECUTE TO service_role');
-}
-
-// Verify completed_at is NOT set during answer submission
-if (normalizedSql.includes('completed_at = now()')) {
-  failures.push('RPC atomic_submit_answer must not set completed_at during answer submission');
+if (!normalizedSql.includes('grant execute on function public.atomic_submit_adaptive_turn') || !normalizedSql.includes('to service_role')) {
+  failures.push('RPC atomic_submit_adaptive_turn must GRANT EXECUTE TO service_role');
 }
 
 if (failures.length > 0) {

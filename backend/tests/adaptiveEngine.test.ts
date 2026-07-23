@@ -229,6 +229,7 @@ describe('P0-2 Adaptive Controller & Decision Engine', () => {
 
     const decision = computeAdaptiveDecision({
       mode: 'classic_technical',
+      answerKind: 'answered',
       state: initialState,
       currentQuestion: currentQ,
       evaluation: turnEval,
@@ -240,6 +241,7 @@ describe('P0-2 Adaptive Controller & Decision Engine', () => {
 
     const constructed = constructNextQuestion(decision, {
       mode: 'classic_technical',
+      answerKind: 'answered',
       state: initialState,
       currentQuestion: currentQ,
       evaluation: turnEval,
@@ -272,6 +274,7 @@ describe('P0-2 Adaptive Controller & Decision Engine', () => {
 
     const decision = computeAdaptiveDecision({
       mode: 'classic_technical',
+      answerKind: 'answered',
       state: initialState,
       currentQuestion: currentQ,
       evaluation: turnEval,
@@ -283,6 +286,7 @@ describe('P0-2 Adaptive Controller & Decision Engine', () => {
 
     const constructed = constructNextQuestion(decision, {
       mode: 'classic_technical',
+      answerKind: 'answered',
       state: initialState,
       currentQuestion: currentQ,
       evaluation: turnEval,
@@ -303,6 +307,7 @@ describe('P0-2 Adaptive Controller & Decision Engine', () => {
 
     const decision = computeAdaptiveDecision({
       mode: 'classic_technical',
+      answerKind: 'answered',
       state: maxedState,
       currentQuestion: currentQ,
       evaluation: TurnEvaluationSchema.parse({
@@ -319,6 +324,7 @@ describe('P0-2 Adaptive Controller & Decision Engine', () => {
 
     const constructed = constructNextQuestion(decision, {
       mode: 'classic_technical',
+      answerKind: 'answered',
       state: maxedState,
       currentQuestion: currentQ,
       evaluation: {} as any,

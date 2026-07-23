@@ -28,7 +28,8 @@ ADD COLUMN IF NOT EXISTS evaluation_status text DEFAULT 'not_tested',
 ADD COLUMN IF NOT EXISTS turn_evaluation jsonb,
 ADD COLUMN IF NOT EXISTS controller_decision jsonb,
 ADD COLUMN IF NOT EXISTS challenge_event jsonb,
-ADD COLUMN IF NOT EXISTS engine_version text DEFAULT 'v2';
+ADD COLUMN IF NOT EXISTS engine_version text DEFAULT 'v2',
+ADD COLUMN IF NOT EXISTS adaptive_response jsonb;
 
 -- 3. Idempotency unique index on interview_turns
 CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_turns_session_client_sub
@@ -57,7 +58,9 @@ CREATE OR REPLACE FUNCTION public.atomic_submit_adaptive_turn(
   p_challenge_count integer,
   p_is_complete boolean,
   p_max_turns integer,
-  p_total_roots integer
+  p_total_roots integer,
+  p_turn_id uuid DEFAULT NULL,
+  p_adaptive_response jsonb DEFAULT NULL
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -75,17 +78,25 @@ BEGIN
     RAISE EXCEPTION 'Invalid answer kind';
   END IF;
 
-  -- 1. Check idempotency for existing client_submission_id
+  -- 1. Check session existence and ownership first
+  SELECT * INTO v_session
+  FROM public.interview_sessions
+  WHERE id = p_session_id AND user_id = p_user_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Session not found or unauthorized';
+  END IF;
+
+  -- 2. Check idempotency for existing client_submission_id
   IF p_client_submission_id IS NOT NULL THEN
-    SELECT id, session_id INTO v_existing_turn
+    SELECT id, session_id, adaptive_response INTO v_existing_turn
     FROM public.interview_turns
     WHERE session_id = p_session_id AND client_submission_id = p_client_submission_id;
 
     IF FOUND THEN
-      -- Fetch current session state to return cached idempotent response
-      SELECT * INTO v_session
-      FROM public.interview_sessions
-      WHERE id = p_session_id AND user_id = p_user_id;
+      IF v_existing_turn.adaptive_response IS NOT NULL THEN
+        RETURN v_existing_turn.adaptive_response;
+      END IF;
 
       RETURN jsonb_build_object(
         'completedTurnId', v_existing_turn.id::text,
@@ -104,15 +115,11 @@ BEGIN
     END IF;
   END IF;
 
-  -- 2. Lock session row
+  -- 3. Lock session row
   SELECT * INTO v_session
   FROM public.interview_sessions
   WHERE id = p_session_id AND user_id = p_user_id
   FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Session not found or unauthorized';
-  END IF;
 
   IF v_session.status != 'active' THEN
     RAISE EXCEPTION 'Session is not active';
@@ -123,9 +130,31 @@ BEGIN
   END IF;
 
   v_new_version := v_session.session_version + 1;
+  v_turn_id := COALESCE(p_turn_id, gen_random_uuid());
 
-  -- 3. Insert turn
+  -- 4. Build response payload if not provided
+  IF p_adaptive_response IS NULL THEN
+    v_result := jsonb_build_object(
+      'completedTurnId', v_turn_id::text,
+      'sessionVersion', v_new_version,
+      'evaluationStatus', COALESCE(p_turn_evaluation->>'evaluationStatus', 'evaluated'),
+      'nextQuestion', CASE WHEN p_is_complete THEN NULL ELSE p_next_question_json END,
+      'nextAction', COALESCE(p_controller_decision->>'action', 'advance_root_question'),
+      'challengeEvent', p_challenge_event,
+      'isSessionComplete', p_is_complete,
+      'rootQuestionIndex', p_next_root_index,
+      'rootQuestionCount', p_total_roots,
+      'turnIndex', v_session.current_turn_index + 1,
+      'maxTurns', p_max_turns,
+      'stage', p_next_stage
+    );
+  ELSE
+    v_result := p_adaptive_response;
+  END IF;
+
+  -- 5. Insert turn
   INSERT INTO public.interview_turns (
+    id,
     user_id,
     session_id,
     client_submission_id,
@@ -141,10 +170,12 @@ BEGIN
     turn_evaluation,
     controller_decision,
     challenge_event,
+    adaptive_response,
     engine_version,
     feedback,
     created_at
   ) VALUES (
+    v_turn_id,
     p_user_id,
     p_session_id,
     p_client_submission_id,
@@ -160,12 +191,13 @@ BEGIN
     p_turn_evaluation,
     p_controller_decision,
     p_challenge_event,
+    v_result,
     'v2',
     jsonb_build_object('answerKind', p_answer_kind, 'sessionVersion', v_new_version),
     now()
-  ) RETURNING id INTO v_turn_id;
+  );
 
-  -- 4. Update session state
+  -- 6. Update session state
   UPDATE public.interview_sessions SET
     session_version = v_new_version,
     current_turn_index = current_turn_index + 1,
@@ -183,38 +215,22 @@ BEGIN
     updated_at = now()
   WHERE id = p_session_id;
 
-  -- 5. Construct return JSON
-  v_result := jsonb_build_object(
-    'completedTurnId', v_turn_id::text,
-    'sessionVersion', v_new_version,
-    'evaluationStatus', COALESCE(p_turn_evaluation->>'evaluationStatus', 'evaluated'),
-    'nextQuestion', CASE WHEN p_is_complete THEN NULL ELSE p_next_question_json END,
-    'nextAction', COALESCE(p_controller_decision->>'action', 'advance_root_question'),
-    'challengeEvent', p_challenge_event,
-    'isSessionComplete', p_is_complete,
-    'rootQuestionIndex', p_next_root_index,
-    'rootQuestionCount', p_total_roots,
-    'turnIndex', v_session.current_turn_index + 1,
-    'maxTurns', p_max_turns,
-    'stage', p_next_stage
-  );
-
   RETURN v_result;
 END;
 $$;
 
 REVOKE ALL ON FUNCTION public.atomic_submit_adaptive_turn(
-  uuid, uuid, uuid, text, integer, text, text, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, integer, integer, integer, boolean, integer, integer
+  uuid, uuid, uuid, text, integer, text, text, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, integer, integer, integer, boolean, integer, integer, uuid, jsonb
 ) FROM PUBLIC;
 
 REVOKE ALL ON FUNCTION public.atomic_submit_adaptive_turn(
-  uuid, uuid, uuid, text, integer, text, text, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, integer, integer, integer, boolean, integer, integer
+  uuid, uuid, uuid, text, integer, text, text, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, integer, integer, integer, boolean, integer, integer, uuid, jsonb
 ) FROM anon;
 
 REVOKE ALL ON FUNCTION public.atomic_submit_adaptive_turn(
-  uuid, uuid, uuid, text, integer, text, text, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, integer, integer, integer, boolean, integer, integer
+  uuid, uuid, uuid, text, integer, text, text, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, integer, integer, integer, boolean, integer, integer, uuid, jsonb
 ) FROM authenticated;
 
 GRANT EXECUTE ON FUNCTION public.atomic_submit_adaptive_turn(
-  uuid, uuid, uuid, text, integer, text, text, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, integer, integer, integer, boolean, integer, integer
+  uuid, uuid, uuid, text, integer, text, text, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, integer, integer, integer, boolean, integer, integer, uuid, jsonb
 ) TO service_role;

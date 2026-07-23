@@ -19,10 +19,29 @@ export interface AdaptiveControllerInput {
   currentQuestion: QuestionBlueprint;
   evaluation: TurnEvaluation;
   remainingRootQuestions: QuestionBlueprint[];
+  answerKind: 'answered' | 'skipped';
+}
+
+export function generateDeterministicQuestionId(
+  rootId: string,
+  kind: QuestionKind,
+  stage: InterviewStage,
+  prompt: string,
+  seq: number
+): string {
+  const str = `${rootId}_${kind}_${stage}_${seq}_${prompt.slice(0, 30)}`;
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash |= 0;
+  }
+  const hex = Math.abs(hash).toString(36);
+  return `${kind}_${rootId}_${hex}_${seq}`;
 }
 
 export function computeAdaptiveDecision(input: AdaptiveControllerInput): AdaptiveControllerDecision {
-  const { mode, state, currentQuestion, evaluation, remainingRootQuestions } = input;
+  const { mode, state, currentQuestion, evaluation, remainingRootQuestions, answerKind } = input;
   const policy = getModePolicy(mode);
 
   const nextTurnIndex = state.currentTurnIndex + 1;
@@ -35,13 +54,13 @@ export function computeAdaptiveDecision(input: AdaptiveControllerInput): Adaptiv
     return AdaptiveControllerDecisionSchema.parse({
       action: 'complete_session',
       rationale: `Maximum turn budget of ${state.adaptivePolicy.maxTurns} reached. Completing session.`,
-      nextQuestionKind: 'reflection',
+      nextQuestionKind: null,
       targetStage: 'reflection',
     });
   }
 
-  // Rule 2: Skipped answer
-  if (evaluation.answerSummary?.includes('skipped')) {
+  // Rule 2: Explicit skipped answer
+  if (answerKind === 'skipped') {
     if (hasRemainingRoots) {
       return AdaptiveControllerDecisionSchema.parse({
         action: 'advance_root_question',
@@ -53,7 +72,7 @@ export function computeAdaptiveDecision(input: AdaptiveControllerInput): Adaptiv
     return AdaptiveControllerDecisionSchema.parse({
       action: 'complete_session',
       rationale: 'Final question skipped. Completing interview session.',
-      nextQuestionKind: 'reflection',
+      nextQuestionKind: null,
       targetStage: 'reflection',
     });
   }
@@ -71,39 +90,30 @@ export function computeAdaptiveDecision(input: AdaptiveControllerInput): Adaptiv
     return AdaptiveControllerDecisionSchema.parse({
       action: 'complete_session',
       rationale: 'Evaluation provider unavailable and root questions completed.',
-      nextQuestionKind: 'reflection',
+      nextQuestionKind: null,
       targetStage: 'reflection',
     });
   }
 
-  // Rule 4: Probe budget check if missing signals exist and probes allowed
-  const hasMissingSignals = evaluation.evaluationStatus === 'evaluated' && evaluation.missingSignals.length > 0;
-  const canProbe = state.probeCountForRoot < state.adaptivePolicy.maxProbesPerRoot && state.probeCountForRoot < policy.maxProbesPerRoot;
-  if (hasMissingSignals && canProbe && currentKind === 'root') {
+  // Lifecycle check: If current question was a reflection or challenge recovery, advance to next root or complete
+  if (currentKind === 'reflection') {
+    if (hasRemainingRoots) {
+      return AdaptiveControllerDecisionSchema.parse({
+        action: 'advance_root_question',
+        rationale: 'Reflection turn completed for root scenario. Advancing to next root question.',
+        nextQuestionKind: 'root',
+        targetStage: policy.stageSequence[0] || 'framing',
+      });
+    }
     return AdaptiveControllerDecisionSchema.parse({
-      action: 'ask_probe',
-      rationale: `Missing expected signals (${evaluation.missingSignals.slice(0, 2).join(', ')}). Issuing targeted probe.`,
-      nextQuestionKind: 'probe',
-      targetStage: 'exploration',
+      action: 'complete_session',
+      rationale: 'Final session reflection completed. Session complete.',
+      nextQuestionKind: null,
+      targetStage: 'reflection',
     });
   }
 
-  // Rule 5: Challenge budget check if initial reasoning exists and stage allows challenge
-  const hasGoodReasoning = evaluation.observations.some(o => typeof o.anchorScore === 'number' && o.anchorScore >= 2);
-  const canChallenge = state.challengeCount < state.adaptivePolicy.maxChallenges && state.challengeCount < policy.maxChallenges;
-  const isChallengeStageAllowed = policy.allowedChallengeTypes.length > 0;
-  if (hasGoodReasoning && canChallenge && isChallengeStageAllowed && currentKind !== 'challenge') {
-    const selectedChallengeType: ChallengeEventType = policy.allowedChallengeTypes[state.challengeCount % policy.allowedChallengeTypes.length];
-    return AdaptiveControllerDecisionSchema.parse({
-      action: 'introduce_challenge',
-      rationale: `Sufficient initial reasoning demonstrated. Introducing mode challenge: ${selectedChallengeType}.`,
-      nextQuestionKind: 'challenge',
-      targetStage: 'challenge',
-      challengeType: selectedChallengeType,
-    });
-  }
-
-  // Rule 6: Reflection after challenge
+  // Lifecycle check: If current question was a challenge, request recovery/reflection
   if (currentKind === 'challenge') {
     return AdaptiveControllerDecisionSchema.parse({
       action: 'ask_reflection',
@@ -113,7 +123,45 @@ export function computeAdaptiveDecision(input: AdaptiveControllerInput): Adaptiv
     });
   }
 
-  // Rule 7: Advance root question or complete
+  // Rule 4: Probe budget check if missing signals exist and probes allowed for current root
+  const hasMissingSignals = evaluation.evaluationStatus === 'evaluated' && evaluation.missingSignals.length > 0;
+  const canProbe =
+    state.probeCountForRoot < state.adaptivePolicy.maxProbesPerRoot && state.probeCountForRoot < policy.maxProbesPerRoot;
+  if (hasMissingSignals && canProbe && (currentKind === 'root' || currentKind === 'probe')) {
+    return AdaptiveControllerDecisionSchema.parse({
+      action: 'ask_probe',
+      rationale: `Missing expected signals (${evaluation.missingSignals.slice(0, 2).join(', ')}). Issuing targeted probe ${state.probeCountForRoot + 1}.`,
+      nextQuestionKind: 'probe',
+      targetStage: 'exploration',
+    });
+  }
+
+  // Rule 5: Challenge budget check if initial reasoning exists, challenge allowed, and not already challenged for this root
+  const hasGoodReasoning = evaluation.observations.some(o => typeof o.anchorScore === 'number' && o.anchorScore >= 2);
+  const canChallenge =
+    state.challengeCount < state.adaptivePolicy.maxChallenges && state.challengeCount < policy.maxChallenges;
+  const isChallengeStageAllowed = policy.allowedChallengeTypes.length > 0;
+  const alreadyChallengedForRoot = !!state.challengeAnsweredForRoot;
+
+  if (
+    hasGoodReasoning &&
+    canChallenge &&
+    isChallengeStageAllowed &&
+    !alreadyChallengedForRoot &&
+    (currentKind as string) !== 'challenge'
+  ) {
+    const selectedChallengeType: ChallengeEventType =
+      policy.allowedChallengeTypes[state.challengeCount % policy.allowedChallengeTypes.length];
+    return AdaptiveControllerDecisionSchema.parse({
+      action: 'introduce_challenge',
+      rationale: `Sufficient initial reasoning demonstrated. Introducing mode challenge: ${selectedChallengeType}.`,
+      nextQuestionKind: 'challenge',
+      targetStage: 'challenge',
+      challengeType: selectedChallengeType,
+    });
+  }
+
+  // Rule 6: Advance root question or complete
   if (hasRemainingRoots) {
     return AdaptiveControllerDecisionSchema.parse({
       action: 'advance_root_question',
@@ -123,8 +171,8 @@ export function computeAdaptiveDecision(input: AdaptiveControllerInput): Adaptiv
     });
   }
 
-  // Rule 8: Final reflection if required and budget allows
-  if (policy.completionRules.requireReflection && currentKind !== 'reflection') {
+  // Rule 7: Final session reflection if required and not yet asked
+  if (policy.completionRules.requireReflection && !state.finalReflectionAsked) {
     return AdaptiveControllerDecisionSchema.parse({
       action: 'ask_reflection',
       rationale: 'All root questions completed. Requesting final session reflection.',
@@ -133,11 +181,11 @@ export function computeAdaptiveDecision(input: AdaptiveControllerInput): Adaptiv
     });
   }
 
-  // Rule 9: Default complete
+  // Rule 8: Default complete
   return AdaptiveControllerDecisionSchema.parse({
     action: 'complete_session',
     rationale: 'All root questions and reflections complete.',
-    nextQuestionKind: 'reflection',
+    nextQuestionKind: null,
     targetStage: 'reflection',
   });
 }
@@ -145,7 +193,8 @@ export function computeAdaptiveDecision(input: AdaptiveControllerInput): Adaptiv
 export function constructNextQuestion(
   decision: AdaptiveControllerDecision,
   input: AdaptiveControllerInput,
-  challengeDraft?: ChallengeEvent
+  challengeDraft?: ChallengeEvent,
+  triggeringTurnId?: string
 ): { nextQuestion: QuestionBlueprint | null; challengeEvent?: ChallengeEvent } {
   const { mode, state, currentQuestion, evaluation, remainingRootQuestions } = input;
   const policy = getModePolicy(mode);
@@ -155,9 +204,20 @@ export function constructNextQuestion(
   }
 
   if (decision.action === 'ask_probe') {
-    const probeText = evaluation.recommendedProbe || policy.deterministicFallbackPrompts.probe || `Could you clarify your core assumption and decision criteria for ${currentQuestion.question}?`;
+    const probeSeq = state.probeCountForRoot + 1;
+    const probeText =
+      evaluation.recommendedProbe ||
+      policy.deterministicFallbackPrompts.probe ||
+      `Could you clarify your core assumption and decision criteria for ${currentQuestion.question}?`;
+    const qId = generateDeterministicQuestionId(
+      state.activeRootQuestionId,
+      'probe',
+      'exploration',
+      probeText,
+      probeSeq
+    );
     const nextQ = normalizeQuestionBlueprint({
-      id: `probe_${state.activeRootQuestionId}_${state.probeCountForRoot + 1}`,
+      id: qId,
       questionKind: 'probe',
       rootQuestionId: state.activeRootQuestionId,
       stage: 'exploration',
@@ -172,8 +232,21 @@ export function constructNextQuestion(
 
   if (decision.action === 'introduce_challenge') {
     const challengeType = decision.challengeType || policy.allowedChallengeTypes[0] || 'counterargument';
-    const challengeId = `ch_${state.activeRootQuestionId}_${state.challengeCount + 1}`;
-    const prompt = challengeDraft?.prompt || policy.deterministicFallbackPrompts.challenge || `Suppose a key constraint changes or a stakeholder pushes back on your solution. How do you adapt?`;
+    const challengeSeq = state.challengeCount + 1;
+    const prompt =
+      challengeDraft?.prompt ||
+      policy.deterministicFallbackPrompts.challenge ||
+      `Suppose a key constraint changes or a stakeholder pushes back on your solution. How do you adapt?`;
+    const challengeId = generateDeterministicQuestionId(
+      state.activeRootQuestionId,
+      'challenge',
+      'challenge',
+      prompt,
+      challengeSeq
+    );
+
+    const firstObsExcerpt = evaluation.observations.find(o => o.evidenceExcerpt)?.evidenceExcerpt || null;
+    const triggeringTurnUUID = triggeringTurnId || `turn_${state.currentTurnIndex}`;
 
     const challengeEvent: ChallengeEvent = {
       id: challengeId,
@@ -181,8 +254,8 @@ export function constructNextQuestion(
       prompt,
       rationale: challengeDraft?.rationale || `Testing candidate resilience under ${challengeType}`,
       targetDimensions: policy.activeDimensions,
-      triggeringTurnId: `turn_${state.currentTurnIndex}`,
-      triggeringEvidence: evaluation.observations[0]?.evidenceExcerpt || currentQuestion.question,
+      triggeringTurnId: triggeringTurnUUID,
+      triggeringEvidence: firstObsExcerpt,
       stage: 'challenge',
       severity: 'medium',
     };
@@ -204,9 +277,19 @@ export function constructNextQuestion(
   }
 
   if (decision.action === 'ask_reflection') {
-    const prompt = policy.deterministicFallbackPrompts.reflection || `Looking back at this scenario, what assumption proved most uncertain and how would you verify it next time?`;
+    const reflSeq = state.currentTurnIndex + 1;
+    const prompt =
+      policy.deterministicFallbackPrompts.reflection ||
+      `Looking back at this scenario, what assumption proved most uncertain and how would you verify it next time?`;
+    const qId = generateDeterministicQuestionId(
+      state.activeRootQuestionId,
+      'reflection',
+      'reflection',
+      prompt,
+      reflSeq
+    );
     const nextQ = normalizeQuestionBlueprint({
-      id: `refl_${state.activeRootQuestionId}_${Date.now().toString(36)}`,
+      id: qId,
       questionKind: 'reflection',
       rootQuestionId: state.activeRootQuestionId,
       stage: 'reflection',

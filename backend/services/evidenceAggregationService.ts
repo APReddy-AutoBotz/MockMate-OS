@@ -8,12 +8,28 @@ import {
   ReadinessStatus,
   ReasoningMode,
   InterviewStage,
+  QuestionKind,
   TurnEvaluation,
 } from 'mockmate-shared';
 import { ACTIVE_DIMENSIONS_BY_MODE, APPROVED_DIMENSIONS } from '../config/evaluationConfig';
 
+export interface DimensionEvidenceReference {
+  turnId: string;
+  excerpt: string;
+  stage: InterviewStage;
+  questionKind: QuestionKind;
+  signal: string;
+  anchorScore: number | null;
+  confidence: EvidenceConfidence;
+}
+
 export interface ScorecardResult {
-  dimensionScores: DimensionScore[];
+  dimensionScores: (DimensionScore & {
+    evidenceReferences?: DimensionEvidenceReference[];
+    trajectory?: TrajectoryStatus;
+    distinctTurnCount?: number;
+    hasChallengeEvidence?: boolean;
+  })[];
   dimensionStates: Record<DimensionKey, DimensionEvidenceState>;
   simplifiedScore: number | null;
   readinessStatus: ReadinessStatus;
@@ -27,7 +43,7 @@ const CONFIDENCE_WEIGHTS: Record<EvidenceConfidence, number> = {
 };
 
 export function computeTrajectory(observations: DimensionObservation[]): TrajectoryStatus {
-  const scoredObs = observations.filter(o => typeof o.anchorScore === 'number');
+  const scoredObs = observations.filter(o => typeof o.anchorScore === 'number' && o.anchorScore !== null);
   if (scoredObs.length < 2) return 'insufficient_evidence';
 
   const firstScore = scoredObs[0].anchorScore!;
@@ -40,42 +56,71 @@ export function computeTrajectory(observations: DimensionObservation[]): Traject
 }
 
 export function aggregateTurnEvidence(
-  turns: Array<{ turnId: string; evaluation?: TurnEvaluation; stage?: InterviewStage }>,
+  turns: Array<{ turnId: string; evaluation?: TurnEvaluation; stage?: InterviewStage; questionKind?: QuestionKind }>,
   mode: ReasoningMode
 ): ScorecardResult {
   const activeDims = ACTIVE_DIMENSIONS_BY_MODE[mode] || ACTIVE_DIMENSIONS_BY_MODE.classic_behavioral;
   const allDimensionKeys = Object.keys(APPROVED_DIMENSIONS) as DimensionKey[];
 
   const dimensionStates: Record<DimensionKey, DimensionEvidenceState> = {} as any;
+  const dimensionReferencesMap: Record<DimensionKey, DimensionEvidenceReference[]> = {} as any;
 
   for (const dimKey of allDimensionKeys) {
     const isActive = activeDims.includes(dimKey);
     const observations: DimensionObservation[] = [];
-    const turnIdsSet = new Set<string>();
+    const evidenceReferences: DimensionEvidenceReference[] = [];
+    const validTurnIdsSet = new Set<string>();
     const stagesSet = new Set<InterviewStage>();
     let hasChallengeEvidence = false;
+    let hasInitialNonChallenge = false;
+    let hasLaterChallengeOrRecovery = false;
 
     for (const turn of turns) {
-      if (!turn.evaluation || !Array.isArray(turn.evaluation.observations)) continue;
+      if (!turn.evaluation || turn.evaluation.evaluationStatus === 'unavailable') continue;
+      if (!Array.isArray(turn.evaluation.observations)) continue;
+
       for (const obs of turn.evaluation.observations) {
         if (obs.dimension === dimKey) {
           observations.push(obs);
-          if (turn.turnId) turnIdsSet.add(turn.turnId);
-          if (obs.stage) stagesSet.add(obs.stage);
-          if (obs.stage === 'challenge' || obs.turnKind === 'challenge') {
-            hasChallengeEvidence = true;
+
+          // A turn counts ONLY when it contains a valid non-null anchorScore and valid non-null evidenceExcerpt
+          if (obs.anchorScore !== null && typeof obs.evidenceExcerpt === 'string' && obs.evidenceExcerpt.trim().length > 0) {
+            validTurnIdsSet.add(turn.turnId);
+            if (obs.stage) stagesSet.add(obs.stage);
+
+            evidenceReferences.push({
+              turnId: turn.turnId,
+              excerpt: obs.evidenceExcerpt,
+              stage: obs.stage || turn.stage || 'framing',
+              questionKind: obs.turnKind || turn.questionKind || 'root',
+              signal: obs.signal,
+              anchorScore: obs.anchorScore,
+              confidence: obs.confidence,
+            });
+
+            const qKind = obs.turnKind || turn.questionKind || 'root';
+            if (qKind === 'root' || qKind === 'probe') {
+              hasInitialNonChallenge = true;
+            }
+            if (qKind === 'challenge' || qKind === 'reflection') {
+              hasLaterChallengeOrRecovery = true;
+              if (qKind === 'challenge') {
+                hasChallengeEvidence = true;
+              }
+            }
           }
         }
       }
     }
 
-    const distinctTurnIds = Array.from(turnIdsSet);
+    const distinctTurnIds = Array.from(validTurnIdsSet);
     const distinctStages = Array.from(stagesSet);
-    const validObs = observations.filter(o => typeof o.anchorScore === 'number');
+    const validObs = observations.filter(o => typeof o.anchorScore === 'number' && o.anchorScore !== null && o.evidenceExcerpt !== null);
 
-    // Scored requirement check: >= 2 distinct turns OR (initial obs + challenge/recovery obs)
+    // Rule A: Valid scored observations from at least 2 distinct turns
+    // OR Rule B: One valid initial observation and one valid later challenge/recovery observation from a DIFFERENT turn
     const hasEnoughTurns = distinctTurnIds.length >= 2;
-    const hasChallengeCombo = validObs.length >= 2 && hasChallengeEvidence;
+    const hasChallengeCombo = hasInitialNonChallenge && hasLaterChallengeOrRecovery && distinctTurnIds.length >= 2;
     const isSufficient = isActive && (hasEnoughTurns || hasChallengeCombo);
 
     let anchorScore: number | null = null;
@@ -114,23 +159,30 @@ export function aggregateTurnEvidence(
       confidence,
       trajectory: isSufficient ? trajectory : 'insufficient_evidence',
     };
+
+    dimensionReferencesMap[dimKey] = evidenceReferences;
   }
 
   // Build DimensionScore list for final report
-  const dimensionScores: DimensionScore[] = allDimensionKeys.map(dimKey => {
+  const dimensionScores = allDimensionKeys.map(dimKey => {
     const st = dimensionStates[dimKey];
     const dimDef = APPROVED_DIMENSIONS[dimKey];
+    const refs = dimensionReferencesMap[dimKey] || [];
 
     if (!st.active) {
       return {
         dimension: dimKey,
         dimensionName: dimDef.name,
-        score_status: 'not_tested',
+        score_status: 'not_tested' as const,
         anchor_score: null,
         normalized_score: null,
         reason: 'Dimension not active for selected reasoning mode.',
         evidence: [],
-        confidence: 'low',
+        confidence: 'low' as const,
+        evidenceReferences: [],
+        trajectory: 'insufficient_evidence' as const,
+        distinctTurnCount: 0,
+        hasChallengeEvidence: false,
       };
     }
 
@@ -138,30 +190,36 @@ export function aggregateTurnEvidence(
       return {
         dimension: dimKey,
         dimensionName: dimDef.name,
-        score_status: 'insufficient_evidence',
+        score_status: 'insufficient_evidence' as const,
         anchor_score: null,
         normalized_score: null,
         reason: st.observations.length > 0
           ? 'Insufficient distinct turn evidence to form an authoritative dimension score.'
           : 'No observable candidate evidence recorded for this dimension.',
         evidence: [],
-        confidence: 'low',
+        confidence: 'low' as const,
+        evidenceReferences: refs,
+        trajectory: st.trajectory,
+        distinctTurnCount: st.distinctTurnIds.length,
+        hasChallengeEvidence: st.hasChallengeEvidence,
       };
     }
 
-    const evidenceExcerpts = st.observations
-      .map(o => o.evidenceExcerpt)
-      .filter((e): e is string => typeof e === 'string' && e.length > 0);
+    const evidenceExcerpts = refs.map(r => r.excerpt);
 
     return {
       dimension: dimKey,
       dimensionName: dimDef.name,
-      score_status: 'scored',
+      score_status: 'scored' as const,
       anchor_score: st.anchorScore,
       normalized_score: st.normalizedScore,
       reason: `Evaluated across ${st.distinctTurnIds.length} turn(s) with ${st.confidence} evidence confidence.`,
       evidence: [...new Set(evidenceExcerpts)],
       confidence: st.confidence,
+      evidenceReferences: refs,
+      trajectory: st.trajectory,
+      distinctTurnCount: st.distinctTurnIds.length,
+      hasChallengeEvidence: st.hasChallengeEvidence,
     };
   });
 

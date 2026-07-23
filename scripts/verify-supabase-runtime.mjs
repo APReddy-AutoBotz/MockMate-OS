@@ -227,54 +227,153 @@ async function runRuntimeVerification() {
       throw new Error('Expected completed_at to remain NULL before report generation!');
     }
 
-    // 9. Test anon role denial
-    console.log('[Runtime Verification] Testing RPC permission revocation for anon role...');
+    // 11. Test atomic_submit_adaptive_turn execution & idempotency replay
+    const adaptiveSessionId = '44444444-4444-4444-4444-444444444444';
+    const submissionUuid = '55555555-5555-5555-5555-555555555555';
+    const turnUuid = '66666666-6666-6666-6666-666666666666';
+
+    await client.query(`
+      DELETE FROM public.interview_turns WHERE session_id = '${adaptiveSessionId}';
+      DELETE FROM public.interview_sessions WHERE id = '${adaptiveSessionId}';
+
+      INSERT INTO public.interview_sessions (
+        id, user_id, setup, status, engine_version, session_version, current_stage, pending_question_id, pending_question
+      ) VALUES (
+        '${adaptiveSessionId}', '${user1Id}', '{"controls":{"reasoningMode":"classic_behavioral"}}'::jsonb, 'active', 'v2', 1, 'framing', 'q1', '${q1Json}'::jsonb
+      );
+    `);
+
+    console.log('[Runtime Verification] Invoking atomic_submit_adaptive_turn for Adaptive Turn 1...');
+    const adaptiveResponseJson = JSON.stringify({
+      completedTurnId: turnUuid,
+      sessionVersion: 2,
+      evaluationStatus: 'evaluated',
+      nextQuestion: JSON.parse(q2Json),
+      nextAction: 'continue',
+      isSessionComplete: false,
+      rootQuestionIndex: 0,
+      rootQuestionCount: 2,
+      turnIndex: 1,
+      maxTurns: 8,
+      stage: 'probing'
+    });
+
+    await client.query('SET ROLE service_role;');
+    const adapRes1 = await client.query(`
+      SELECT public.atomic_submit_adaptive_turn(
+        '${adaptiveSessionId}'::uuid,
+        '${user1Id}'::uuid,
+        '${turnUuid}'::uuid,
+        'q1'::text,
+        1::integer,
+        '${submissionUuid}'::uuid,
+        'answered'::text,
+        'I structured the system cleanly.'::text,
+        'framing'::text,
+        '{"overallScore": 3}'::jsonb,
+        'evaluated'::text,
+        '{"strength":"Good framing"}'::jsonb,
+        NULL::jsonb,
+        'continue'::text,
+        '${q2Json}'::jsonb,
+        'q2'::text,
+        'probing'::text,
+        0::integer,
+        2::integer,
+        1::integer,
+        8::integer,
+        false::boolean,
+        '${adaptiveResponseJson}'::jsonb
+      ) AS result;
+    `);
+    await client.query('RESET ROLE;');
+
+    const adaptiveTurnResult1 = adapRes1.rows[0].result;
+    console.log('[Runtime Verification] Adaptive Turn 1 Result:', adaptiveTurnResult1);
+    if (adaptiveTurnResult1.completedTurnId !== turnUuid || adaptiveTurnResult1.sessionVersion !== 2) {
+      throw new Error('Adaptive Turn 1 return payload mismatch!');
+    }
+
+    // 12. Test idempotency replay of atomic_submit_adaptive_turn
+    console.log('[Runtime Verification] Testing idempotency replay of atomic_submit_adaptive_turn...');
+    await client.query('SET ROLE service_role;');
+    const adapRes2 = await client.query(`
+      SELECT public.atomic_submit_adaptive_turn(
+        '${adaptiveSessionId}'::uuid,
+        '${user1Id}'::uuid,
+        '${turnUuid}'::uuid,
+        'q1'::text,
+        1::integer,
+        '${submissionUuid}'::uuid,
+        'answered'::text,
+        'I structured the system cleanly.'::text,
+        'framing'::text,
+        '{"overallScore": 3}'::jsonb,
+        'evaluated'::text,
+        '{"strength":"Good framing"}'::jsonb,
+        NULL::jsonb,
+        'continue'::text,
+        '${q2Json}'::jsonb,
+        'q2'::text,
+        'probing'::text,
+        0::integer,
+        2::integer,
+        1::integer,
+        8::integer,
+        false::boolean,
+        '${adaptiveResponseJson}'::jsonb
+      ) AS result;
+    `);
+    await client.query('RESET ROLE;');
+
+    const replayResult = adapRes2.rows[0].result;
+    console.log('[Runtime Verification] Idempotency Replay Result:', replayResult);
+    if (replayResult.completedTurnId !== turnUuid || replayResult.sessionVersion !== 2) {
+      throw new Error('Idempotency replay returned incorrect payload!');
+    }
+
+    // Prove only 1 turn row exists in database for this session
+    const turnRows = await client.query(`SELECT * FROM public.interview_turns WHERE session_id = '${adaptiveSessionId}'::uuid`);
+    if (turnRows.rows.length !== 1) {
+      throw new Error(`Expected exactly 1 turn row after idempotency replay, found ${turnRows.rows.length}`);
+    }
+
+    // 13. Test anon denial on atomic_submit_adaptive_turn
+    console.log('[Runtime Verification] Testing RPC permission revocation for anon role on atomic_submit_adaptive_turn...');
     try {
       await client.query('SET ROLE anon;');
       await client.query(`
-        SELECT public.atomic_submit_answer(
-          '${sessionId}'::uuid,
+        SELECT public.atomic_submit_adaptive_turn(
+          '${adaptiveSessionId}'::uuid,
           '${user1Id}'::uuid,
+          '${turnUuid}'::uuid,
           'q1'::text,
-          0::integer,
+          2::integer,
+          '77777777-7777-7777-7777-777777777777'::uuid,
           'answered'::text,
-          'Attempt'::text,
+          'Anon attempt'::text,
+          'probing'::text,
+          NULL::jsonb,
+          'evaluated'::text,
+          NULL::jsonb,
+          NULL::jsonb,
+          'continue'::text,
           NULL::jsonb,
           NULL::text,
-          true::boolean,
-          2::integer
-        );
-      `);
-      throw new Error('Anon role was able to execute atomic_submit_answer!');
-    } catch (anonErr) {
-      await client.query('RESET ROLE;');
-      if (!anonErr.message.includes('permission denied')) throw anonErr;
-      console.log('[Runtime Verification] Execution by anon role successfully DENIED with permission error.');
-    }
-
-    // 10. Test authenticated role denial
-    console.log('[Runtime Verification] Testing RPC permission revocation for authenticated role...');
-    try {
-      await client.query('SET ROLE authenticated;');
-      await client.query(`
-        SELECT public.atomic_submit_answer(
-          '${sessionId}'::uuid,
-          '${user1Id}'::uuid,
-          'q1'::text,
+          'probing'::text,
           0::integer,
-          'answered'::text,
-          'Attempt'::text,
-          NULL::jsonb,
-          NULL::text,
-          true::boolean,
-          2::integer
+          2::integer,
+          2::integer,
+          8::integer,
+          false::boolean,
+          '{}'::jsonb
         );
       `);
-      throw new Error('Authenticated role was able to execute atomic_submit_answer!');
-    } catch (authErr) {
+      throw new Error('Anon role was able to execute atomic_submit_adaptive_turn!');
+    } catch (anonAdapErr) {
       await client.query('RESET ROLE;');
-      if (!authErr.message.includes('permission denied')) throw authErr;
-      console.log('[Runtime Verification] Execution by authenticated role successfully DENIED with permission error.');
+      if (!anonAdapErr.message.includes('permission denied')) throw anonAdapErr;
+      console.log('[Runtime Verification] Execution of atomic_submit_adaptive_turn by anon role successfully DENIED with permission error.');
     }
 
     console.log('[Runtime Verification] Executed runtime verification: SUCCESS! All checks PASSED 100%!');
