@@ -640,7 +640,7 @@ REQUIRED OUTPUT SCHEMA (JSON):
     question_text: turn.question || `Scenario ${idx + 1}`,
     question_phase: turn.stage || 'framing',
     user_transcript: turn.candidateResponse || '',
-    feedback: turn.turnEvaluation?.answerSummary || (turn.candidateResponse ? 'Turn evaluated from verified evidence.' : 'No response provided.'),
+    feedback: turn.turnEvaluation?.answerSummary || (turn.candidateResponse ? 'Candidate response recorded and evaluated.' : 'No response provided.'),
     strengths: turn.turnEvaluation?.observations?.filter(o => typeof o.anchorScore === 'number' && o.anchorScore >= 3).map(o => o.signal) || [],
     improvements: turn.turnEvaluation?.missingSignals || [],
   }));
@@ -653,27 +653,49 @@ REQUIRED OUTPUT SCHEMA (JSON):
     }
   ];
 
-  const biggestRiskArea = (scorecard.readinessStatus === 'NOT_ASSESSED') ? null : (qualitativeNarrative.biggestRiskArea && typeof qualitativeNarrative.biggestRiskArea === 'object' && qualitativeNarrative.biggestRiskArea.title ? {
+  const biggestRiskArea = (scorecard.readinessStatus === 'NOT_ASSESSED') ? null : (qualitativeNarrative.biggestRiskArea && typeof qualitativeNarrative.biggestRiskArea === 'object' && qualitativeNarrative.biggestRiskArea.title && qualitativeNarrative.biggestRiskArea.observation && qualitativeNarrative.biggestRiskArea.mitigation ? {
     title: String(qualitativeNarrative.biggestRiskArea.title).trim(),
-    observation: String(qualitativeNarrative.biggestRiskArea.observation || '').trim(),
-    mitigation: String(qualitativeNarrative.biggestRiskArea.mitigation || '').trim(),
+    observation: String(qualitativeNarrative.biggestRiskArea.observation).trim(),
+    mitigation: String(qualitativeNarrative.biggestRiskArea.mitigation).trim(),
   } : null);
 
-  const coachPack = (scorecard.readinessStatus === 'NOT_ASSESSED') ? null : (qualitativeNarrative.coachPack && typeof qualitativeNarrative.coachPack === 'object' && qualitativeNarrative.coachPack.title ? {
-    title: String(qualitativeNarrative.coachPack.title).trim(),
-    redoNow: typeof qualitativeNarrative.coachPack.redoNow === 'object' && qualitativeNarrative.coachPack.redoNow?.question ? {
-      question: String(qualitativeNarrative.coachPack.redoNow.question).trim(),
-      instruction: String(qualitativeNarrative.coachPack.redoNow.instruction || 'Articulate trade-offs clearly.').trim(),
-    } : {
-      question: history[0]?.question || 'Scenario 1',
-      instruction: typeof qualitativeNarrative.coachPack.redoNow === 'string' ? qualitativeNarrative.coachPack.redoNow : 'Re-do scenario focusing on explicit problem framing.',
-    },
-    micro_drills: (qualitativeNarrative.coachPack.micro_drills || []).map((md: any) => ({
-      weakness: String(md.weakness || 'Constraint handling').trim(),
-      drill_prompt: String(md.drill_prompt || 'Practice scaling limits').trim(),
-      focus_point: String(md.focus_point || 'Resilience').trim(),
-    })),
-  } : null);
+  let coachPack = null;
+  if (scorecard.readinessStatus !== 'NOT_ASSESSED' && qualitativeNarrative.coachPack && typeof qualitativeNarrative.coachPack === 'object' && qualitativeNarrative.coachPack.title) {
+    const title = String(qualitativeNarrative.coachPack.title).trim();
+    let redoNow = null;
+    if (typeof qualitativeNarrative.coachPack.redoNow === 'object' && qualitativeNarrative.coachPack.redoNow?.question && qualitativeNarrative.coachPack.redoNow?.instruction) {
+      redoNow = {
+        question: String(qualitativeNarrative.coachPack.redoNow.question).trim(),
+        instruction: String(qualitativeNarrative.coachPack.redoNow.instruction).trim(),
+      };
+    } else if (typeof qualitativeNarrative.coachPack.redoNow === 'string' && qualitativeNarrative.coachPack.redoNow.trim().length > 0) {
+      redoNow = {
+        question: history[0]?.question || 'Scenario 1',
+        instruction: qualitativeNarrative.coachPack.redoNow.trim(),
+      };
+    }
+
+    const microDrills = Array.isArray(qualitativeNarrative.coachPack.micro_drills)
+      ? qualitativeNarrative.coachPack.micro_drills
+          .filter((md: any) => md && md.weakness && md.drill_prompt && md.focus_point)
+          .map((md: any) => ({
+            weakness: String(md.weakness).trim(),
+            drill_prompt: String(md.drill_prompt).trim(),
+            focus_point: String(md.focus_point).trim(),
+          }))
+      : [];
+
+    if (redoNow || microDrills.length > 0) {
+      coachPack = {
+        title,
+        redoNow: redoNow || {
+          question: history[0]?.question || 'Scenario 1',
+          instruction: 'Focus on explicit problem framing and trade-off justification.',
+        },
+        micro_drills: microDrills,
+      };
+    }
+  }
 
   const normalizedReport = {
     overallSummary,
@@ -691,6 +713,10 @@ REQUIRED OUTPUT SCHEMA (JSON):
         normalized_score: ds.normalized_score,
         reason: ds.reason,
         evidence: ds.evidence,
+        evidenceReferences: ds.evidenceReferences || [],
+        trajectory: ds.trajectory,
+        distinctTurnCount: ds.distinctTurnCount,
+        hasChallengeEvidence: ds.hasChallengeEvidence,
         confidence: ds.confidence,
       })),
     },
@@ -699,12 +725,7 @@ REQUIRED OUTPUT SCHEMA (JSON):
     biggestRiskArea,
     coachPack,
     trajectoryReplay: [],
-    auditLayer: [
-      {
-        biasDetected: false,
-        notes: 'Automated report generation audit log',
-      }
-    ],
+    auditLayer: [],
     simplifiedScore: scorecard.simplifiedScore,
     topStrength,
     topWeakness,

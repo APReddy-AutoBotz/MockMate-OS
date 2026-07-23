@@ -30,7 +30,7 @@ export function sanitizeAndVerifyEvaluation(
   mode: ReasoningMode
 ): TurnEvaluation {
   const parsedRaw = RawTurnEvaluationSchema.safeParse(rawEval);
-  const rawData = parsedRaw.success ? parsedRaw.data : {};
+  const rawData: any = parsedRaw.success ? parsedRaw.data : {};
 
   const activeDims = ACTIVE_DIMENSIONS_BY_MODE[mode] || ACTIVE_DIMENSIONS_BY_MODE.classic_behavioral;
   const normCandidateText = normalizeWhitespace(candidateResponse);
@@ -70,13 +70,15 @@ export function sanitizeAndVerifyEvaluation(
       anchorScore = obs.anchorScore as 0 | 1 | 2 | 3 | 4;
     }
 
-    // Confidence handling: retain provider confidence if low/medium/high, else low (never upgrade missing to medium)
+    let excerpt: string | null = typeof obs.evidenceExcerpt === 'string' ? obs.evidenceExcerpt.trim() : null;
+
     let confidence: 'low' | 'medium' | 'high' = 'low';
     if (typeof obs.confidence === 'string' && ['low', 'medium', 'high'].includes(obs.confidence)) {
       confidence = obs.confidence as 'low' | 'medium' | 'high';
+    } else {
+      anchorScore = null;
+      excerpt = null;
     }
-
-    let excerpt: string | null = typeof obs.evidenceExcerpt === 'string' ? obs.evidenceExcerpt.trim() : null;
 
     if (excerpt && excerpt.length > 0) {
       const normExcerpt = normalizeWhitespace(excerpt);
@@ -96,22 +98,18 @@ export function sanitizeAndVerifyEvaluation(
     const signal = typeof obs.signal === 'string' ? obs.signal.trim() : '';
     const rationale = typeof obs.rationale === 'string' ? obs.rationale.trim() : '';
 
-    // If signal or rationale are missing/empty, observation cannot be scored
+    // If signal or rationale are missing/empty, omit observation
     if (!signal || !rationale) {
-      anchorScore = null;
-      excerpt = null;
+      continue;
     }
-
-    const validSignal = signal || 'Unverified observation signal';
-    const validRationale = rationale || 'Insufficient evidence or grounding rationale.';
 
     verifiedObservations.push({
       dimension: dim as any,
       anchorScore,
       confidence,
       evidenceExcerpt: excerpt,
-      signal: validSignal,
-      rationale: validRationale,
+      signal,
+      rationale,
       stage: (obs.stage || question.stage || 'framing') as InterviewStage,
       turnKind: (obs.turnKind || question.questionKind || 'root') as QuestionKind,
     });

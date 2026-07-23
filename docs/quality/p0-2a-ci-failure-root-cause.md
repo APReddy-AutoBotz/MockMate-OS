@@ -1,71 +1,87 @@
-# CI Failure Analysis & Root Cause Report (Workflow 29975930536)
+# CI Failure Analysis & Root Cause Report (Workflows 29975930536 & 29999855680)
 
-## 1. Summary
+## 1. Summary of Workflow Failures
 
-- **Workflow Run ID**: 29975930536
+### Workflow Run 29975930536
 - **Branch**: `antigravity/p0-2-future-ready-interview-engine`
 - **Commit SHA**: `f69e02a22ead6fce0045292687172cc0082d887e`
 - **Failed Step**: `6. Frontend unit tests`
+- **Status**: `FAILURE` (Fixed in P0-2A by aligning `MockSession.test.tsx` assertions to `submitAdaptiveTurn` and adding JSDOM `crypto.randomUUID` fallback).
+
+---
+
+### Workflow Run 29999855680
+- **Branch**: `antigravity/p0-2-future-ready-interview-engine`
+- **Commit SHA**: `2c0b401f52ce3081f86b260ffe1378e64724843e`
+- **Failed Step**: `7. Disposable PostgreSQL runtime migration verification`
 - **Status**: `FAILURE`
+- **Gate Results**:
+  - Frontend unit tests: `PASS`
+  - Static migration verification: `PASS`
+  - Disposable PostgreSQL runtime verification: `FAIL`
+  - All subsequent quality gates: `SKIPPED`
 
 ---
 
-## 2. Failed Tests & Exact Error Output
+## 2. Failed Step & Exact Database Failure (Workflow 29999855680)
 
-### Failing Test 1
-- **Test Case**: `MockSession Frontend Suite (P0-1F) › 3 & 4. Answer submission failure keeps current question active without local progression`
-- **Error Output**:
-```
-expect(jest.fn()).toHaveBeenCalledWith(...expected)
-Expected: "sess_1", "q1", 0, "skipped"
-Number of calls: 0
+### Failure Description
+The PostgreSQL runtime verifier `scripts/verify-supabase-runtime.mjs` failed when calling `atomic_submit_adaptive_turn` on line 263 and line 301.
+
+### Root Cause & Signature Mismatch
+The committed PostgreSQL RPC signature in `supabase/migrations/20260723_add_adaptive_interview_engine.sql` defines parameters in the following exact order:
+
+```sql
+public.atomic_submit_adaptive_turn(
+  p_session_id uuid,
+  p_user_id uuid,
+  p_client_submission_id uuid,
+  p_question_id text,
+  p_expected_session_version integer,
+  p_answer_kind text,
+  p_answer_text text,
+  p_turn_evaluation jsonb,
+  p_controller_decision jsonb,
+  p_challenge_event jsonb,
+  p_dimension_state jsonb,
+  p_next_question_json jsonb,
+  p_next_question_id text,
+  p_next_stage text,
+  p_next_kind text,
+  p_next_root_index integer,
+  p_probe_count integer,
+  p_challenge_count integer,
+  p_is_complete boolean,
+  p_max_turns integer,
+  p_total_roots integer,
+  p_turn_id uuid DEFAULT NULL,
+  p_adaptive_response jsonb DEFAULT NULL
+)
 ```
 
-### Failing Test 2
-- **Test Case**: `MockSession Frontend Suite (P0-1F) › 5. Skip submission failure keeps current question active`
-- **Error Output**:
-```
-expect(jest.fn()).toHaveBeenCalledWith(...expected)
-Expected: "sess_1", "q1", 0, "skipped"
-Number of calls: 0
-```
+However, `scripts/verify-supabase-runtime.mjs` called `atomic_submit_adaptive_turn` using an obsolete long positional parameter list where:
+- Position 3 passed `'${turnUuid}'::uuid` (a turn ID) instead of `p_client_submission_id` (`'${submissionUuid}'::uuid`).
+- Position 6 passed `'${submissionUuid}'::uuid` instead of `p_answer_kind`.
 
-### Failing Test 3
-- **Test Case**: `MockSession Frontend Suite (P0-1F) › 6. No final report generated after answer/skip submission failure`
-- **Error Output**:
-```
-expect(jest.fn()).toHaveBeenCalledWith(...expected)
-Expected: "sess_1", "q1", 0, "skipped"
-Number of calls: 0
-```
-
-### Failing Test 4
-- **Test Case**: `MockSession Frontend Suite (P0-1F) › 10. Question-count mismatch returns null nextQuestion on last turn safely`
-- **Error Output**:
-```
-expect(mockGeminiService.submitAnswerAndGetNext).toHaveBeenCalledWith(
-  'sess_1',
-  'q1',
-  0,
-  'skipped'
-);
-Expected number of calls: 1
-Received: 0
-```
+Because PostgreSQL attempted to cast positional values to incompatible argument types (e.g. casting UUID to `answer_kind text`), the function invocation threw a PostgreSQL type signature error and aborted the verification run.
 
 ---
 
-## 3. Root Cause Analysis
+## 3. Corrective Action Plan (P0-2B)
 
-In Phase 12 of P0-2, `components/MockSession.tsx` was refactored to consume the server-authoritative `submitAdaptiveTurn` API (`mockGeminiService.submitAdaptiveTurn`), which includes `sessionVersion` and a client-generated UUID (`clientSubmissionId`). However, the existing frontend unit test suite in `components/__tests__/MockSession.test.tsx` was still mocking and asserting against the legacy P0-1 method `mockGeminiService.submitAnswerAndGetNext`.
-
-Because `MockSession.tsx` invoked `submitAdaptiveTurn` instead of `submitAnswerAndGetNext`, the legacy mock was never invoked (0 calls), causing the 4 test assertions in `MockSession.test.tsx` to fail during CI step `6. Frontend unit tests`. All subsequent CI quality gates were consequently skipped.
-
----
-
-## 4. Corrective Action Plan
-
-1. Update `components/__tests__/MockSession.test.tsx` to mock `mockGeminiService.submitAdaptiveTurn`.
-2. Update test assertions to match `submitAdaptiveTurn(sessionId, questionId, sessionVersion, expect.any(String), answerKind, answerText)`.
-3. Preserve all 4 test cases and failure behavior assertions without deleting any tests.
-4. Verify that all 7 frontend test suites (48 tests) pass 100%.
+1. **Rewrite Runtime RPC Verifier Invocation**:
+   Replace all positional function calls in `scripts/verify-supabase-runtime.mjs` with PostgreSQL named parameter notation:
+   ```sql
+   SELECT public.atomic_submit_adaptive_turn(
+     p_session_id => '${sessionId}'::uuid,
+     p_user_id => '${userId}'::uuid,
+     p_client_submission_id => '${submissionUuid}'::uuid,
+     p_question_id => 'q1',
+     p_expected_session_version => 1,
+     ...
+   );
+   ```
+2. **Add `adaptive_request_hash` Column & Immutability**:
+   Add `adaptive_request_hash text` to `interview_turns` and include `p_adaptive_request_hash` parameter handling in `atomic_submit_adaptive_turn`.
+3. **Comprehensive Verifier Tests**:
+   Ensure all 18 PostgreSQL runtime assertions run using named arguments and pass 100%.

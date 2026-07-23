@@ -128,25 +128,60 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     }
   };
 
-  const pendingSubmissionIdRef = useRef<string | null>(null);
+  interface PendingSubmission {
+    id: string;
+    questionId: string;
+    answerKind: 'answered' | 'skipped';
+    normalizedAnswerHash: string;
+  }
 
-  const getOrCreateSubmissionId = () => {
-    if (!pendingSubmissionIdRef.current) {
-      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-        pendingSubmissionIdRef.current = crypto.randomUUID();
-      } else {
-        pendingSubmissionIdRef.current = `sub_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-      }
+  const pendingSubmissionRef = useRef<PendingSubmission | null>(null);
+
+  const computeAnswerHash = (qId: string, aKind: string, text: string) => {
+    const norm = `${qId}_${aKind}_${text.trim().toLowerCase()}`;
+    let hash = 0;
+    for (let i = 0; i < norm.length; i++) {
+      const char = norm.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash |= 0;
     }
-    return pendingSubmissionIdRef.current;
+    return `hash_${Math.abs(hash).toString(36)}`;
   };
 
-  const clearSubmissionId = () => {
-    pendingSubmissionIdRef.current = null;
+  const getOrCreateSubmissionId = (qId: string, aKind: 'answered' | 'skipped', text: string = '') => {
+    const normHash = computeAnswerHash(qId, aKind, text);
+    const existing = pendingSubmissionRef.current;
+
+    if (
+      existing &&
+      existing.questionId === qId &&
+      existing.answerKind === aKind &&
+      existing.normalizedAnswerHash === normHash
+    ) {
+      return existing.id;
+    }
+
+    const newId =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `sub_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+    pendingSubmissionRef.current = {
+      id: newId,
+      questionId: qId,
+      answerKind: aKind,
+      normalizedAnswerHash: normHash,
+    };
+
+    return newId;
+  };
+
+  const clearPendingSubmission = () => {
+    pendingSubmissionRef.current = null;
   };
 
   const handleAnswerSuccess = async (res: AdaptiveAnswerSubmissionResponse) => {
-    clearSubmissionId();
+    clearPendingSubmission();
     setLastSubmissionResult(res);
     setSessionVersion(res.sessionVersion);
     setRootQuestionIndex(res.rootQuestionIndex);
@@ -181,7 +216,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
     if (!currentQuestion || !sessionId) return;
     audioService.playConfirm();
     setSubmissionError('');
-    const clientSubmissionId = getOrCreateSubmissionId();
+    const clientSubmissionId = getOrCreateSubmissionId(currentQuestion.id, 'answered', lastTranscript);
 
     try {
       const res = await submitAdaptiveTurn(
@@ -195,6 +230,9 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
       handleAnswerSuccess(res);
     } catch (err: any) {
       console.error('Adaptive turn submission error:', err);
+      if (err.status === 400 || err.status === 409 || err.status === 422 || (err.message && (err.message.includes('Stale') || err.message.includes('mismatched') || err.message.includes('conflict')))) {
+        clearPendingSubmission();
+      }
       setSubmissionError(err.message || 'Failed to submit answer. Please retry.');
       setSessionPhase('asking');
     }
@@ -203,7 +241,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
   const handleConfirmSkip = async () => {
     if (!currentQuestion || !sessionId) return;
     setSubmissionError('');
-    const clientSubmissionId = getOrCreateSubmissionId();
+    const clientSubmissionId = getOrCreateSubmissionId(currentQuestion.id, 'skipped', '');
 
     try {
       const res = await submitAdaptiveTurn(
@@ -216,6 +254,9 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
       handleAnswerSuccess(res);
     } catch (err: any) {
       console.error('Skip turn submission failed:', err);
+      if (err.status === 400 || err.status === 409 || err.status === 422 || (err.message && (err.message.includes('Stale') || err.message.includes('mismatched') || err.message.includes('conflict')))) {
+        clearPendingSubmission();
+      }
       setSubmissionError(err.message || 'Could not skip turn.');
     }
   };

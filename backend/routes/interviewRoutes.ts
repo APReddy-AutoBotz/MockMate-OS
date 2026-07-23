@@ -92,7 +92,7 @@ router.post('/sessions/:sessionId/answers', enforceUsageLimit('interview_questio
         return res.status(422).json({ error: 'Invalid adaptive answer submission payload', details: adaptiveParsed.error.issues });
       }
 
-      const { questionId, expectedSessionVersion, expectedQuestionIndex, clientSubmissionId, answerKind, answerText } = adaptiveParsed.data;
+      const { questionId, expectedSessionVersion, clientSubmissionId, answerKind, answerText } = adaptiveParsed.data;
       const result = await sessionService.submitAdaptiveTurn(
         userId,
         sessionId,
@@ -100,8 +100,7 @@ router.post('/sessions/:sessionId/answers', enforceUsageLimit('interview_questio
         expectedSessionVersion,
         clientSubmissionId,
         answerKind,
-        answerText ?? undefined,
-        expectedQuestionIndex
+        answerText ?? undefined
       );
       return res.json(result);
     }

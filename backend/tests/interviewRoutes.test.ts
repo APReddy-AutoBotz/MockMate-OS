@@ -246,8 +246,9 @@ describe('Backend Express API & Route Parity Tests', () => {
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 0,
+        questionId: startRes.body.firstQuestion.id,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '10000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
         answerText: 'First answer about React state',
       });
@@ -258,7 +259,8 @@ describe('Backend Express API & Route Parity Tests', () => {
       .set('Authorization', testAuthHeader)
       .send({
         questionId: turn1Res.body.nextQuestion.id,
-        expectedQuestionIndex: turn1Res.body.questionIndex,
+        expectedSessionVersion: turn1Res.body.sessionVersion,
+        clientSubmissionId: '10000000-0000-4000-8000-000000000002',
         answerKind: 'answered',
         answerText: 'Second answer with bundle performance',
       });
@@ -270,7 +272,8 @@ describe('Backend Express API & Route Parity Tests', () => {
         .set('Authorization', testAuthHeader)
         .send({
           questionId: turn2Res.body.nextQuestion.id,
-          expectedQuestionIndex: turn2Res.body.questionIndex,
+          expectedSessionVersion: turn2Res.body.sessionVersion,
+          clientSubmissionId: '10000000-0000-4000-8000-000000000003',
           answerKind: 'answered',
           answerText: 'Reflecting on key trade-offs and growth mindset.',
         });
@@ -310,8 +313,9 @@ describe('Backend Express API & Route Parity Tests', () => {
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 0,
+        questionId: startRes.body.firstQuestion.id,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '20000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
         answerText: 'First answer about React state',
       });
@@ -321,7 +325,8 @@ describe('Backend Express API & Route Parity Tests', () => {
       .set('Authorization', testAuthHeader)
       .send({
         questionId: turn1Res.body.nextQuestion.id,
-        expectedQuestionIndex: turn1Res.body.questionIndex,
+        expectedSessionVersion: turn1Res.body.sessionVersion,
+        clientSubmissionId: '20000000-0000-4000-8000-000000000002',
         answerKind: 'answered',
         answerText: 'Second answer with bundle performance',
       });
@@ -332,7 +337,8 @@ describe('Backend Express API & Route Parity Tests', () => {
         .set('Authorization', testAuthHeader)
         .send({
           questionId: turn2Res.body.nextQuestion.id,
-          expectedQuestionIndex: turn2Res.body.questionIndex,
+          expectedSessionVersion: turn2Res.body.sessionVersion,
+          clientSubmissionId: '20000000-0000-4000-8000-000000000003',
           answerKind: 'answered',
           answerText: 'Reflecting on key trade-offs and growth mindset.',
         });
@@ -516,19 +522,37 @@ describe('Backend Express API & Route Parity Tests', () => {
     const turn1Res = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
-      .send({ questionId: 'q1', expectedQuestionIndex: 0, answerKind: 'answered', answerText: 'First answer about React state' });
+      .send({
+        questionId: startRes.body.firstQuestion.id,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '30000000-0000-4000-8000-000000000001',
+        answerKind: 'answered',
+        answerText: 'First answer about React state',
+      });
 
     // Turn 2
     const turn2Res = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
-      .send({ questionId: turn1Res.body.nextQuestion.id, expectedQuestionIndex: turn1Res.body.questionIndex, answerKind: 'answered', answerText: 'Second answer with bundle performance' });
+      .send({
+        questionId: turn1Res.body.nextQuestion.id,
+        expectedSessionVersion: turn1Res.body.sessionVersion,
+        clientSubmissionId: '30000000-0000-4000-8000-000000000002',
+        answerKind: 'answered',
+        answerText: 'Second answer with bundle performance',
+      });
 
     if (turn2Res.body.nextQuestion?.questionKind === 'reflection') {
       await request(app)
         .post(`/api/interview/sessions/${sessionId}/answers`)
         .set('Authorization', testAuthHeader)
-        .send({ questionId: turn2Res.body.nextQuestion.id, expectedQuestionIndex: turn2Res.body.questionIndex, answerKind: 'answered', answerText: 'Reflecting on key trade-offs and growth mindset.' });
+        .send({
+          questionId: turn2Res.body.nextQuestion.id,
+          expectedSessionVersion: turn2Res.body.sessionVersion,
+          clientSubmissionId: '30000000-0000-4000-8000-000000000003',
+          answerKind: 'answered',
+          answerText: 'Reflecting on key trade-offs and growth mindset.',
+        });
     }
 
     const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({

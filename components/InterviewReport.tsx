@@ -34,7 +34,7 @@ const PersonaScoreCard: React.FC<{ advisory: AdvisoryPanel[] }> = React.memo(({ 
               </div>
               <div className="flex flex-col">
                 <span className="text-base font-bold text-white tracking-tight leading-tight">{adv.name}</span>
-                <span className="text-[9px] font-bold text-brand-primary uppercase mt-1 tracking-[0.2em] opacity-40">Interviewer Verdict</span>
+                <span className="text-[9px] font-bold text-brand-primary uppercase mt-1 tracking-[0.2em] opacity-40">Reasoning Review</span>
               </div>
             </div>
             <div className="flex flex-col items-end">

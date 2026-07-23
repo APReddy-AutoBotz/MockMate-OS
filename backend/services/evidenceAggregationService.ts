@@ -10,26 +10,14 @@ import {
   InterviewStage,
   QuestionKind,
   TurnEvaluation,
+  EvidenceReference,
 } from 'mockmate-shared';
 import { ACTIVE_DIMENSIONS_BY_MODE, APPROVED_DIMENSIONS } from '../config/evaluationConfig';
 
-export interface DimensionEvidenceReference {
-  turnId: string;
-  excerpt: string;
-  stage: InterviewStage;
-  questionKind: QuestionKind;
-  signal: string;
-  anchorScore: number | null;
-  confidence: EvidenceConfidence;
-}
+export type DimensionEvidenceReference = EvidenceReference;
 
 export interface ScorecardResult {
-  dimensionScores: (DimensionScore & {
-    evidenceReferences?: DimensionEvidenceReference[];
-    trajectory?: TrajectoryStatus;
-    distinctTurnCount?: number;
-    hasChallengeEvidence?: boolean;
-  })[];
+  dimensionScores: DimensionScore[];
   dimensionStates: Record<DimensionKey, DimensionEvidenceState>;
   simplifiedScore: number | null;
   readinessStatus: ReadinessStatus;
@@ -76,6 +64,7 @@ export function aggregateTurnEvidence(
     let hasLaterChallengeOrRecovery = false;
 
     for (const turn of turns) {
+      if (!turn || !turn.turnId) continue;
       if (!turn.evaluation || turn.evaluation.evaluationStatus === 'unavailable') continue;
       if (!Array.isArray(turn.evaluation.observations)) continue;
 

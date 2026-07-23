@@ -70,40 +70,83 @@ for (const table of ownerTables) {
   }
 }
 
-// 3. Verify corrective columns in migration 20260721
-const requiredColumns = [
+// 3. Verify corrective session columns
+const sessionColumns = [
   'current_question_index',
   'pending_question_id',
   'pending_question',
   'evaluation_status',
   'evaluation_error_code',
+  'engine_version',
+  'session_version',
+  'current_root_question_index',
+  'current_turn_index',
+  'current_stage',
+  'pending_question_kind',
+  'active_root_question_id',
+  'probe_count_for_root',
+  'challenge_count',
+  'adaptive_policy',
+  'dimension_state',
+  'last_controller_decision',
 ];
 
-for (const col of requiredColumns) {
+for (const col of sessionColumns) {
   if (!normalizedSql.includes(col)) {
-    failures.push(`Missing corrective column in interview_sessions: ${col}`);
+    failures.push(`Missing session column: ${col}`);
   }
 }
 
-// 5. Verify question_id and adaptive_response column in interview_turns
-if (!normalizedSql.includes('add column if not exists question_id')) {
-  failures.push('Missing question_id column in interview_turns');
-}
-if (!normalizedSql.includes('add column if not exists adaptive_response')) {
-  failures.push('Missing adaptive_response column in interview_turns');
+// 4. Verify adaptive turn columns
+const turnColumns = [
+  'question_id',
+  'client_submission_id',
+  'question_blueprint',
+  'question_kind',
+  'root_question_id',
+  'stage',
+  'answer_kind',
+  'evaluation_status',
+  'turn_evaluation',
+  'controller_decision',
+  'challenge_event',
+  'engine_version',
+  'adaptive_response',
+  'adaptive_request_hash',
+];
+
+for (const col of turnColumns) {
+  if (!normalizedSql.includes(col)) {
+    failures.push(`Missing turn column: ${col}`);
+  }
 }
 
-// 6. Verify RPC definitions
+// 5. Verify unique session/client_submission_id index
+if (!normalizedSql.includes('idx_interview_turns_session_client_sub')) {
+  failures.push('Missing unique index: idx_interview_turns_session_client_sub');
+}
+
+// 6. Verify RPC definitions & security properties
 if (!normalizedSql.includes('create or replace function public.atomic_submit_answer')) {
   failures.push('Missing RPC definition: atomic_submit_answer');
 }
 
 if (!normalizedSql.includes('create or replace function public.atomic_submit_adaptive_turn')) {
   failures.push('Missing RPC definition: atomic_submit_adaptive_turn');
-}
+} else {
+  const rpcStart = normalizedSql.indexOf('create or replace function public.atomic_submit_adaptive_turn');
+  const rpcEnd = normalizedSql.indexOf('$$;', rpcStart);
+  const rpcBody = rpcEnd !== -1 ? normalizedSql.substring(rpcStart, rpcEnd) : normalizedSql.substring(rpcStart);
 
-if (!normalizedSql.includes('adaptive_response')) {
-  failures.push('RPC atomic_submit_adaptive_turn must handle adaptive_response JSONB replay');
+  if (!rpcBody.includes('security definer')) {
+    failures.push('RPC atomic_submit_adaptive_turn must be SECURITY DEFINER');
+  }
+  if (!rpcBody.includes('search_path = public, pg_temp')) {
+    failures.push('RPC atomic_submit_adaptive_turn must set search_path = public, pg_temp');
+  }
+  if (rpcBody.includes('completed_at')) {
+    failures.push('RPC atomic_submit_adaptive_turn must NOT assign completed_at timestamp');
+  }
 }
 
 if (!normalizedSql.includes('from public')) {

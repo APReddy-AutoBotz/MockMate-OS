@@ -29,7 +29,8 @@ ADD COLUMN IF NOT EXISTS turn_evaluation jsonb,
 ADD COLUMN IF NOT EXISTS controller_decision jsonb,
 ADD COLUMN IF NOT EXISTS challenge_event jsonb,
 ADD COLUMN IF NOT EXISTS engine_version text DEFAULT 'v2',
-ADD COLUMN IF NOT EXISTS adaptive_response jsonb;
+ADD COLUMN IF NOT EXISTS adaptive_response jsonb,
+ADD COLUMN IF NOT EXISTS adaptive_request_hash text;
 
 -- 3. Idempotency unique index on interview_turns
 CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_turns_session_client_sub
@@ -72,11 +73,14 @@ DECLARE
   v_turn_id uuid;
   v_new_version integer;
   v_result jsonb;
+  v_request_hash text;
 BEGIN
   -- 0. Validate answer kind
   IF p_answer_kind NOT IN ('answered', 'skipped') THEN
     RAISE EXCEPTION 'Invalid answer kind';
   END IF;
+
+  v_request_hash := MD5(p_session_id::text || ':' || p_question_id || ':' || p_answer_kind || ':' || LOWER(TRIM(COALESCE(p_answer_text, ''))));
 
   -- 1. Check session existence and ownership first
   SELECT * INTO v_session
@@ -89,11 +93,15 @@ BEGIN
 
   -- 2. Check idempotency for existing client_submission_id
   IF p_client_submission_id IS NOT NULL THEN
-    SELECT id, session_id, adaptive_response INTO v_existing_turn
+    SELECT id, session_id, adaptive_response, adaptive_request_hash INTO v_existing_turn
     FROM public.interview_turns
     WHERE session_id = p_session_id AND client_submission_id = p_client_submission_id;
 
     IF FOUND THEN
+      IF v_existing_turn.adaptive_request_hash IS NOT NULL AND v_existing_turn.adaptive_request_hash <> v_request_hash THEN
+        RAISE EXCEPTION 'Idempotency conflict: submission ID reused with different request payload';
+      END IF;
+
       IF v_existing_turn.adaptive_response IS NOT NULL THEN
         RETURN v_existing_turn.adaptive_response;
       END IF;
@@ -158,6 +166,7 @@ BEGIN
     user_id,
     session_id,
     client_submission_id,
+    adaptive_request_hash,
     question_id,
     question,
     question_blueprint,
@@ -179,6 +188,7 @@ BEGIN
     p_user_id,
     p_session_id,
     p_client_submission_id,
+    v_request_hash,
     p_question_id,
     COALESCE(v_session.pending_question->>'question', ''),
     v_session.pending_question,
