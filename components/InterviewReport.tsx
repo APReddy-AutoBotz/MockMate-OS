@@ -38,7 +38,7 @@ const PersonaScoreCard: React.FC<{ advisory: AdvisoryPanel[] }> = React.memo(({ 
               </div>
             </div>
             <div className="flex flex-col items-end">
-              <span className="text-[10px] font-bold text-brand-primary">{adv.hireRecommendation ? 'HIRE' : 'NO HIRE'}</span>
+              <span className="text-[10px] font-bold text-brand-primary">Evaluator Summary</span>
             </div>
           </div>
           <p className="text-sm text-white/60 leading-relaxed italic border-l-2 border-brand-primary/20 pl-4 py-0.5">

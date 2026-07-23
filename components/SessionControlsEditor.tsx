@@ -34,15 +34,27 @@ const Divider = () => <div className="h-px bg-white/[0.06] w-full" />;
 /* ─── Main Component ────────────────────────────────────────────────────── */
 const SessionControlsEditor: React.FC<SessionControlsEditorProps> = ({ controls, onChange }) => {
 
+    const REASONING_MODES = [
+        { key: 'classic_behavioral' as const, label: 'Behavioral', desc: 'STAR format, narrative coherence & stakeholder fluency' },
+        { key: 'classic_technical' as const, label: 'Technical Systems', desc: 'Architecture, systems thinking & failure modes' },
+        { key: 'problem_framing' as const, label: 'Problem Framing', desc: 'Scope definition, constraints & unknown inventory' },
+        { key: 'tradeoff_decision' as const, label: 'Trade-off Decision', desc: 'Comparing options & explicit sacrifices' },
+        { key: 'stakeholder_pressure' as const, label: 'Stakeholder Pressure', desc: 'Navigating executive pushback & negotiation' },
+        { key: 'ai_collaboration_review' as const, label: 'AI Review', desc: 'Critiquing AI output & flaw detection' },
+        { key: 'uncertainty_handling' as const, label: 'Uncertainty Handling', desc: 'Bounded assumptions & risk-managed steps' },
+        { key: 'adversarial_pushback' as const, label: 'Adversarial Pushback', desc: 'Position updating & composure under challenge' },
+        { key: 'narrative_reasoning' as const, label: 'Narrative Logic', desc: 'Thesis development & causality' },
+    ];
+
     const setDifficulty = (difficulty: 'starter' | 'intermediate' | 'expert') => {
-        const count = difficulty === 'starter' ? 7 : difficulty === 'intermediate' ? 15 : 25;
+        const count = difficulty === 'starter' ? 3 : difficulty === 'intermediate' ? 5 : 7;
         onChange({ ...controls, difficulty, totalQuestions: count });
     };
 
     const DIFFICULTY_OPTIONS = [
-        { key: 'starter' as const,      label: 'Starter',       qs: 7,  bar: 33 },
-        { key: 'intermediate' as const, label: 'Intermediate',  qs: 15, bar: 66 },
-        { key: 'expert' as const,       label: 'Expert',        qs: 25, bar: 100 },
+        { key: 'starter' as const,      label: 'Starter',       qs: 3,  bar: 33 },
+        { key: 'intermediate' as const, label: 'Intermediate',  qs: 5, bar: 66 },
+        { key: 'expert' as const,       label: 'Expert',        qs: 7, bar: 100 },
     ];
 
     const MODE_OPTIONS = [
@@ -75,6 +87,34 @@ const SessionControlsEditor: React.FC<SessionControlsEditorProps> = ({ controls,
 
     return (
         <div className="w-full bg-white/[0.02] border border-white/[0.06] rounded-2xl md:rounded-3xl overflow-hidden divide-y divide-white/[0.06]">
+
+            {/* ── Reasoning Mode Selection ──────────────────────────── */}
+            <div className="p-5 md:p-7 space-y-4">
+                <div className="space-y-0.5">
+                    <Label>Reasoning Mode</Label>
+                    <p className="text-xs text-brand-tint font-normal">Select the reasoning capability to train during this session</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                    {REASONING_MODES.map(rm => {
+                        const active = (controls.reasoningMode || 'classic_behavioral') === rm.key;
+                        return (
+                            <button
+                                key={rm.key}
+                                onClick={() => onChange({ ...controls, reasoningMode: rm.key })}
+                                className={`flex flex-col items-start p-3.5 rounded-xl border text-left transition-all duration-200 ${
+                                    active
+                                        ? 'border-brand-primary bg-brand-primary/10 text-white shadow-md'
+                                        : 'border-white/[0.06] bg-black/20 text-white/50 hover:border-white/20 hover:text-white/80'
+                                }`}
+                            >
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-brand-primary mb-1">{rm.label}</span>
+                                <span className="text-[9px] leading-relaxed text-white/60 font-normal">{rm.desc}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
 
             {/* ── Preparation Mode ──────────────────────────────────── */}
             <div className="p-5 md:p-7 space-y-4">
