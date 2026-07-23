@@ -6,6 +6,7 @@ import * as sessionService from '../services/sessionService';
 import { 
   InterviewSessionStartRequestSchema, 
   AnswerSubmissionRequestSchema,
+  AdaptiveAnswerSubmissionRequestSchema,
   CalibrateRequestSchema,
   CalibrateResponseSchema,
   PlanGenerationRequestSchema,
@@ -81,6 +82,25 @@ router.post('/sessions/:sessionId/answers', enforceUsageLimit('interview_questio
     const userId = req.user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
+    // Try parsing as Adaptive submission first
+    if (req.body && req.body.clientSubmissionId) {
+      const adaptiveParsed = AdaptiveAnswerSubmissionRequestSchema.safeParse(req.body);
+      if (adaptiveParsed.success) {
+        const { questionId, expectedSessionVersion, clientSubmissionId, answerKind, answerText } = adaptiveParsed.data;
+        const result = await sessionService.submitAdaptiveTurn(
+          userId,
+          sessionId,
+          questionId,
+          expectedSessionVersion,
+          clientSubmissionId,
+          answerKind,
+          answerText
+        );
+        return res.json(result);
+      }
+    }
+
+    // Fall back to standard Answer submission
     const parsed = AnswerSubmissionRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(422).json({ error: 'Invalid answer submission payload', details: parsed.error.issues });
@@ -88,11 +108,11 @@ router.post('/sessions/:sessionId/answers', enforceUsageLimit('interview_questio
 
     const { questionId, expectedQuestionIndex, answerKind, answerText } = parsed.data;
     const result = await sessionService.submitAnswer(
-      userId, 
-      sessionId, 
-      questionId, 
-      expectedQuestionIndex, 
-      answerKind, 
+      userId,
+      sessionId,
+      questionId,
+      expectedQuestionIndex,
+      answerKind,
       answerText
     );
     res.json(result);
