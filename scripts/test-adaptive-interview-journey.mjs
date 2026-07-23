@@ -172,9 +172,33 @@ app.post('/api/interview/sessions/:sessionId/report', async (req, res) => {
   }
 });
 
+async function listenOnAvailablePort(srv, preferredPort) {
+  for (let port = preferredPort; port < preferredPort + 20; port++) {
+    try {
+      await new Promise((resolve, reject) => {
+        const onError = (err) => {
+          srv.off('listening', onListen);
+          reject(err);
+        };
+        const onListen = () => {
+          srv.off('error', onError);
+          resolve();
+        };
+        srv.once('error', onError);
+        srv.once('listening', onListen);
+        srv.listen(port, '127.0.0.1');
+      });
+      return port;
+    } catch (err) {
+      if (err.code !== 'EADDRINUSE') throw err;
+    }
+  }
+  throw new Error(`No free ports found starting at ${preferredPort}`);
+}
+
 const server = http.createServer(app);
-await new Promise((resolve) => server.listen(3098, '127.0.0.1', resolve));
-console.log('   Test Express API server running on http://127.0.0.1:3098');
+const apiPort = await listenOnAvailablePort(server, 3098);
+console.log(`   Test Express API server running on http://127.0.0.1:${apiPort}`);
 
 let browser;
 try {
