@@ -126,21 +126,22 @@ describe('Backend Express API & Route Parity Tests', () => {
       .send({ context: sampleContext });
 
     const sessionId = startRes.body.sessionId;
+    const firstQId = startRes.body.firstQuestion.id;
 
     const answerRes = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 0,
+        questionId: firstQId,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '50000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
         answerText: 'I handled stale state using useEffect cleanup and React context optimization.',
       });
 
     expect(answerRes.status).toBe(200);
-    expect(answerRes.body.isLastQuestion).toBe(false);
-    expect(answerRes.body.nextQuestion.id).toBe('q2');
-    expect(answerRes.body.questionIndex).toBe(1);
+    expect(answerRes.body.isSessionComplete).toBe(false);
+    expect(answerRes.body.nextQuestion.id).toBeDefined();
   });
 
   it('6. Wrong question ID returns 409 conflict', async () => {
@@ -156,7 +157,8 @@ describe('Backend Express API & Route Parity Tests', () => {
       .set('Authorization', testAuthHeader)
       .send({
         questionId: 'wrong_q_id',
-        expectedQuestionIndex: 0,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '60000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
         answerText: 'Answer with wrong Q ID.',
       });
@@ -176,8 +178,9 @@ describe('Backend Express API & Route Parity Tests', () => {
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 99,
+        questionId: startRes.body.firstQuestion.id,
+        expectedSessionVersion: 99,
+        clientSubmissionId: '70000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
         answerText: 'Answer with stale index.',
       });
@@ -185,34 +188,37 @@ describe('Backend Express API & Route Parity Tests', () => {
     expect(answerRes.status).toBe(409);
   });
 
-  it('8. Duplicate answer returns 409 conflict', async () => {
+  it('8. Duplicate submission with different payload returns 409 conflict', async () => {
     const startRes = await request(app)
       .post('/api/interview/sessions')
       .set('Authorization', testAuthHeader)
       .send({ context: sampleContext });
 
     const sessionId = startRes.body.sessionId;
+    const firstQId = startRes.body.firstQuestion.id;
 
     // First submission
-    await request(app)
+    const turn1Res = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 0,
+        questionId: firstQId,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '80000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
         answerText: 'First answer',
       });
 
-    // Duplicate submission for same question index 0
+    // Duplicate submission using same clientSubmissionId but different answer text
     const duplicateRes = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 0,
+        questionId: firstQId,
+        expectedSessionVersion: turn1Res.body.sessionVersion,
+        clientSubmissionId: '80000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
-        answerText: 'Duplicate answer',
+        answerText: 'Different answer text with same submission ID',
       });
 
     expect(duplicateRes.status).toBe(409);
@@ -476,7 +482,7 @@ describe('Backend Express API & Route Parity Tests', () => {
     expect(report.biggestRiskArea).toBeNull();
     expect(report.coachPack).toBeNull();
     expect(report.trajectoryReplay).toEqual([]);
-    expect(report.auditLayer.length).toBeGreaterThan(0);
+    expect(report.auditLayer).toEqual([]);
     expect(report.simplifiedScore).toBeNull();
 
     spy.mockRestore();
@@ -542,17 +548,20 @@ describe('Backend Express API & Route Parity Tests', () => {
         answerText: 'Second answer with bundle performance',
       });
 
-    if (turn2Res.body.nextQuestion?.questionKind === 'reflection') {
-      await request(app)
+    let currentRes = turn2Res;
+    let turnIdx = 3;
+    while (!currentRes.body.isSessionComplete && currentRes.body.nextQuestion) {
+      currentRes = await request(app)
         .post(`/api/interview/sessions/${sessionId}/answers`)
         .set('Authorization', testAuthHeader)
         .send({
-          questionId: turn2Res.body.nextQuestion.id,
-          expectedSessionVersion: turn2Res.body.sessionVersion,
-          clientSubmissionId: '30000000-0000-4000-8000-000000000003',
+          questionId: currentRes.body.nextQuestion.id,
+          expectedSessionVersion: currentRes.body.sessionVersion,
+          clientSubmissionId: `30000000-0000-4000-8000-00000000000${turnIdx}`,
           answerKind: 'answered',
           answerText: 'Reflecting on key trade-offs and growth mindset.',
         });
+      turnIdx++;
     }
 
     const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { supabaseAdmin } from '../supabaseAdmin';
 import {
   InterviewSessionContext,
@@ -270,9 +271,17 @@ export const submitAdaptiveTurn = async (
 
   // Idempotency check for local in-memory fallback
   if (!supabaseAdmin && clientSubmissionId) {
+    const incomingHash = crypto.createHash('md5').update(`${questionId}:${answerKind}:${answerText || ''}`).digest('hex');
     const existingTurn = session.history.find((t: any) => t.clientSubmissionId === clientSubmissionId);
-    if (existingTurn && existingTurn.adaptiveResponse) {
-      return existingTurn.adaptiveResponse;
+    if (existingTurn) {
+      if (existingTurn.requestHash && existingTurn.requestHash !== incomingHash) {
+        const err: any = new Error('Conflict: client_submission_id reuse with mismatched payload');
+        err.status = 409;
+        throw err;
+      }
+      if (existingTurn.adaptiveResponse) {
+        return existingTurn.adaptiveResponse;
+      }
     }
   }
 
@@ -423,6 +432,7 @@ export const submitAdaptiveTurn = async (
       controllerDecision: decision,
       challengeEvent,
       clientSubmissionId,
+      requestHash: crypto.createHash('md5').update(`${questionId}:${answerKind}:${answerText || ''}`).digest('hex'),
       adaptiveResponse: responsePayload,
     };
 
