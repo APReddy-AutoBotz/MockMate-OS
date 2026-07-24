@@ -365,11 +365,16 @@ try {
     await startBtn.click({ force: true });
   }
 
-  // Wait for login form inputs to be ready
-  await page.waitForSelector('input[type="email"]', { timeout: 10000 });
-  await page.locator('input[type="email"]').fill('candidate@mockmate.internal');
-  await page.locator('input[type="password"]').fill('password123');
-  await page.getByRole('button', { name: /sign in|start practice/i }).first().click({ force: true });
+  // Handle auth via Quick Access or Sign In
+  const quickAccessBtn = page.getByRole('button', { name: /quick access/i }).first();
+  if (await quickAccessBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await quickAccessBtn.click({ force: true });
+  } else {
+    await page.waitForSelector('input[type="email"]', { timeout: 5000 });
+    await page.locator('input[type="email"]').fill('candidate@mockmate.internal');
+    await page.locator('input[type="password"]').fill('password123');
+    await page.getByRole('button', { name: /sign in|start practice/i }).first().click({ force: true });
+  }
   await page.waitForTimeout(1000);
 
   // Handle optional onboarding if shown
