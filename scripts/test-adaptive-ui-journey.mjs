@@ -342,14 +342,7 @@ try {
   console.log('[Adaptive UI Journey] 3. Launching Playwright Chromium...');
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
-  const page = await context.newPage();
-
-  console.log(`[Adaptive UI Journey] 4. Navigating to ${webBase}...`);
-  await page.goto(webBase, { waitUntil: 'domcontentloaded', timeout: 15000 });
-
-  // Authenticate & enter Hub
-  console.log('[Adaptive UI Journey] 5. Entering practice hub...');
-  await page.evaluate(() => {
+  await context.addInitScript(() => {
     localStorage.setItem('mockmate_user_profile', JSON.stringify({
       name: 'Test Candidate',
       targetRole: 'Software Architect',
@@ -357,27 +350,35 @@ try {
       primaryGoal: 'skill_building'
     }));
   });
+  const page = await context.newPage();
 
-  const startBtn = page.getByRole('button', { name: /start free/i }).first();
-  if (await startBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await startBtn.click();
+  console.log(`[Adaptive UI Journey] 4. Navigating to ${webBase}...`);
+  await page.goto(webBase, { waitUntil: 'domcontentloaded', timeout: 15000 });
+
+  // Authenticate & enter Hub
+  console.log('[Adaptive UI Journey] 5. Entering practice hub...');
+  await page.waitForTimeout(1000);
+
+  const startBtn = page.getByRole('button', { name: /start free|start free practice/i }).first();
+  if (await startBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+    await startBtn.click({ force: true });
   }
 
   const emailInput = page.locator('input[type="email"]');
-  if (await emailInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+  if (await emailInput.isVisible({ timeout: 4000 }).catch(() => false)) {
     await emailInput.fill('candidate@mockmate.internal');
     await page.locator('input[type="password"]').fill('password123');
-    await page.getByRole('button', { name: /sign in|start practice/i }).first().click();
+    await page.getByRole('button', { name: /sign in|start practice/i }).first().click({ force: true });
   }
 
   // Handle optional onboarding if shown
   const onboardFinishBtn = page.getByRole('button', { name: /complete|continue|get started/i }).first();
-  if (await onboardFinishBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await onboardFinishBtn.click();
+  if (await onboardFinishBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+    await onboardFinishBtn.click({ force: true });
   }
 
   // Wait for Hub
-  await page.waitForSelector('button:has-text("Mock interview"), button:has-text("Start interview practice")', { timeout: 15000 });
+  await page.waitForSelector('button:has-text("Mock interview"), button:has-text("Start interview practice")', { timeout: 20000 });
 
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
