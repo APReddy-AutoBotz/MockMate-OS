@@ -381,12 +381,18 @@ try {
     await page.waitForTimeout(500);
   }
 
-  // Click Quick Access
-  await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll('button'));
-    const quick = btns.find(b => b.innerText.toLowerCase().includes('quick access'));
-    if (quick) quick.click();
-  });
+  // Authenticate on Login modal
+  const quickBtn = page.locator('button:has-text("Quick access")').first();
+  if (await quickBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await quickBtn.click({ force: true });
+  } else {
+    const emailInput = page.locator('input[type="email"]').first();
+    if (await emailInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await emailInput.fill('candidate@mockmate.internal');
+      await page.locator('input[type="password"]').first().fill('password123');
+      await page.locator('button[type="submit"]').first().click({ force: true });
+    }
+  }
 
   const onboardSkipBtn = await page.waitForSelector('button:has-text("Skip"), button:has-text("Complete")', { timeout: 3000 }).catch(() => null);
   if (onboardSkipBtn) {
