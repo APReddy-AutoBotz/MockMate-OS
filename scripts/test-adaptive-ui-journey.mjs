@@ -374,30 +374,27 @@ try {
   }
 
   // Wait for Login modal or Hub
-  await page.waitForSelector('input[type="email"], button:has-text("Quick access"), button:has-text("Mock interview")', { timeout: 15000 }).catch(() => null);
+  await page.waitForSelector('button:has-text("Quick access"), input[type="email"], h3:has-text("Mock interview")', { timeout: 15000 }).catch(() => null);
 
-  const quickBtn = page.getByRole('button', { name: /quick access/i }).first();
-  if (await quickBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+  const quickBtn = page.locator('button:has-text("Quick access")').first();
+  if (await quickBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
     await quickBtn.click({ force: true });
-    await page.waitForTimeout(1000);
   } else {
-    const emailField = page.locator('input[type="email"]');
-    if (await emailField.isVisible({ timeout: 2000 }).catch(() => false)) {
+    const emailField = page.locator('input[type="email"]').first();
+    if (await emailField.isVisible({ timeout: 4000 }).catch(() => false)) {
       await emailField.fill('candidate@mockmate.internal');
       await page.locator('input[type="password"]').fill('password123');
       await page.getByRole('button', { name: /sign in|start practice/i }).first().click({ force: true });
-      await page.waitForTimeout(1000);
     }
   }
 
   // Handle optional onboarding if shown
   const onboardSkipBtn = page.getByRole('button', { name: /skip for now|complete|continue|get started/i }).first();
-  if (await onboardSkipBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+  if (await onboardSkipBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
     await onboardSkipBtn.click({ force: true });
-    await page.waitForTimeout(1000);
   }
 
-  // Ensure localStorage contains profile and ensure Hub state
+  // Ensure localStorage contains profile
   await page.evaluate(() => {
     localStorage.setItem('mockmate_user_profile', JSON.stringify({
       name: 'Test Candidate',
