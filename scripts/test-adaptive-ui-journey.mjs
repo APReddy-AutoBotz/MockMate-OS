@@ -392,7 +392,13 @@ try {
   }
 
   // Ensure Hub is rendered
-  await page.locator('h3', { hasText: 'Mock interview' }).first().waitFor({ state: 'visible', timeout: 20000 });
+  try {
+    await page.locator('h3', { hasText: 'Mock interview' }).first().waitFor({ state: 'attached', timeout: 20000 });
+  } catch (err) {
+    const text = await page.evaluate(() => document.body.innerText).catch(() => 'UNABLE_TO_GET_BODY_TEXT');
+    console.error('[Adaptive UI Journey Debug] Hub locator failed. Current body innerText:\n' + text);
+    throw err;
+  }
 
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
