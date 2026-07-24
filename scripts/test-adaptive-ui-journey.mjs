@@ -369,24 +369,26 @@ try {
   console.log('[Adaptive UI Journey] 5. Entering practice hub...');
   await page.waitForTimeout(3000);
 
-  const startBtn = page.getByRole('button', { name: /start free|start free practice/i }).first();
-  if (await startBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await startBtn.click({ force: true });
+  // Transition from Landing -> Login modal
+  let loginAttempts = 0;
+  while (!(await page.locator('input[type="email"], button:has-text("Quick access")').first().isVisible({ timeout: 1000 }).catch(() => false)) && loginAttempts < 10) {
+    loginAttempts++;
+    await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button'));
+      const target = btns.find(b => b.innerText.includes('Sign In') || b.innerText.includes('START FREE PRACTICE') || b.innerText.includes('Start Free'));
+      if (target) target.click();
+    });
+    await page.waitForTimeout(500);
   }
 
-  const quickAccessBtn = await page.waitForSelector('button:has-text("Quick access")', { timeout: 10000 }).catch(() => null);
-  if (quickAccessBtn) {
-    await quickAccessBtn.click({ force: true });
-  } else {
-    const emailField = await page.waitForSelector('input[type="email"]', { timeout: 5000 }).catch(() => null);
-    if (emailField) {
-      await page.locator('input[type="email"]').fill('candidate@mockmate.internal');
-      await page.locator('input[type="password"]').fill('password123');
-      await page.getByRole('button', { name: /sign in|start practice/i }).first().click({ force: true });
-    }
-  }
+  // Click Quick Access
+  await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button'));
+    const quick = btns.find(b => b.innerText.toLowerCase().includes('quick access'));
+    if (quick) quick.click();
+  });
 
-  const onboardSkipBtn = await page.waitForSelector('button:has-text("Skip"), button:has-text("Complete")', { timeout: 5000 }).catch(() => null);
+  const onboardSkipBtn = await page.waitForSelector('button:has-text("Skip"), button:has-text("Complete")', { timeout: 3000 }).catch(() => null);
   if (onboardSkipBtn) {
     await onboardSkipBtn.click({ force: true });
   }
