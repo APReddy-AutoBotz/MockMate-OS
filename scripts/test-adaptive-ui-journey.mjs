@@ -349,6 +349,15 @@ try {
 
   // Authenticate & enter Hub
   console.log('[Adaptive UI Journey] 5. Entering practice hub...');
+  await page.evaluate(() => {
+    localStorage.setItem('mockmate_user_profile', JSON.stringify({
+      name: 'Test Candidate',
+      targetRole: 'Software Architect',
+      experienceLevel: 'mid',
+      primaryGoal: 'skill_building'
+    }));
+  });
+
   const startBtn = page.getByRole('button', { name: /start free/i }).first();
   if (await startBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
     await startBtn.click();
@@ -361,12 +370,18 @@ try {
     await page.getByRole('button', { name: /sign in|start practice/i }).first().click();
   }
 
+  // Handle optional onboarding if shown
+  const onboardFinishBtn = page.getByRole('button', { name: /complete|continue|get started/i }).first();
+  if (await onboardFinishBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await onboardFinishBtn.click();
+  }
+
   // Wait for Hub
-  await page.waitForSelector('text=Mock interview', { timeout: 10000 });
+  await page.waitForSelector('button:has-text("Mock interview"), button:has-text("Start interview practice")', { timeout: 15000 });
 
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
-  const interviewCard = page.getByRole('button', { name: /mock interview/i }).first();
+  const interviewCard = page.locator('button:has-text("Mock interview"), button:has-text("Start interview practice")').first();
   await interviewCard.click();
 
   // Role Capture screen
