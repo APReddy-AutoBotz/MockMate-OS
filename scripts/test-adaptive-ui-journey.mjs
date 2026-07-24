@@ -354,11 +354,19 @@ try {
 
   console.log(`[Adaptive UI Journey] 4. Navigating to ${webBase}...`);
   await page.goto(webBase, { waitUntil: 'domcontentloaded', timeout: 15000 });
+  await page.evaluate(() => {
+    localStorage.setItem('mockmate_user_profile', JSON.stringify({
+      name: 'Test Candidate',
+      targetRole: 'Software Architect',
+      experienceLevel: 'mid',
+      primaryGoal: 'skill_building'
+    }));
+  });
 
   // Authenticate & enter Hub
   console.log('[Adaptive UI Journey] 5. Entering practice hub...');
   // Allow SplashScreen (2.5s duration) to complete
-  await page.waitForTimeout(3500);
+  await page.waitForTimeout(3000);
 
   const startBtn = page.getByRole('button', { name: /start free|start free practice/i }).first();
   if (await startBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
