@@ -450,20 +450,70 @@ export const ChallengeRecoveryRecordSchema = z.object({
 }).strict();
 export type ChallengeRecoveryRecord = z.infer<typeof ChallengeRecoveryRecordSchema>;
 
-export const DimensionScoreSchema = z.object({
-  dimension: DimensionKeySchema,
-  dimensionName: z.string().optional(),
-  score_status: EvaluationStatusSchema,
-  anchor_score: z.number().nullable(),
-  normalized_score: z.number().nullable(),
-  reason: z.string(),
-  evidence: z.array(z.string()),
-  evidenceReferences: z.array(EvidenceReferenceSchema).optional(),
-  trajectory: TrajectoryStatusSchema.nullable().optional(),
-  distinctTurnCount: z.number().int().min(0).optional(),
-  hasChallengeEvidence: z.boolean().optional(),
-  confidence: EvidenceConfidenceSchema,
-}).strict();
+export function normalizeAnswerText(raw: string | null | undefined): string {
+  return (raw || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+export function computeAdaptiveRequestHash(
+  sessionId: string,
+  questionId: string,
+  answerKind: string,
+  answerText?: string | null
+): string {
+  const normText = normalizeAnswerText(answerText);
+  const rawKey = `${sessionId}:${questionId}:${answerKind}:${normText}`;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < rawKey.length; i++) {
+    hash ^= rawKey.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+export const DimensionScoreSchema = z.discriminatedUnion('score_status', [
+  z.object({
+    dimension: DimensionKeySchema,
+    dimensionName: z.string().optional(),
+    score_status: z.literal('scored'),
+    anchor_score: z.number().min(0).max(4),
+    normalized_score: z.number().min(0).max(100),
+    reason: z.string(),
+    evidence: z.array(z.string()),
+    evidenceReferences: z.array(EvidenceReferenceSchema).min(2),
+    trajectory: TrajectoryStatusSchema,
+    distinctTurnCount: z.number().int().min(2),
+    hasChallengeEvidence: z.boolean().optional(),
+    confidence: EvidenceConfidenceSchema,
+  }).strict(),
+  z.object({
+    dimension: DimensionKeySchema,
+    dimensionName: z.string().optional(),
+    score_status: z.literal('insufficient_evidence'),
+    anchor_score: z.null(),
+    normalized_score: z.null(),
+    reason: z.string(),
+    evidence: z.array(z.string()).default([]),
+    evidenceReferences: z.array(EvidenceReferenceSchema).optional().default([]),
+    trajectory: z.null().optional(),
+    distinctTurnCount: z.number().int().min(0).optional().default(0),
+    hasChallengeEvidence: z.boolean().optional(),
+    confidence: EvidenceConfidenceSchema,
+  }).strict(),
+  z.object({
+    dimension: DimensionKeySchema,
+    dimensionName: z.string().optional(),
+    score_status: z.literal('not_tested'),
+    anchor_score: z.null(),
+    normalized_score: z.null(),
+    reason: z.string(),
+    evidence: z.array(z.string()).default([]),
+    evidenceReferences: z.array(EvidenceReferenceSchema).optional().default([]),
+    trajectory: z.null().optional(),
+    distinctTurnCount: z.literal(0).optional().default(0),
+    hasChallengeEvidence: z.boolean().optional(),
+    confidence: EvidenceConfidenceSchema,
+  }).strict(),
+]);
 export type DimensionScore = z.infer<typeof DimensionScoreSchema>;
 
 export const EvaluationModelEnum = z.enum([

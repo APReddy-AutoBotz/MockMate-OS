@@ -43,6 +43,21 @@ export function computeTrajectory(observations: DimensionObservation[]): Traject
   return 'stable';
 }
 
+export function toEvidenceTurn(turn: any): { turnId: string; evaluation: TurnEvaluation; stage: InterviewStage; questionKind: QuestionKind } | null {
+  if (!turn) return null;
+  const turnId = turn.turnId || turn.id;
+  const evaluation = turn.evaluation || turn.turnEvaluation;
+  if (!turnId || typeof turnId !== 'string' || turnId.trim().length === 0 || !evaluation) {
+    return null;
+  }
+  return {
+    turnId: turnId.trim(),
+    evaluation,
+    stage: turn.stage || 'framing',
+    questionKind: turn.questionKind || turn.question_kind || 'root',
+  };
+}
+
 export function aggregateTurnEvidence(
   turns: Array<{ turnId: string; evaluation?: TurnEvaluation; stage?: InterviewStage; questionKind?: QuestionKind }>,
   mode: ReasoningMode
@@ -63,8 +78,9 @@ export function aggregateTurnEvidence(
     let hasInitialNonChallenge = false;
     let hasLaterChallengeOrRecovery = false;
 
-    for (const turn of turns) {
-      if (!turn || !turn.turnId) continue;
+    for (const rawTurn of turns) {
+      const turn = toEvidenceTurn(rawTurn);
+      if (!turn) continue;
       if (!turn.evaluation || turn.evaluation.evaluationStatus === 'unavailable') continue;
       if (!Array.isArray(turn.evaluation.observations)) continue;
 
@@ -110,7 +126,7 @@ export function aggregateTurnEvidence(
     // OR Rule B: One valid initial observation and one valid later challenge/recovery observation from a DIFFERENT turn
     const hasEnoughTurns = distinctTurnIds.length >= 2;
     const hasChallengeCombo = hasInitialNonChallenge && hasLaterChallengeOrRecovery && distinctTurnIds.length >= 2;
-    const isSufficient = isActive && (hasEnoughTurns || hasChallengeCombo);
+    const isSufficient = isActive && (hasEnoughTurns || hasChallengeCombo) && evidenceReferences.length >= 2;
 
     let anchorScore: number | null = null;
     let normalizedScore: number | null = null;
@@ -153,7 +169,7 @@ export function aggregateTurnEvidence(
   }
 
   // Build DimensionScore list for final report
-  const dimensionScores = allDimensionKeys.map(dimKey => {
+  const dimensionScores: DimensionScore[] = allDimensionKeys.map(dimKey => {
     const st = dimensionStates[dimKey];
     const dimDef = APPROVED_DIMENSIONS[dimKey];
     const refs = dimensionReferencesMap[dimKey] || [];
@@ -169,13 +185,13 @@ export function aggregateTurnEvidence(
         evidence: [],
         confidence: 'low' as const,
         evidenceReferences: [],
-        trajectory: 'insufficient_evidence' as const,
+        trajectory: null,
         distinctTurnCount: 0,
         hasChallengeEvidence: false,
       };
     }
 
-    if (st.anchorScore === null || st.normalizedScore === null) {
+    if (st.anchorScore === null || st.normalizedScore === null || refs.length < 2 || st.distinctTurnIds.length < 2) {
       return {
         dimension: dimKey,
         dimensionName: dimDef.name,
@@ -188,7 +204,7 @@ export function aggregateTurnEvidence(
         evidence: [],
         confidence: 'low' as const,
         evidenceReferences: refs,
-        trajectory: st.trajectory,
+        trajectory: null,
         distinctTurnCount: st.distinctTurnIds.length,
         hasChallengeEvidence: st.hasChallengeEvidence,
       };
@@ -206,7 +222,7 @@ export function aggregateTurnEvidence(
       evidence: [...new Set(evidenceExcerpts)],
       confidence: st.confidence,
       evidenceReferences: refs,
-      trajectory: st.trajectory,
+      trajectory: st.trajectory === 'insufficient_evidence' ? 'stable' : st.trajectory,
       distinctTurnCount: st.distinctTurnIds.length,
       hasChallengeEvidence: st.hasChallengeEvidence,
     };

@@ -7,6 +7,7 @@ import {
   InterviewSessionStartResponse,
   AnswerSubmissionResponse,
   AdaptiveAnswerSubmissionResponse,
+  AdaptiveAnswerSubmissionResponseSchema,
   AdaptivePolicy,
   DEFAULT_ADAPTIVE_POLICY,
   AdaptiveSessionState,
@@ -15,10 +16,11 @@ import {
   ReasoningMode,
   InterviewStage,
   QuestionKind,
+  normalizeAnswerText,
 } from 'mockmate-shared';
 import * as turnEvaluatorService from './turnEvaluatorService';
 import { computeAdaptiveDecision, constructNextQuestion } from './adaptiveInterviewController';
-import { aggregateTurnEvidence } from './evidenceAggregationService';
+import { aggregateTurnEvidence, toEvidenceTurn } from './evidenceAggregationService';
 import { ACTIVE_DIMENSIONS_BY_MODE } from '../config/evaluationConfig';
 import { getModePolicy } from '../config/modePolicies';
 
@@ -49,6 +51,8 @@ export const toSession = async (row: any): Promise<any> => {
         controllerDecision: turn.controller_decision || undefined,
         challengeEvent: turn.challenge_event || undefined,
         clientSubmissionId: turn.client_submission_id || undefined,
+        requestHash: turn.adaptive_request_hash || undefined,
+        adaptiveResponse: turn.adaptive_response || undefined,
       });
     }
   } else if (row.history) {
@@ -83,6 +87,9 @@ export const toSession = async (row: any): Promise<any> => {
     activeRootQuestionId: row.activeRootQuestionId || row.active_root_question_id || null,
     probeCountForRoot: row.probeCountForRoot ?? row.probe_count_for_root ?? 0,
     challengeCount: row.challengeCount ?? row.challenge_count ?? 0,
+    challengeAnsweredForRoot: row.challengeAnsweredForRoot ?? row.challenge_answered_for_root ?? false,
+    reflectionCompletedForRoot: row.reflectionCompletedForRoot ?? row.reflection_completed_for_root ?? false,
+    finalReflectionAsked: row.finalReflectionAsked ?? row.final_reflection_asked ?? false,
     adaptivePolicy: policy,
     dimensionState: row.dimensionState || row.dimension_state || {},
     pendingQuestionId: row.pendingQuestionId ?? row.pending_question_id ?? null,
@@ -172,6 +179,9 @@ export const createSession = async (
       probe_count_for_root: 0,
       challengeCount: 0,
       challenge_count: 0,
+      challengeAnsweredForRoot: false,
+      reflectionCompletedForRoot: false,
+      finalReflectionAsked: false,
       adaptivePolicy: policy,
       adaptive_policy: policy,
       dimensionState: initialDimensionState,
@@ -212,6 +222,9 @@ export const createSession = async (
       active_root_question_id: firstQuestion.id,
       probe_count_for_root: 0,
       challenge_count: 0,
+      challenge_answered_for_root: false,
+      reflection_completed_for_root: false,
+      final_reflection_asked: false,
       adaptive_policy: policy,
       dimension_state: initialDimensionState,
       pending_question_id: firstQuestion.id,
@@ -251,11 +264,10 @@ export const submitAdaptiveTurn = async (
   userId: string,
   sessionId: string,
   questionId: string,
-  expectedSessionVersion?: number,
-  clientSubmissionId?: string,
+  expectedSessionVersion: number,
+  clientSubmissionId: string,
   answerKind: 'answered' | 'skipped' = 'answered',
-  answerText?: string,
-  expectedQuestionIndex?: number
+  answerText?: string
 ): Promise<AdaptiveAnswerSubmissionResponse> => {
   const session = await getSession(userId, sessionId);
   if (!session) {
@@ -269,9 +281,10 @@ export const submitAdaptiveTurn = async (
     throw err;
   }
 
+  const incomingHash = crypto.createHash('md5').update(`${sessionId}:${questionId}:${answerKind}:${normalizeAnswerText(answerText)}`).digest('hex');
+
   // Idempotency check for local in-memory fallback
-  if (!supabaseAdmin && clientSubmissionId) {
-    const incomingHash = crypto.createHash('md5').update(`${questionId}:${answerKind}:${answerText || ''}`).digest('hex');
+  if (!supabaseAdmin) {
     const existingTurn = session.history.find((t: any) => t.clientSubmissionId === clientSubmissionId);
     if (existingTurn) {
       if (existingTurn.requestHash && existingTurn.requestHash !== incomingHash) {
@@ -287,8 +300,7 @@ export const submitAdaptiveTurn = async (
 
   if (
     session.pendingQuestionId !== questionId ||
-    (expectedSessionVersion !== undefined && session.sessionVersion !== expectedSessionVersion) ||
-    (expectedQuestionIndex !== undefined && session.currentQuestionIndex !== expectedQuestionIndex)
+    session.sessionVersion !== expectedSessionVersion
   ) {
     const err: any = new Error(`Stale or mismatched question submission (expected question: '${session.pendingQuestionId}', got: '${questionId}')`);
     err.status = 409;
@@ -350,18 +362,37 @@ export const submitAdaptiveTurn = async (
     answerKind,
   }, undefined, serverTurnId);
 
-  // Calculate new state counters
+  // Calculate new state counters and flags
   let nextRootIndex = session.currentQuestionIndex;
   let nextProbeCount = session.probeCountForRoot;
   let nextChallengeCount = session.challengeCount;
+  let nextChallengeAnswered = session.challengeAnsweredForRoot || false;
+  let nextReflectionCompleted = session.reflectionCompletedForRoot || false;
+  let nextFinalReflectionAsked = session.finalReflectionAsked || false;
+
+  const currentKind = currentQuestion.questionKind || 'root';
+
+  if (currentKind === 'challenge') {
+    nextChallengeAnswered = true;
+  } else if (currentKind === 'reflection') {
+    nextReflectionCompleted = true;
+  }
 
   if (decision.action === 'ask_probe') {
     nextProbeCount += 1;
   } else if (decision.action === 'introduce_challenge') {
     nextChallengeCount += 1;
+  } else if (decision.action === 'ask_reflection') {
+    if (remainingRoots.length === 0 && (nextQuestion?.questionKind === 'reflection' || decision.nextQuestionKind === 'reflection')) {
+      nextFinalReflectionAsked = true;
+    } else {
+      nextReflectionCompleted = false;
+    }
   } else if (decision.action === 'advance_root_question') {
     nextRootIndex += 1;
     nextProbeCount = 0;
+    nextChallengeAnswered = false;
+    nextReflectionCompleted = false;
   }
 
   const isComplete = decision.action === 'complete_session' || (nextQuestion === null && decision.action !== 'ask_probe' && decision.action !== 'introduce_challenge');
@@ -369,17 +400,20 @@ export const submitAdaptiveTurn = async (
   const nextKind = decision.nextQuestionKind;
   const totalRoots = allRoots.length;
 
-  // 5. Update session dimension state with this new turn before persistence
-  const newTurnCandidate = {
+  // 5. Adapt evidence turns cleanly using toEvidenceTurn
+  const historyEvidenceTurns = (session.history || [])
+    .map(toEvidenceTurn)
+    .filter((t): t is NonNullable<typeof t> => t !== null);
+
+  const currentEvidenceTurn = toEvidenceTurn({
     turnId: serverTurnId,
-    evaluation: turnEval,
+    turnEvaluation: turnEval,
     stage: session.currentStage,
-    questionKind: currentQuestion.questionKind || 'root',
-  };
-  const { dimensionStates: updatedDimensionState } = aggregateTurnEvidence(
-    [...session.history, newTurnCandidate],
-    mode
-  );
+    questionKind: currentKind,
+  });
+
+  const allEvidenceTurns = currentEvidenceTurn ? [...historyEvidenceTurns, currentEvidenceTurn] : historyEvidenceTurns;
+  const { dimensionStates: updatedDimensionState } = aggregateTurnEvidence(allEvidenceTurns, mode);
 
   // 6. Truthful coach feedback (no filler defaults!)
   let coachFeedback: { strength?: string; nextFocus?: string } | undefined = undefined;
@@ -425,21 +459,21 @@ export const submitAdaptiveTurn = async (
       candidateResponse: textToSave,
       timestamp: Date.now(),
       questionBlueprint: currentQuestion,
-      questionKind: currentQuestion.questionKind || 'root',
+      questionKind: currentKind,
       stage: session.currentStage,
       evaluationStatus: turnEval.evaluationStatus,
       turnEvaluation: turnEval,
       controllerDecision: decision,
       challengeEvent,
       clientSubmissionId,
-      requestHash: crypto.createHash('md5').update(`${questionId}:${answerKind}:${answerText || ''}`).digest('hex'),
+      requestHash: incomingHash,
       adaptiveResponse: responsePayload,
     };
 
     session.history.push(turn);
-    session.sessionVersion = (session.sessionVersion || session.session_version || 1) + 1;
+    session.sessionVersion = session.sessionVersion + 1;
     session.session_version = session.sessionVersion;
-    session.currentTurnIndex = (session.currentTurnIndex || session.current_turn_index || 0) + 1;
+    session.currentTurnIndex = session.currentTurnIndex + 1;
     session.current_turn_index = session.currentTurnIndex;
     session.currentQuestionIndex = nextRootIndex;
     session.current_root_question_index = nextRootIndex;
@@ -456,14 +490,11 @@ export const submitAdaptiveTurn = async (
     session.probe_count_for_root = nextProbeCount;
     session.challengeCount = nextChallengeCount;
     session.challenge_count = nextChallengeCount;
+    session.challengeAnsweredForRoot = nextChallengeAnswered;
+    session.reflectionCompletedForRoot = nextReflectionCompleted;
+    session.finalReflectionAsked = nextFinalReflectionAsked;
     session.dimensionState = updatedDimensionState;
     session.dimension_state = updatedDimensionState;
-    if (currentQuestion.questionKind === 'challenge') {
-      session.challengeAnsweredForRoot = true;
-    }
-    if (decision.action === 'ask_reflection' && nextQuestion?.questionKind === 'reflection') {
-      session.finalReflectionAsked = true;
-    }
     if (isComplete) session.status = 'awaiting_report';
     session.updatedAt = new Date().toISOString();
     fallbackSessions.set(sessionId, session);
@@ -494,17 +525,30 @@ export const submitAdaptiveTurn = async (
     p_is_complete: isComplete,
     p_max_turns: session.adaptivePolicy.maxTurns,
     p_total_roots: totalRoots,
+    p_challenge_answered_for_root: nextChallengeAnswered,
+    p_reflection_completed_for_root: nextReflectionCompleted,
+    p_final_reflection_asked: nextFinalReflectionAsked,
     p_turn_id: serverTurnId,
     p_adaptive_response: responsePayload,
   });
 
   if (error) {
+    if (error.message.includes('Idempotency conflict')) {
+      const err: any = new Error('Conflict: client_submission_id reuse with mismatched payload');
+      err.status = 409;
+      throw err;
+    }
+    if (error.message.includes('Stale or mismatched')) {
+      const err: any = new Error(`Stale or mismatched question submission (expected question: '${session.pendingQuestionId}', got: '${questionId}')`);
+      err.status = 409;
+      throw err;
+    }
     const err: any = new Error(`Atomic adaptive submit failed: ${error.message}`);
     err.status = 409;
     throw err;
   }
 
-  return data as AdaptiveAnswerSubmissionResponse;
+  return AdaptiveAnswerSubmissionResponseSchema.parse(data);
 };
 
 export const submitAnswer = async (

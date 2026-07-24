@@ -11,64 +11,18 @@ const aiService = require('../backend/dist/services/aiService.js');
 
 llmGateway.callWithFallback = async (prompt) => {
   const normPrompt = (prompt || '').toLowerCase();
-  console.log('[llmGateway mock] Received prompt sample:', normPrompt.slice(0, 200));
-  if (normPrompt.includes('messaging queues')) {
-    return {
-      text: JSON.stringify({
-        evaluationStatus: 'evaluated',
-        answerSummary: 'Vague initial response with missing signals.',
-        observations: [],
-        missingSignals: ['Asynchronous messaging', 'Eventual consistency'],
-        recommendedProbe: 'Can you specify how eventual consistency and idempotency are enforced under load?',
-      }),
-      provider: 'mock',
-      model: 'mock',
-      fallbackTriggered: false,
-    };
-  }
-  if (normPrompt.includes('eventual consistency')) {
-    return {
-      text: JSON.stringify({
-        evaluationStatus: 'evaluated',
-        answerSummary: 'Grounded response covering event outbox and idempotency keys.',
-        observations: [
-          {
-            dimension: 'SYSTEMS_THINKING',
-            anchorScore: 4,
-            confidence: 'high',
-            evidenceExcerpt: 'eventual consistency',
-            signal: 'Eventual consistency architecture',
-            rationale: 'Candidate explicitly articulates outbox pattern and idempotency.',
-            stage: 'exploration',
-            turnKind: 'probe',
-          },
-          {
-            dimension: 'PROBLEM_FRAMING',
-            anchorScore: 3,
-            confidence: 'high',
-            evidenceExcerpt: 'asynchronous messaging',
-            signal: 'Problem framing scope',
-            rationale: 'Candidate frames microservices boundary.',
-            stage: 'exploration',
-            turnKind: 'probe',
-          },
-        ],
-        missingSignals: [],
-        recommendedProbe: null,
-      }),
-      provider: 'mock',
-      model: 'mock',
-      fallbackTriggered: false,
-    };
-  }
-  if (normPrompt.includes('circuit breakers')) {
+  const candAns = normPrompt.includes('candidate response:')
+    ? normPrompt.split('candidate response:')[1].split('active dimensions')[0]
+    : normPrompt;
+
+  if (candAns.includes('circuit breakers')) {
     return {
       text: JSON.stringify({
         evaluationStatus: 'evaluated',
         answerSummary: 'Strong recovery under network partition challenge.',
         observations: [
           {
-            dimension: 'RECOVERY_QUALITY',
+            dimension: 'NARRATIVE_COHERENCE',
             anchorScore: 4,
             confidence: 'high',
             evidenceExcerpt: 'circuit breakers',
@@ -86,13 +40,65 @@ llmGateway.callWithFallback = async (prompt) => {
       fallbackTriggered: false,
     };
   }
+
+  if (candAns.includes('eventual consistency') || candAns.includes('kafka')) {
+    return {
+      text: JSON.stringify({
+        evaluationStatus: 'evaluated',
+        answerSummary: 'Grounded response covering event outbox and idempotency keys.',
+        observations: [
+          {
+            dimension: 'DECISION_QUALITY',
+            anchorScore: 4,
+            confidence: 'high',
+            evidenceExcerpt: 'eventual consistency',
+            signal: 'Eventual consistency architecture',
+            rationale: 'Candidate explicitly articulates outbox pattern and idempotency.',
+            stage: 'exploration',
+            turnKind: 'probe',
+          },
+          {
+            dimension: 'NARRATIVE_COHERENCE',
+            anchorScore: 3,
+            confidence: 'high',
+            evidenceExcerpt: 'asynchronous messaging',
+            signal: 'Problem framing scope',
+            rationale: 'Candidate frames microservices boundary.',
+            stage: 'exploration',
+            turnKind: 'probe',
+          },
+        ],
+        missingSignals: [],
+        recommendedProbe: null,
+      }),
+      provider: 'mock',
+      model: 'mock',
+      fallbackTriggered: false,
+    };
+  }
+
+  if (candAns.includes('messaging queues')) {
+    return {
+      text: JSON.stringify({
+        evaluationStatus: 'evaluated',
+        answerSummary: 'Vague initial response with missing signals.',
+        observations: [],
+        missingSignals: ['Asynchronous messaging', 'Eventual consistency'],
+        recommendedProbe: 'Can you specify how eventual consistency and idempotency are enforced under load?',
+      }),
+      provider: 'mock',
+      model: 'mock',
+      fallbackTriggered: false,
+    };
+  }
+
   return {
     text: JSON.stringify({
       evaluationStatus: 'evaluated',
       answerSummary: 'Structured candidate response.',
       observations: [
         {
-          dimension: 'PROBLEM_FRAMING',
+          dimension: 'DECISION_QUALITY',
           anchorScore: 3,
           confidence: 'high',
           evidenceExcerpt: 'synchronous wal',
@@ -196,9 +202,15 @@ async function listenOnAvailablePort(srv, preferredPort) {
   throw new Error(`No free ports found starting at ${preferredPort}`);
 }
 
+// Deliberately occupy port 3098 to prove dynamic port allocation fallback
+const blockerServer = http.createServer((_, res) => res.end('blocked'));
+await new Promise((resolve) => blockerServer.listen(3098, '127.0.0.1', resolve));
+console.log('[Adaptive API Journey] Deliberately occupied port 3098 to test dynamic port fallback...');
+
 const server = http.createServer(app);
 const apiPort = await listenOnAvailablePort(server, 3098);
-console.log(`   Test Express API server running on http://127.0.0.1:${apiPort}`);
+const apiBase = `http://127.0.0.1:${apiPort}`;
+console.log(`   Test Express API server running on ${apiBase} (dynamic fallback successful!)`);
 
 let browser;
 try {
@@ -218,21 +230,30 @@ try {
       totalQuestions: 2,
       includeBehavioral: true,
       includeCoding: false,
-      timePerQuestion: '90s',
+      reasoningMode: 'classic_behavioral',
       deliveryMode: 'exam',
-      reasoningMode: 'classic_technical',
-      sourceMode: 'question_bank',
     },
     interviewPlan: {
-      meta: { intent: 'Architecture', controls: { totalQuestions: 2, reasoningMode: 'classic_technical' } },
-      jdInsights: { role: 'Backend Architect' },
+      meta: {
+        targetRole: 'Senior Backend Architect',
+        intent: 'Architecture & Tradeoffs',
+        sessionType: 'structured',
+        controls: {
+          difficulty: 'intermediate',
+          totalQuestions: 2,
+          includeBehavioral: true,
+          includeCoding: false,
+          reasoningMode: 'classic_behavioral',
+          deliveryMode: 'exam',
+        },
+      },
       questionSet: [
         {
           id: 'q1_arch',
           phase: 'scenario',
           difficulty: 'intermediate',
-          question: 'How do you structure microservices communication for consistency under high load?',
-          expectedSignals: ['Asynchronous messaging', 'Eventual consistency', 'Idempotency'],
+          question: 'How do you design high-throughput microservices for eventual consistency?',
+          expectedSignals: ['Outbox pattern', 'Idempotency keys', 'Async event bus'],
           personaFocus: 'p1',
           questionKind: 'root',
           rootQuestionId: 'q1_arch',
@@ -253,7 +274,7 @@ try {
     },
   };
 
-  const startRes = await page.request.post('http://127.0.0.1:3098/api/interview/sessions', {
+  const startRes = await page.request.post(`${apiBase}/api/interview/sessions`, {
     data: { context: sampleContext },
   });
   const startData = await startRes.json();
@@ -269,7 +290,7 @@ try {
 
   // Step 4 & 5: Turn 1 - Vague answer -> Ask Probe in exploration stage
   console.log('[Adaptive Journey Test] 4. Submitting Turn 1 (vague answer) -> expecting ask_probe...');
-  const turn1Res = await page.request.post(`http://127.0.0.1:3098/api/interview/sessions/${sessionId}/answers`, {
+  const turn1Res = await page.request.post(`${apiBase}/api/interview/sessions/${sessionId}/answers`, {
     data: {
       questionId: 'q1_arch',
       expectedSessionVersion: 1,
@@ -288,7 +309,7 @@ try {
 
   // Step 6 & 7: Turn 2 - Grounded answer -> Introduce Challenge in challenge stage
   console.log('[Adaptive Journey Test] 5. Submitting Turn 2 (grounded answer) -> expecting introduce_challenge...');
-  const turn2Res = await page.request.post(`http://127.0.0.1:3098/api/interview/sessions/${sessionId}/answers`, {
+  const turn2Res = await page.request.post(`${apiBase}/api/interview/sessions/${sessionId}/answers`, {
     data: {
       questionId: turn1Data.nextQuestion.id,
       expectedSessionVersion: turn1Data.sessionVersion,
@@ -307,7 +328,7 @@ try {
 
   // Step 8 & 9: Turn 3 - Robust challenge recovery answer -> expecting ask_reflection
   console.log('[Adaptive Journey Test] 6. Submitting Turn 3 (challenge recovery) -> expecting ask_reflection...');
-  const turn3Res = await page.request.post(`http://127.0.0.1:3098/api/interview/sessions/${sessionId}/answers`, {
+  const turn3Res = await page.request.post(`${apiBase}/api/interview/sessions/${sessionId}/answers`, {
     data: {
       questionId: turn2Data.nextQuestion.id,
       expectedSessionVersion: turn2Data.sessionVersion,
@@ -323,7 +344,7 @@ try {
 
   // Turn 4 - Reflection answer after challenge -> expecting advance_root_question to q2_arch
   console.log('[Adaptive Journey Test] 7. Submitting Turn 4 (challenge reflection) -> expecting advance_root_question...');
-  const turn4Res = await page.request.post(`http://127.0.0.1:3098/api/interview/sessions/${sessionId}/answers`, {
+  const turn4Res = await page.request.post(`${apiBase}/api/interview/sessions/${sessionId}/answers`, {
     data: {
       questionId: turn3Data.nextQuestion.id,
       expectedSessionVersion: turn3Data.sessionVersion,
@@ -339,7 +360,7 @@ try {
 
   // Turn 5 - Second root question answer
   console.log('[Adaptive Journey Test] 8. Submitting Turn 5 (root 2 answer)...');
-  const turn5Res = await page.request.post(`http://127.0.0.1:3098/api/interview/sessions/${sessionId}/answers`, {
+  const turn5Res = await page.request.post(`${apiBase}/api/interview/sessions/${sessionId}/answers`, {
     data: {
       questionId: turn4Data.nextQuestion.id,
       expectedSessionVersion: turn4Data.sessionVersion,
@@ -354,7 +375,7 @@ try {
   let turnIdx = 6;
   while (!finalTurnData.isSessionComplete && finalTurnData.nextQuestion) {
     console.log(`[Adaptive Journey Test] Submitting Turn ${turnIdx} (${finalTurnData.nextQuestion.questionKind || 'turn'})...`);
-    const nextRes = await page.request.post(`http://127.0.0.1:3098/api/interview/sessions/${sessionId}/answers`, {
+    const nextRes = await page.request.post(`${apiBase}/api/interview/sessions/${sessionId}/answers`, {
       data: {
         questionId: finalTurnData.nextQuestion.id,
         expectedSessionVersion: finalTurnData.sessionVersion,
@@ -373,7 +394,7 @@ try {
     throw new Error('Expected isSessionComplete to be true after final turn');
   }
 
-  const sessionStateRes = await page.request.get(`http://127.0.0.1:3098/api/interview/sessions/${sessionId}`);
+  const sessionStateRes = await page.request.get(`${apiBase}/api/interview/sessions/${sessionId}`);
   const sessionState = await sessionStateRes.json();
   if (sessionState.status !== 'awaiting_report') {
     throw new Error(`Expected session status awaiting_report, got ${sessionState.status}`);
@@ -381,7 +402,7 @@ try {
 
   // Step 14 & 15: Trigger report generation
   console.log('[Adaptive Journey Test] 10. Generating final report...');
-  const reportRes = await page.request.post(`http://127.0.0.1:3098/api/interview/sessions/${sessionId}/report`);
+  const reportRes = await page.request.post(`${apiBase}/api/interview/sessions/${sessionId}/report`);
   const reportData = await reportRes.json();
 
   // Step 16, 17, 18: Hard Assertions on Report Integrity

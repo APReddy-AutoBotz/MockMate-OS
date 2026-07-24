@@ -229,15 +229,15 @@ try {
   console.log('[Browser Runtime Test] 9. Verifying Supabase startup & API route targets...');
   const supabaseRequests = observedRequests.filter(r => r.url.startsWith('/auth/v1'));
   if (supabaseRequests.length === 0) {
-    throw new Error('Expected Supabase startup/auth request on stub 127.0.0.1:3099, but 0 were observed');
+    throw new Error(`Expected Supabase startup/auth request on stub 127.0.0.1:${stubPort}, but 0 were observed`);
   }
-  console.log(`   Observed ${supabaseRequests.length} Supabase startup request(s) on stub 127.0.0.1:3099`);
+  console.log(`   Observed ${supabaseRequests.length} Supabase startup request(s) on stub 127.0.0.1:${stubPort}`);
 
   const apiRequests = observedRequests.filter(r => r.url.startsWith('/api/'));
   if (apiRequests.length === 0) {
-    throw new Error('Expected API request starting with /api/ on stub 127.0.0.1:3099, but 0 were observed');
+    throw new Error(`Expected API request starting with /api/ on stub 127.0.0.1:${stubPort}, but 0 were observed`);
   }
-  console.log(`   Observed ${apiRequests.length} API request(s) starting with /api/ on stub 127.0.0.1:3099`);
+  console.log(`   Observed ${apiRequests.length} API request(s) starting with /api/ on stub 127.0.0.1:${stubPort}`);
 
   const rootLevelDirectCalls = observedRequests.filter(r => /^\/interview\//.test(r.url));
   if (rootLevelDirectCalls.length > 0) {
@@ -272,13 +272,13 @@ try {
       }
     });
 
-    await new Promise((resolve) => unconfigServer.listen(4174, '127.0.0.1', resolve));
+    const unconfigPort = await listenOnAvailablePort(unconfigServer, 4174);
 
     const page2 = await context.newPage();
     const unconfigErrors = [];
     page2.on('pageerror', (err) => unconfigErrors.push(err.message));
 
-    await page2.goto('http://127.0.0.1:4174', { waitUntil: 'domcontentloaded', timeout: 5000 });
+    await page2.goto(`http://127.0.0.1:${unconfigPort}`, { waitUntil: 'domcontentloaded', timeout: 5000 });
     await page2.waitForTimeout(1000);
 
     unconfigServer.close();

@@ -66,24 +66,30 @@ jobs:
       - name: 9. Frontend build
         run: npm run build
 
-      - name: 9a. Static runtime configuration precheck
-        run: npm run test:runtime-config-static
-
-      - name: 9b. Install Playwright Browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: 9c. Playwright browser runtime execution test
-        run: npm run test:browser-runtime
-
-      - name: 10. Backend tests
-        working-directory: backend
-        run: npm test
-
-      - name: 11. Backend build
+      - name: 10. Backend build
         working-directory: backend
         run: npm run build
 
-      - name: 12. Production smoke checks
+      - name: 11a. Static runtime configuration precheck
+        run: npm run test:runtime-config-static
+
+      - name: 11b. Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: 11c. Playwright browser runtime execution test
+        run: npm run test:browser-runtime
+
+      - name: 11d. Adaptive API Integration Journey
+        run: npm run test:adaptive-api-journey
+
+      - name: 11e. Adaptive Browser UI Journey
+        run: npm run test:adaptive-ui-journey
+
+      - name: 12. Backend tests
+        working-directory: backend
+        run: npm test
+
+      - name: 13. Production smoke checks
         run: npm run smoke:production
 
       - name: 13. Dependency audit
