@@ -408,12 +408,18 @@ try {
   });
 
   // Wait for Hub
-  await page.waitForSelector('button:has-text("Mock interview"), button:has-text("Start interview practice")', { timeout: 20000 });
+  try {
+    await page.waitForSelector('button:has-text("Mock interview"), button:has-text("Start interview practice")', { timeout: 15000 });
+  } catch (err) {
+    const text = await page.evaluate(() => document.body.innerText).catch(() => 'UNABLE_TO_GET_BODY_TEXT');
+    console.error('[Adaptive UI Journey Debug] Hub selector timed out. Current body innerText:\n' + text);
+    throw err;
+  }
 
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
   await page.waitForTimeout(1000);
-  const interviewCard = page.locator('button:has-text("Mock interview"), button:has-text("Start interview practice")').first();
+  const interviewCard = page.locator('text="Start interview practice"').first();
   await interviewCard.click({ force: true });
 
   // Fallback click if Framer Motion transition did not trigger on first click
