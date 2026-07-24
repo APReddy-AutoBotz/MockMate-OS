@@ -391,9 +391,10 @@ try {
       await signupToggle.click({ force: true });
       await page.waitForTimeout(300);
     }
+    const testEmail = `candidate_${Date.now()}@mockmate.internal`;
     const emailInput = page.locator('input[type="email"]').first();
     if (await emailInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await emailInput.fill('candidate@mockmate.internal');
+      await emailInput.fill(testEmail);
       await page.locator('input[type="password"]').first().fill('password123');
       await page.locator('button[type="submit"]').first().click({ force: true });
     }
