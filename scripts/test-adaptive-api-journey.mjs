@@ -202,10 +202,17 @@ async function listenOnAvailablePort(srv, preferredPort) {
   throw new Error(`No free ports found starting at ${preferredPort}`);
 }
 
-// Deliberately occupy port 3098 to prove dynamic port allocation fallback
+// Deliberately attempt occupying port 3098 to test dynamic port allocation fallback
 const blockerServer = http.createServer((_, res) => res.end('blocked'));
-await new Promise((resolve) => blockerServer.listen(3098, '127.0.0.1', resolve));
-console.log('[Adaptive API Journey] Deliberately occupied port 3098 to test dynamic port fallback...');
+try {
+  await new Promise((resolve, reject) => {
+    blockerServer.once('error', reject);
+    blockerServer.listen(3098, '127.0.0.1', resolve);
+  });
+  console.log('[Adaptive API Journey] Occupied port 3098 to test dynamic port fallback...');
+} catch {
+  console.log('[Adaptive API Journey] Port 3098 already occupied, proceeding with dynamic port fallback...');
+}
 
 const server = http.createServer(app);
 const apiPort = await listenOnAvailablePort(server, 3098);
@@ -444,4 +451,5 @@ try {
 } finally {
   if (browser) await browser.close();
   server.close();
+  try { blockerServer.close(); } catch {}
 }
