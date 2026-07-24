@@ -357,24 +357,28 @@ try {
 
   // Authenticate & enter Hub
   console.log('[Adaptive UI Journey] 5. Entering practice hub...');
-  await page.waitForTimeout(1000);
+  // Allow SplashScreen (2.5s duration) to complete
+  await page.waitForTimeout(3500);
 
   const startBtn = page.getByRole('button', { name: /start free|start free practice/i }).first();
-  if (await startBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+  if (await startBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
     await startBtn.click({ force: true });
+    await page.waitForTimeout(500);
   }
 
   const emailInput = page.locator('input[type="email"]');
-  if (await emailInput.isVisible({ timeout: 4000 }).catch(() => false)) {
+  if (await emailInput.isVisible({ timeout: 5000 }).catch(() => false)) {
     await emailInput.fill('candidate@mockmate.internal');
     await page.locator('input[type="password"]').fill('password123');
     await page.getByRole('button', { name: /sign in|start practice/i }).first().click({ force: true });
+    await page.waitForTimeout(1000);
   }
 
   // Handle optional onboarding if shown
   const onboardFinishBtn = page.getByRole('button', { name: /complete|continue|get started/i }).first();
-  if (await onboardFinishBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+  if (await onboardFinishBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
     await onboardFinishBtn.click({ force: true });
+    await page.waitForTimeout(500);
   }
 
   // Wait for Hub
