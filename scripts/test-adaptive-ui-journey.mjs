@@ -372,31 +372,27 @@ try {
   const startBtn = page.getByRole('button', { name: /start free|start free practice/i }).first();
   if (await startBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
     await startBtn.click({ force: true });
-    await page.waitForTimeout(1000);
   }
 
-  const quickBtn = page.locator('button:has-text("Quick access")').first();
-  if (await quickBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await quickBtn.click({ force: true });
+  const quickAccessBtn = await page.waitForSelector('button:has-text("Quick access")', { timeout: 10000 }).catch(() => null);
+  if (quickAccessBtn) {
+    await quickAccessBtn.click({ force: true });
   } else {
-    const emailField = page.locator('input[type="email"]').first();
-    if (await emailField.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await emailField.fill('candidate@mockmate.internal');
+    const emailField = await page.waitForSelector('input[type="email"]', { timeout: 5000 }).catch(() => null);
+    if (emailField) {
+      await page.locator('input[type="email"]').fill('candidate@mockmate.internal');
       await page.locator('input[type="password"]').fill('password123');
       await page.getByRole('button', { name: /sign in|start practice/i }).first().click({ force: true });
     }
   }
 
-  // Wait up to 15s for EITHER Hub or Onboarding
-  await page.waitForSelector('text="Mock interview", button:has-text("Skip"), button:has-text("Complete")', { timeout: 15000 }).catch(() => null);
-
-  const onboardSkipBtn = page.getByRole('button', { name: /skip|complete|continue|get started/i }).first();
-  if (await onboardSkipBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+  const onboardSkipBtn = await page.waitForSelector('button:has-text("Skip"), button:has-text("Complete")', { timeout: 5000 }).catch(() => null);
+  if (onboardSkipBtn) {
     await onboardSkipBtn.click({ force: true });
   }
 
   // Ensure Hub is rendered
-  await page.getByRole('heading', { name: 'Mock interview', exact: true }).first().waitFor({ state: 'visible', timeout: 20000 });
+  await page.waitForSelector('h3:has-text("Mock interview")', { timeout: 20000 });
 
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
