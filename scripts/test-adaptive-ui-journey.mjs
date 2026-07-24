@@ -427,7 +427,11 @@ try {
 
   // Fallback click if Framer Motion transition did not trigger on first click
   if (!(await page.locator('textarea').isVisible({ timeout: 2000 }).catch(() => false))) {
-    await interviewCard.click({ force: true });
+    await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button'));
+      const target = btns.find(b => b.innerText.includes('Mock interview') || b.innerText.includes('Start interview practice'));
+      if (target) target.click();
+    });
   }
 
   // Role Capture screen
