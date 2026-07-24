@@ -35,7 +35,7 @@ const isDevEnv = (): boolean => {
 
 async function request<T>(
   endpoint: string,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, any, any>,
   options: RequestOptions = {}
 ): Promise<T> {
   const { requireAuth = true, params, headers: customHeaders, ...fetchOptions } = options;
@@ -58,54 +58,48 @@ async function request<T>(
     }
   }
 
-  if (!(fetchOptions.body instanceof FormData)) {
-    if (!headers.has('Content-Type') && fetchOptions.body) {
-      headers.set('Content-Type', 'application/json');
-    }
+  if (fetchOptions.body && !(fetchOptions.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(url, {
-    ...fetchOptions,
-    headers,
-  });
+  try {
+    const response = await fetch(url, {
+      ...fetchOptions,
+      headers,
+    });
 
-  if (!response.ok) {
-    let errorData: any = {};
-    try {
-      errorData = await response.json();
-    } catch {
-      errorData = { error: response.statusText };
-    }
-    throw new ApiError(
-      response.status,
-      errorData.code || 'INTERNAL_ERROR',
-      errorData.error || errorData.message || 'API request failed',
-      errorData.details
-    );
-  }
-
-  if (response.status === 204) {
-    return {} as T;
-  }
-
-  const payload = await response.json();
-  const parsed = schema.safeParse(payload);
-  if (!parsed.success) {
-    if (isDevEnv()) {
-      console.error(
-        `Contract validation failed for endpoint ${endpoint}:`,
-        parsed.error.issues.map((i) => i.path.join('.'))
+    if (!response.ok) {
+      let errorData: any = {};
+      try {
+        errorData = await response.json();
+      } catch {
+        // Ignored
+      }
+      throw new ApiError(
+        response.status,
+        errorData.code || 'HTTP_ERROR',
+        errorData.error || errorData.message || `Request failed with status ${response.status}`,
+        errorData.details
       );
     }
-    throw new ApiError(
-      500,
-      'CONTRACT_RESPONSE_INVALID',
-      `Response validation failed for endpoint ${endpoint}`,
-      parsed.error.issues
-    );
-  }
 
-  return parsed.data;
+    const json = await response.json();
+    const parsed = schema.safeParse(json);
+    if (!parsed.success) {
+      console.error(`[API Client Schema Failure] Endpoint: ${endpoint}`, parsed.error.format());
+      throw new ApiError(
+        500,
+        'SCHEMA_VALIDATION_ERROR',
+        `Response schema validation failed for ${endpoint}`,
+        parsed.error.issues
+      );
+    }
+
+    return parsed.data;
+  } catch (err: any) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError(500, 'NETWORK_ERROR', err.message || 'Network request failed');
+  }
 }
 
 async function requestRaw(
@@ -145,11 +139,11 @@ async function requestRaw(
 }
 
 export const apiClient = {
-  get<T>(endpoint: string, schema: z.ZodType<T>, options?: RequestOptions): Promise<T> {
+  get<T>(endpoint: string, schema: z.ZodType<T, any, any>, options?: RequestOptions): Promise<T> {
     return request<T>(endpoint, schema, { ...options, method: 'GET' });
   },
 
-  post<T>(endpoint: string, schema: z.ZodType<T>, data?: unknown, options?: RequestOptions): Promise<T> {
+  post<T>(endpoint: string, schema: z.ZodType<T, any, any>, data?: unknown, options?: RequestOptions): Promise<T> {
     return request<T>(endpoint, schema, {
       ...options,
       method: 'POST',
@@ -157,7 +151,7 @@ export const apiClient = {
     });
   },
 
-  put<T>(endpoint: string, schema: z.ZodType<T>, data?: unknown, options?: RequestOptions): Promise<T> {
+  put<T>(endpoint: string, schema: z.ZodType<T, any, any>, data?: unknown, options?: RequestOptions): Promise<T> {
     return request<T>(endpoint, schema, {
       ...options,
       method: 'PUT',
@@ -165,7 +159,7 @@ export const apiClient = {
     });
   },
 
-  delete<T>(endpoint: string, schema: z.ZodType<T>, options?: RequestOptions): Promise<T> {
+  delete<T>(endpoint: string, schema: z.ZodType<T, any, any>, options?: RequestOptions): Promise<T> {
     return request<T>(endpoint, schema, { ...options, method: 'DELETE' });
   },
 

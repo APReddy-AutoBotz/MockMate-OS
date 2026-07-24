@@ -13,6 +13,8 @@ import {
   InterviewSessionStartResponse,
   AnswerSubmissionResponseSchema,
   AnswerSubmissionResponse,
+  AdaptiveAnswerSubmissionResponseSchema,
+  AdaptiveAnswerSubmissionResponse,
   HintResponseSchema,
   IdealResponseResponseSchema,
   TranscribeAudioResponseSchema,
@@ -52,6 +54,27 @@ export const startInterviewSession = async (
   context: InterviewSessionContext
 ): Promise<InterviewSessionStartResponse> => {
   return apiClient.post('interview/sessions', InterviewSessionStartResponseSchema, { context });
+};
+
+export const submitAdaptiveTurn = async (
+  sessionId: string,
+  questionId: string,
+  expectedSessionVersion: number,
+  clientSubmissionId: string,
+  answerKind: 'answered' | 'skipped',
+  answerText?: string
+): Promise<AdaptiveAnswerSubmissionResponse> => {
+  return apiClient.post(
+    `interview/sessions/${sessionId}/answers`,
+    AdaptiveAnswerSubmissionResponseSchema,
+    {
+      questionId,
+      expectedSessionVersion,
+      clientSubmissionId,
+      answerKind,
+      answerText,
+    }
+  );
 };
 
 export const submitAnswerAndGetNext = async (
@@ -121,6 +144,7 @@ export default {
   calibrateIntent,
   generateInterviewPlan,
   startInterviewSession,
+  submitAdaptiveTurn,
   submitAnswerAndGetNext,
   analyzeCode,
   simulateExecution,

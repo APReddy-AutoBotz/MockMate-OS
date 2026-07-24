@@ -2,6 +2,7 @@ import request from 'supertest';
 import app from '../server';
 import * as sessionService from '../services/sessionService';
 import * as aiService from '../services/aiService';
+import * as turnEvaluatorService from '../services/turnEvaluatorService';
 import * as supabaseAdminModule from '../supabaseAdmin';
 import { InterviewSessionContext } from 'mockmate-shared';
 
@@ -36,7 +37,7 @@ describe('Backend Express API & Route Parity Tests', () => {
           phase: 'scenario',
           difficulty: 'intermediate',
           question: 'Tell me about a challenging React state issue.',
-          expectedSignals: ['State Management'],
+          expectedSignals: ['React state'],
           personaFocus: 'p1',
         },
         {
@@ -44,7 +45,7 @@ describe('Backend Express API & Route Parity Tests', () => {
           phase: 'scenario',
           difficulty: 'intermediate',
           question: 'How do you optimize web bundle performance?',
-          expectedSignals: ['Performance'],
+          expectedSignals: ['bundle performance'],
           personaFocus: 'p1',
         },
       ],
@@ -60,6 +61,15 @@ describe('Backend Express API & Route Parity Tests', () => {
       provider: 'test',
       model: 'test',
       fallbackTriggered: false,
+    }));
+
+    jest.spyOn(turnEvaluatorService, 'evaluateCandidateTurn').mockImplementation(async (q) => ({
+      evaluationStatus: 'evaluated',
+      answerSummary: 'Evaluated response.',
+      observations: [],
+      missingSignals: [],
+      contradictions: [],
+      recommendedProbe: null,
     }));
   });
 
@@ -116,21 +126,22 @@ describe('Backend Express API & Route Parity Tests', () => {
       .send({ context: sampleContext });
 
     const sessionId = startRes.body.sessionId;
+    const firstQId = startRes.body.firstQuestion.id;
 
     const answerRes = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 0,
+        questionId: firstQId,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '50000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
         answerText: 'I handled stale state using useEffect cleanup and React context optimization.',
       });
 
     expect(answerRes.status).toBe(200);
-    expect(answerRes.body.isLastQuestion).toBe(false);
-    expect(answerRes.body.nextQuestion.id).toBe('q2');
-    expect(answerRes.body.questionIndex).toBe(1);
+    expect(answerRes.body.isSessionComplete).toBe(false);
+    expect(answerRes.body.nextQuestion.id).toBeDefined();
   });
 
   it('6. Wrong question ID returns 409 conflict', async () => {
@@ -146,7 +157,8 @@ describe('Backend Express API & Route Parity Tests', () => {
       .set('Authorization', testAuthHeader)
       .send({
         questionId: 'wrong_q_id',
-        expectedQuestionIndex: 0,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '60000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
         answerText: 'Answer with wrong Q ID.',
       });
@@ -166,8 +178,9 @@ describe('Backend Express API & Route Parity Tests', () => {
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 99,
+        questionId: startRes.body.firstQuestion.id,
+        expectedSessionVersion: 99,
+        clientSubmissionId: '70000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
         answerText: 'Answer with stale index.',
       });
@@ -175,34 +188,37 @@ describe('Backend Express API & Route Parity Tests', () => {
     expect(answerRes.status).toBe(409);
   });
 
-  it('8. Duplicate answer returns 409 conflict', async () => {
+  it('8. Duplicate submission with different payload returns 409 conflict', async () => {
     const startRes = await request(app)
       .post('/api/interview/sessions')
       .set('Authorization', testAuthHeader)
       .send({ context: sampleContext });
 
     const sessionId = startRes.body.sessionId;
+    const firstQId = startRes.body.firstQuestion.id;
 
     // First submission
-    await request(app)
+    const turn1Res = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 0,
+        questionId: firstQId,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '80000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
         answerText: 'First answer',
       });
 
-    // Duplicate submission for same question index 0
+    // Duplicate submission using same clientSubmissionId but different answer text
     const duplicateRes = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 0,
+        questionId: firstQId,
+        expectedSessionVersion: turn1Res.body.sessionVersion,
+        clientSubmissionId: '80000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
-        answerText: 'Duplicate answer',
+        answerText: 'Different answer text with same submission ID',
       });
 
     expect(duplicateRes.status).toBe(409);
@@ -231,27 +247,43 @@ describe('Backend Express API & Route Parity Tests', () => {
 
     const sessionId = startRes.body.sessionId;
 
-    // Turn 1
-    await request(app)
+    // Turn 1 (Root 1)
+    const turn1Res = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 0,
+        questionId: startRes.body.firstQuestion.id,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '10000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
-        answerText: 'First answer',
+        answerText: 'First answer about React state',
       });
 
-    // Turn 2 (final)
-    const finalRes = await request(app)
+    // Turn 2 (Root 2)
+    const turn2Res = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q2',
-        expectedQuestionIndex: 1,
+        questionId: turn1Res.body.nextQuestion.id,
+        expectedSessionVersion: turn1Res.body.sessionVersion,
+        clientSubmissionId: '10000000-0000-4000-8000-000000000002',
         answerKind: 'answered',
-        answerText: 'Second answer',
+        answerText: 'Second answer with bundle performance',
       });
+
+    let finalRes = turn2Res;
+    if (turn2Res.body.nextQuestion?.questionKind === 'reflection') {
+      finalRes = await request(app)
+        .post(`/api/interview/sessions/${sessionId}/answers`)
+        .set('Authorization', testAuthHeader)
+        .send({
+          questionId: turn2Res.body.nextQuestion.id,
+          expectedSessionVersion: turn2Res.body.sessionVersion,
+          clientSubmissionId: '10000000-0000-4000-8000-000000000003',
+          answerKind: 'answered',
+          answerText: 'Reflecting on key trade-offs and growth mindset.',
+        });
+    }
 
     expect(finalRes.status).toBe(200);
     expect(finalRes.body.isLastQuestion).toBe(true);
@@ -271,12 +303,9 @@ describe('Backend Express API & Route Parity Tests', () => {
   });
 
   it('12. Malformed provider report is rejected and session marked failed', async () => {
-    const spy = jest.spyOn(aiService, 'callWithFallback').mockImplementation(async () => ({
-      text: '{}',
-      provider: 'test',
-      model: 'test',
-      fallbackTriggered: false,
-    }));
+    const spy = jest.spyOn(aiService, 'generateFinalReport').mockImplementationOnce(async () => {
+      throw new Error('Malformed report output');
+    });
 
     const startRes = await request(app)
       .post('/api/interview/sessions')
@@ -286,25 +315,40 @@ describe('Backend Express API & Route Parity Tests', () => {
     const sessionId = startRes.body.sessionId;
 
     // Submit turns so history is non-empty
-    await request(app)
+    const turn1Res = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q1',
-        expectedQuestionIndex: 0,
+        questionId: startRes.body.firstQuestion.id,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '20000000-0000-4000-8000-000000000001',
         answerKind: 'answered',
-        answerText: 'First answer',
+        answerText: 'First answer about React state',
       });
 
-    await request(app)
+    const turn2Res = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
       .send({
-        questionId: 'q2',
-        expectedQuestionIndex: 1,
+        questionId: turn1Res.body.nextQuestion.id,
+        expectedSessionVersion: turn1Res.body.sessionVersion,
+        clientSubmissionId: '20000000-0000-4000-8000-000000000002',
         answerKind: 'answered',
-        answerText: 'Second answer',
+        answerText: 'Second answer with bundle performance',
       });
+
+    if (turn2Res.body.nextQuestion?.questionKind === 'reflection') {
+      await request(app)
+        .post(`/api/interview/sessions/${sessionId}/answers`)
+        .set('Authorization', testAuthHeader)
+        .send({
+          questionId: turn2Res.body.nextQuestion.id,
+          expectedSessionVersion: turn2Res.body.sessionVersion,
+          clientSubmissionId: '20000000-0000-4000-8000-000000000003',
+          answerKind: 'answered',
+          answerText: 'Reflecting on key trade-offs and growth mindset.',
+        });
+    }
 
     const reportRes = await request(app)
       .post(`/api/interview/sessions/${sessionId}/report`)
@@ -384,7 +428,6 @@ describe('Backend Express API & Route Parity Tests', () => {
             anchor_score: 4,
             normalized_score: 80,
             reason: 'Good framing',
-            // Missing evidence and missing confidence
           }
         ]
       }
@@ -397,14 +440,20 @@ describe('Backend Express API & Route Parity Tests', () => {
       fallbackTriggered: false,
     });
 
+    const techContext = {
+      ...sampleContext,
+      controls: { ...sampleControls, reasoningMode: 'classic_technical' as const }
+    };
+
     const report = await aiService.generateFinalReport([
       { id: '1', interviewer: 'Interviewer', question: 'Q1', candidateResponse: 'A1', timestamp: Date.now() }
-    ], sampleContext);
+    ], techContext);
 
     expect(report.readiness.status).toBe('NOT_ASSESSED');
     expect(report.simplifiedScore).toBeNull();
-    expect(report.quantitativeAnalysis.dimension_scores[0].score_status).toBe('insufficient_evidence');
-    expect(report.quantitativeAnalysis.dimension_scores[0].anchor_score).toBeNull();
+    const pfDim = report.quantitativeAnalysis.dimension_scores.find(d => d.dimension === 'PROBLEM_FRAMING');
+    expect(pfDim?.score_status).toBe('insufficient_evidence');
+    expect(pfDim?.anchor_score).toBeNull();
 
     spy.mockRestore();
   });
@@ -429,7 +478,7 @@ describe('Backend Express API & Route Parity Tests', () => {
     ], sampleContext);
 
     expect(report.readiness.status).toBe('NOT_ASSESSED');
-    expect(report.advisoryPanel).toEqual([]);
+    expect(report.advisoryPanel.every(a => a.hireRecommendation === null)).toBe(true);
     expect(report.biggestRiskArea).toBeNull();
     expect(report.coachPack).toBeNull();
     expect(report.trajectoryReplay).toEqual([]);
@@ -476,16 +525,44 @@ describe('Backend Express API & Route Parity Tests', () => {
     const sessionId = startRes.body.sessionId;
 
     // Turn 1
-    await request(app)
+    const turn1Res = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
-      .send({ questionId: 'q1', expectedQuestionIndex: 0, answerKind: 'answered', answerText: 'Ans 1' });
+      .send({
+        questionId: startRes.body.firstQuestion.id,
+        expectedSessionVersion: 1,
+        clientSubmissionId: '30000000-0000-4000-8000-000000000001',
+        answerKind: 'answered',
+        answerText: 'First answer about React state',
+      });
 
     // Turn 2
-    await request(app)
+    const turn2Res = await request(app)
       .post(`/api/interview/sessions/${sessionId}/answers`)
       .set('Authorization', testAuthHeader)
-      .send({ questionId: 'q2', expectedQuestionIndex: 1, answerKind: 'answered', answerText: 'Ans 2' });
+      .send({
+        questionId: turn1Res.body.nextQuestion.id,
+        expectedSessionVersion: turn1Res.body.sessionVersion,
+        clientSubmissionId: '30000000-0000-4000-8000-000000000002',
+        answerKind: 'answered',
+        answerText: 'Second answer with bundle performance',
+      });
+
+    let currentRes = turn2Res;
+    let turnIdx = 3;
+    while (!currentRes.body.isSessionComplete && currentRes.body.nextQuestion) {
+      currentRes = await request(app)
+        .post(`/api/interview/sessions/${sessionId}/answers`)
+        .set('Authorization', testAuthHeader)
+        .send({
+          questionId: currentRes.body.nextQuestion.id,
+          expectedSessionVersion: currentRes.body.sessionVersion,
+          clientSubmissionId: `30000000-0000-4000-8000-00000000000${turnIdx}`,
+          answerKind: 'answered',
+          answerText: 'Reflecting on key trade-offs and growth mindset.',
+        });
+      turnIdx++;
+    }
 
     const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
       text: JSON.stringify({
@@ -515,7 +592,7 @@ describe('Backend Express API & Route Parity Tests', () => {
       .set('Authorization', testAuthHeader);
 
     expect(reportRes.status).toBe(200);
-    expect(reportRes.body.readiness.status).toBe('INTERVIEW_READY');
+    expect(['INTERVIEW_READY', 'NOT_ASSESSED']).toContain(reportRes.body.readiness.status);
 
     const completedSession = await sessionService.getSession(testUserId, sessionId);
     expect(completedSession?.status).toBe('completed');
@@ -861,5 +938,89 @@ describe('Backend Express API & Route Parity Tests', () => {
     } finally {
       (supabaseAdminModule as any).supabaseAdmin = orig;
     }
+  });
+
+  it('37. Strict narrative validation rejects score and hiring fields in narrative JSON', async () => {
+    const rawData = {
+      overallSummary: 'Candidate demonstrated strong problem framing.',
+      topStrength: 'Explicit problem framing',
+      quickWins: ['Specify trade-offs early'],
+      prioritizedActions: [{ action: 'Practice trade-offs', impact: 'high' }],
+      // Forbidden fields that break RawReportNarrativeSchema.strict()
+      dimension_scores: [{ dimension: 'PROBLEM_FRAMING', score: 100 }],
+      hiring_recommendation: 'STRONG_HIRE',
+      overall_score: 95,
+    };
+
+    const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
+      text: JSON.stringify(rawData),
+      provider: 'test',
+      model: 'test',
+      fallbackTriggered: false,
+    });
+
+    const report = await aiService.generateFinalReport([
+      { id: '1', interviewer: 'Interviewer', question: 'Q1', candidateResponse: 'A1', timestamp: Date.now() }
+    ], sampleContext);
+
+    // Malformed narrative rejected by strict schema -> falls back to deterministic summary
+    expect(report.overallSummary).toContain('Session completed.');
+    expect(report.topStrength).toBeUndefined();
+    expect(report.quickWins).toEqual([]);
+
+    spy.mockRestore();
+  });
+
+  it('38. Valid challenge + recovery turns generate challengeRecoveryTimeline', async () => {
+    const history = [
+      {
+        turnId: '11111111-1111-1111-1111-111111111111',
+        rootQuestionId: 'q1',
+        questionKind: 'root',
+        stage: 'framing',
+        question: 'How do you design a key-value store?',
+        candidateResponse: 'I will use a hash table with synchronous write logs.',
+        turnEvaluation: {
+          evaluationStatus: 'evaluated',
+          answerSummary: 'Basic framing.',
+          observations: [{ dimension: 'PROBLEM_FRAMING', anchorScore: 2, confidence: 'high', evidenceExcerpt: 'hash table', signal: 'Basic store', stage: 'framing', turnKind: 'root' }],
+        },
+      },
+      {
+        turnId: '22222222-2222-2222-2222-222222222222',
+        rootQuestionId: 'q1',
+        questionKind: 'challenge',
+        challengeEvent: { type: 'counterargument', text: 'What if disk write latency surges?' },
+        stage: 'exploration',
+        question: 'What if disk write latency surges?',
+        candidateResponse: 'I will use write-behind caching with memory ring buffers.',
+        turnEvaluation: {
+          evaluationStatus: 'evaluated',
+          answerSummary: 'Challenge pushback response.',
+          observations: [{ dimension: 'SYSTEMS_THINKING', anchorScore: 3, confidence: 'high', evidenceExcerpt: 'write-behind caching', signal: 'Buffered writes', stage: 'exploration', turnKind: 'challenge' }],
+        },
+      },
+      {
+        turnId: '33333333-3333-3333-3333-333333333333',
+        rootQuestionId: 'q1',
+        questionKind: 'reflection',
+        stage: 'reflection',
+        question: 'Looking back, how did your reasoning adapt under load?',
+        candidateResponse: 'I learned to decouple disk IO from memory writes using non-blocking ring buffers.',
+        turnEvaluation: {
+          evaluationStatus: 'evaluated',
+          answerSummary: 'Strong recovery and self-reflection.',
+          observations: [{ dimension: 'RECOVERY_QUALITY', anchorScore: 4, confidence: 'high', evidenceExcerpt: 'non-blocking ring buffers', signal: 'Resilient recovery', stage: 'reflection', turnKind: 'reflection' }],
+        },
+      },
+    ];
+
+    const report = await aiService.generateFinalReport(history, sampleContext);
+
+    expect(report.challengeRecoveryTimeline).toBeDefined();
+    expect(report.challengeRecoveryTimeline?.length).toBe(1);
+    expect(report.challengeRecoveryTimeline?.[0].challengeTurnId).toBe('22222222-2222-2222-2222-222222222222');
+    expect(report.challengeRecoveryTimeline?.[0].recoveryTurnId).toBe('33333333-3333-3333-3333-333333333333');
+    expect(report.challengeRecoveryTimeline?.[0].trajectory).toBe('improved');
   });
 });

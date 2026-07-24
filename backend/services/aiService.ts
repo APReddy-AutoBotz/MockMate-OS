@@ -8,6 +8,8 @@ import {
   FinalReport, 
   FinalReportSchema,
   RawFinalReportSchema,
+  RawReportNarrativeSchema,
+  RawReportNarrative,
   CalibrateResponseSchema,
   CalibrateResponse,
   RawCalibrateResponseSchema,
@@ -23,90 +25,13 @@ import { PERSONAS_CONFIG } from '../config/personas';
 import { GoogleGenAI } from '@google/genai';
 import * as sessionService from './sessionService';
 
-// Approved competency dimensions for MockMate v1 evaluation
-export const APPROVED_DIMENSIONS = {
-  PROBLEM_FRAMING: { name: 'Problem Framing & Structuring', definition: 'Ability to deconstruct ambiguous challenges and establish scope.' },
-  TRADEOFF_CLARITY: { name: 'Trade-off & Constraint Clarity', definition: 'Explicit evaluation of technical and operational trade-offs.' },
-  STAR_EXECUTION: { name: 'STAR & Result Execution', definition: 'Clear situation, task, action, and measurable outcome articulation.' },
-  COMMUNICATION_PRESENCE: { name: 'Communication & Presence', definition: 'Concise, calm, and structured verbal delivery.' },
-  TECHNICAL_DEPTH: { name: 'Technical Depth & Domain Rigor', definition: 'Appropriate domain depth, correct terminology, and architectural accuracy.' }
-} as const;
+import { APPROVED_DIMENSIONS, ACTIVE_DIMENSIONS_BY_MODE, DEFAULT_WEIGHTS_BY_MODE } from '../config/evaluationConfig';
+import { callWithFallback, extractJson } from './llmProviderGateway';
+import { aggregateTurnEvidence, generateChallengeRecoveryTimeline } from './evidenceAggregationService';
 
-export const ACTIVE_DIMENSIONS_BY_MODE: Record<string, (keyof typeof APPROVED_DIMENSIONS)[]> = {
-  classic_behavioral: ['PROBLEM_FRAMING', 'STAR_EXECUTION', 'COMMUNICATION_PRESENCE'],
-  classic_technical: ['PROBLEM_FRAMING', 'TRADEOFF_CLARITY', 'TECHNICAL_DEPTH'],
-  tradeoff_decision: ['PROBLEM_FRAMING', 'TRADEOFF_CLARITY', 'TECHNICAL_DEPTH'],
-  fast_check: ['PROBLEM_FRAMING', 'COMMUNICATION_PRESENCE']
-};
+export { APPROVED_DIMENSIONS, ACTIVE_DIMENSIONS_BY_MODE, callWithFallback, extractJson };
 
-export const DEFAULT_WEIGHTS_BY_MODE: Record<string, Record<string, number>> = {
-  classic_behavioral: { PROBLEM_FRAMING: 0.35, STAR_EXECUTION: 0.35, COMMUNICATION_PRESENCE: 0.30 },
-  classic_technical: { PROBLEM_FRAMING: 0.30, TRADEOFF_CLARITY: 0.40, TECHNICAL_DEPTH: 0.30 },
-  tradeoff_decision: { PROBLEM_FRAMING: 0.30, TRADEOFF_CLARITY: 0.40, TECHNICAL_DEPTH: 0.30 },
-  fast_check: { PROBLEM_FRAMING: 0.50, COMMUNICATION_PRESENCE: 0.50 }
-};
 
-export function extractJson(raw: string): any {
-  const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  try {
-    return JSON.parse(clean);
-  } catch (err) {
-    const jsonMatch = clean.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    throw err;
-  }
-}
-
-export async function callWithFallback(prompt: string): Promise<{ text: string; provider: string; model: string; fallbackTriggered: boolean }> {
-  const geminiKey = process.env.GEMINI_API_KEY;
-  const groqKey = process.env.GROQ_API_KEY;
-
-  if (geminiKey) {
-    try {
-      const ai = new GoogleGenAI({ apiKey: geminiKey });
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: { responseMimeType: 'application/json' }
-      });
-      if (response.text) {
-        return { text: response.text, provider: 'gemini', model: 'gemini-2.5-flash', fallbackTriggered: false };
-      }
-    } catch (e: any) {
-      console.warn('[AI Service] Gemini call failed, trying Groq fallback...', e.message);
-    }
-  }
-
-  if (groqKey) {
-    try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${groqKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
-          messages: [{ role: 'user', content: prompt }],
-          response_format: { type: 'json_object' }
-        })
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const text = data.choices?.[0]?.message?.content;
-        if (text) {
-          return { text, provider: 'groq', model: 'llama-3.3-70b-versatile', fallbackTriggered: true };
-        }
-      }
-    } catch (e: any) {
-      console.warn('[AI Service] Groq call failed...', e.message);
-    }
-  }
-
-  throw new Error('All AI providers failed or no API keys configured.');
-}
 
 // --- Intent Calibration ---
 
@@ -621,6 +546,8 @@ export const transcribeAudio = async (
 
 // --- Report Generation ---
 
+import { aggregateTurnEvidence } from './evidenceAggregationService';
+
 export const generateFinalReport = async (
   history: InterviewTurn[],
   context: InterviewSessionContext
@@ -629,206 +556,177 @@ export const generateFinalReport = async (
 
   const roleParam = context.candidateRole || "Candidate";
   const sessionMode = context.controls?.reasoningMode || 'classic_behavioral';
-  const activeDimensions = ACTIVE_DIMENSIONS_BY_MODE[sessionMode] || ACTIVE_DIMENSIONS_BY_MODE['classic_behavioral'];
 
+  // 1. Aggregate dimension scores deterministically from turn evidence
+  const turnsForAgg = history.map((t: any) => ({
+    turnId: t.id,
+    evaluation: t.turnEvaluation,
+    stage: t.stage,
+  }));
+
+  const scorecard = aggregateTurnEvidence(turnsForAgg, sessionMode);
+
+  // 2. Format transcript for qualitative summary prompt
   const transcriptText = history.map((turn, i) => `
-  TURN ${i + 1}:
+  TURN ${i + 1} (${turn.questionKind || 'root'} - Stage: ${turn.stage || 'framing'}):
   Interviewer (${turn.interviewer}): "${turn.question}"
   Candidate: "${turn.candidateResponse || '[No response provided]'}"
+  Evaluation Status: ${turn.evaluationStatus || 'not_tested'}
   `).join('\n');
 
-  const masterPrompt = `You are a world-class Interview Bar Raiser. Analyze this mock interview session and generate a canonical report.
+  const scorecardSummary = scorecard.dimensionScores.map(d => `- ${d.dimensionName} (${d.dimension}): ${d.score_status} (Score: ${d.normalized_score ?? 'N/A'}, Anchor: ${d.anchor_score ?? 'N/A'})`).join('\n');
 
-  TRANSCRIPT:
-  ${transcriptText}
+  const masterPrompt = `You are a world-class Interview Coach for MockMate.
+Synthesize qualitative feedback and growth recommendations for this interview session.
 
-  ACTIVE DIMENSIONS:
-  ${activeDimensions.map(d => `- ${APPROVED_DIMENSIONS[d].name}`).join('\n')}
+CONTEXT:
+Role: "${roleParam}"
+Reasoning Mode: "${sessionMode}"
 
-  REQUIRED OUTPUT SCHEMA (JSON):
-  {
-    "overallSummary": "Executive summary of interview performance",
-    "evaluationModel": "mockmate_v1_canonical",
-    "readiness": { "status": "INTERVIEW_READY|ALMOST_READY|NOT_READY|NOT_ASSESSED", "reasoning": "Reasoning summary" },
-    "quantitativeAnalysis": {
-      "dimension_scores": [
-        {
-          "dimension": "PROBLEM_FRAMING",
-          "score_status": "scored|insufficient_evidence|not_tested",
-          "anchor_score": 4,
-          "normalized_score": 80,
-          "reason": "Clear structured approach",
-          "evidence": ["Candidate outlined assumptions"],
-          "confidence": "high"
-        }
-      ]
-    },
-    "advisoryPanel": [
-      { "name": "Lead Evaluator", "assessment": "Performance assessment", "hireRecommendation": true }
-    ],
-    "questionPerformance": [
-      { 
-        "question_text": "Q1 text", 
-        "user_transcript": "Candidate text", 
-        "feedback": "Detailed feedback",
-        "strengths": ["Structured response"],
-        "improvements": ["More specific metrics"]
-      }
-    ],
-    "biggestRiskArea": { "title": "Risk Title", "observation": "Observed gap", "mitigation": "Recommended fix" },
-    "coachPack": {
-      "title": "Action Plan",
-      "redoNow": { "question": "Q1", "instruction": "Try again with STAR format" },
-      "micro_drills": [{ "weakness": "System bounds", "drill_prompt": "Practice scale limits", "focus_point": "Latency constraints" }]
-    },
-    "trajectoryReplay": [
-      { "summary": "Turn 1-2 summary", "keyMoments": ["Key moment 1"] }
-    ],
-    "auditLayer": [
-      { "biasDetected": false, "notes": "No evaluation bias detected" }
-    ],
-    "simplifiedScore": 80,
-    "topStrength": "Clear problem structuring",
-    "topWeakness": "Quantified result metrics",
-    "estimatedSessionsToReady": 2,
-    "quickWins": ["State assumptions early"],
-    "prioritizedActions": [{ "action": "Practice metric articulation", "impact": "high" }]
-  }`;
+DETERMINISTIC SCORECARD SUMMARY (IMMUTABLE DATA - DO NOT ALTER SCORES):
+${scorecardSummary}
 
-  const { text } = await exports.callWithFallback(masterPrompt);
-  const reportData = extractJson(text || '{}');
-  if (!reportData || !reportData.overallSummary) throw new Error("Incomplete or invalid report returned by provider");
+TURN TRANSCRIPT:
+${transcriptText}
 
-  const rawReport = RawFinalReportSchema.parse(reportData);
+REQUIRED OUTPUT SCHEMA (JSON):
+{
+  "overallSummary": "Structured executive summary focused on practice readiness and reasoning strengths/gaps.",
+  "topStrength": "One main reasoning strength demonstrated in the session",
+  "topWeakness": "One main reasoning area for improvement",
+  "quickWins": ["Immediate actionable advice 1", "Immediate actionable advice 2"],
+  "prioritizedActions": [
+    { "action": "Specific practice exercise", "impact": "high|medium|low" }
+  ],
+  "biggestRiskArea": { "title": "Key Risk", "observation": "Observed gap in transcript", "mitigation": "How to fix it" },
+  "coachPack": {
+    "title": "Targeted Drill Pack",
+    "redoNow": { "question": "Question text to re-try", "instruction": "Step-by-step guidance to articulate a stronger answer" },
+    "micro_drills": [{ "weakness": "Gap", "drill_prompt": "Practice prompt", "focus_point": "Key signal" }]
+  },
+  "trajectoryReplay": [
+    { "summary": "Turn progression summary", "keyMoments": ["Key moment"] }
+  ]
+}`;
 
-  const validStatuses = ['INTERVIEW_READY', 'ALMOST_READY', 'NOT_READY', 'NOT_ASSESSED'];
-  const providerStatus = rawReport.readiness?.status;
-  const readinessStatus = validStatuses.includes(providerStatus || '') ? providerStatus : 'NOT_ASSESSED';
-
-  const rawDimensionScores = rawReport.quantitativeAnalysis?.dimension_scores || [];
-  let scoredTotal = 0;
-  let scoredCount = 0;
-
-  const dimensionScores = rawDimensionScores.map((ds: any) => {
-    const hasCanonicalKey = Boolean(ds.dimension && APPROVED_DIMENSIONS[ds.dimension as keyof typeof APPROVED_DIMENSIONS]);
-    const isScoreStatusScored = ds.score_status === 'scored';
-    const isAnchorScoreValid = typeof ds.anchor_score === 'number' && ds.anchor_score >= 0 && ds.anchor_score <= 5;
-    const isNormalizedScoreValid = typeof ds.normalized_score === 'number' && ds.normalized_score >= 0 && ds.normalized_score <= 100;
-    const hasReason = typeof ds.reason === 'string' && ds.reason.trim().length > 0;
-    const hasEvidence = Array.isArray(ds.evidence) && ds.evidence.length > 0 && ds.evidence.every((e: any) => typeof e === 'string' && e.trim().length > 0);
-    const hasConfidence = typeof ds.confidence === 'string' && ['high', 'medium', 'low'].includes(ds.confidence);
-
-    const isValidScored = hasCanonicalKey && isScoreStatusScored && isAnchorScoreValid && isNormalizedScoreValid && hasReason && hasEvidence && hasConfidence;
-
-    if (isValidScored) {
-      scoredTotal += ds.normalized_score;
-      scoredCount++;
-      return {
-        dimension: ds.dimension as any,
-        dimensionName: ds.dimensionName || APPROVED_DIMENSIONS[ds.dimension as keyof typeof APPROVED_DIMENSIONS]?.name || 'Dimension',
-        score_status: 'scored' as const,
-        anchor_score: ds.anchor_score,
-        normalized_score: ds.normalized_score,
-        reason: String(ds.reason).trim(),
-        evidence: ds.evidence.map((e: any) => String(e).trim()),
-        confidence: ds.confidence as any
-      };
+  let narrative: RawReportNarrative | null = null;
+  try {
+    const { text } = await callWithFallback(masterPrompt);
+    const rawJson = extractJson(text || '{}');
+    const parseResult = RawReportNarrativeSchema.safeParse(rawJson);
+    if (parseResult.success) {
+      narrative = parseResult.data;
     } else {
-      const dimKey = hasCanonicalKey ? ds.dimension : 'PROBLEM_FRAMING';
-      return {
-        dimension: dimKey as any,
-        dimensionName: APPROVED_DIMENSIONS[dimKey as keyof typeof APPROVED_DIMENSIONS]?.name || 'Problem Framing',
-        score_status: (ds.score_status === 'not_tested' ? 'not_tested' : 'insufficient_evidence') as any,
-        anchor_score: null,
-        normalized_score: null,
-        reason: ds.reason ? String(ds.reason).trim() : 'Insufficient evidence to evaluate dimension.',
-        evidence: [],
-        confidence: 'low' as const
-      };
+      console.warn('[AI Service] Provider narrative output failed strict RawReportNarrativeSchema validation:', parseResult.error.issues);
     }
+  } catch (err: any) {
+    console.warn('[AI Service] Narrative provider call failed, using deterministic scorecard summary...', err.message);
+  }
+
+  const overallSummary = (narrative && narrative.overallSummary && narrative.overallSummary.trim().length > 0)
+    ? narrative.overallSummary.trim()
+    : (scorecard.simplifiedScore !== null
+        ? `Session complete. Practice score: ${scorecard.simplifiedScore}/100 based on verified candidate turn evidence.`
+        : 'Session completed. Evaluation based on verified candidate turn evidence.');
+
+  const topStrength = (narrative && narrative.topStrength && narrative.topStrength.trim().length > 0)
+    ? narrative.topStrength.trim()
+    : undefined;
+
+  const topWeakness = (narrative && narrative.topWeakness && narrative.topWeakness.trim().length > 0)
+    ? narrative.topWeakness.trim()
+    : undefined;
+
+  const quickWins = (narrative && Array.isArray(narrative.quickWins))
+    ? narrative.quickWins.filter((qw: any) => typeof qw === 'string' && qw.trim().length > 0)
+    : [];
+
+  const prioritizedActions = (narrative && Array.isArray(narrative.prioritizedActions))
+    ? narrative.prioritizedActions.filter((pa: any) => pa && typeof pa.action === 'string' && pa.action.trim().length > 0)
+    : [];
+
+  const questionPerformance = history.map((turn, idx) => {
+    const rawFeedback = turn.turnEvaluation?.answerSummary;
+    const validFeedback = rawFeedback && typeof rawFeedback === 'string' && rawFeedback.trim().length > 0 && rawFeedback !== 'Candidate response recorded and evaluated.'
+      ? rawFeedback.trim()
+      : (turn.turnEvaluation?.evaluationStatus === 'unavailable' ? 'Evaluation unavailable.' : null);
+
+    return {
+      question_text: turn.question || `Scenario ${idx + 1}`,
+      question_phase: turn.stage || 'framing',
+      user_transcript: turn.candidateResponse || '',
+      feedback: validFeedback,
+      strengths: turn.turnEvaluation?.observations?.filter(o => typeof o.anchorScore === 'number' && o.anchorScore >= 3).map(o => o.signal) || [],
+      improvements: turn.turnEvaluation?.missingSignals || [],
+      turnId: turn.turnId || turn.id || undefined,
+    };
   });
 
-  const isUnscored = scoredCount === 0;
-  const finalSimplifiedScore = isUnscored ? null : Math.round(scoredTotal / scoredCount);
-  const finalReadinessStatus = isUnscored ? 'NOT_ASSESSED' : readinessStatus;
-  const finalReadinessReasoning = isUnscored 
-    ? 'Session evaluation could not be completed due to insufficient evidence or unscored dimensions.'
-    : (rawReport.readiness?.reasoning || 'Session evaluation complete.');
-  const finalOverallSummary = isUnscored
-    ? 'Session ended before a reliable evaluation could be completed.'
-    : rawReport.overallSummary;
+  const advisoryPanel = [
+    {
+      name: 'Reasoning Review',
+      assessment: scorecard.readinessReasoning,
+      hireRecommendation: null,
+    }
+  ];
+
+  const biggestRiskArea = (scorecard.readinessStatus === 'NOT_ASSESSED' || !narrative?.biggestRiskArea) ? null : narrative.biggestRiskArea;
+
+  let coachPack = null;
+  if (scorecard.readinessStatus !== 'NOT_ASSESSED' && narrative?.coachPack && narrative.coachPack.title) {
+    const redoNowRaw = narrative.coachPack.redoNow;
+    const isRedoValid = redoNowRaw && typeof redoNowRaw === 'object' && typeof redoNowRaw.question === 'string' && redoNowRaw.question.trim().length > 0 && typeof redoNowRaw.instruction === 'string' && redoNowRaw.instruction.trim().length > 0;
+    const microDrills = Array.isArray(narrative.coachPack.micro_drills)
+      ? narrative.coachPack.micro_drills.filter((md: any) => md && md.weakness && md.drill_prompt && md.focus_point)
+      : [];
+
+    if (isRedoValid || microDrills.length > 0) {
+      coachPack = {
+        title: narrative.coachPack.title.trim(),
+        redoNow: isRedoValid ? { question: redoNowRaw!.question.trim(), instruction: redoNowRaw!.instruction.trim() } : null,
+        micro_drills: microDrills,
+      };
+    }
+  }
+
+  const challengeRecoveryTimeline = generateChallengeRecoveryTimeline(history);
 
   const normalizedReport = {
-    overallSummary: finalOverallSummary,
+    overallSummary,
     evaluationModel: 'mockmate_v1_canonical' as const,
     readiness: {
-      status: finalReadinessStatus as any,
-      reasoning: finalReadinessReasoning
+      status: scorecard.readinessStatus,
+      reasoning: scorecard.readinessReasoning,
     },
     quantitativeAnalysis: {
-      dimension_scores: dimensionScores
-    },
-    advisoryPanel: isUnscored ? [] : (rawReport.advisoryPanel || [])
-      .filter((ap: any) => ap && typeof ap.name === 'string' && ap.name.trim().length > 0 && typeof ap.assessment === 'string' && ap.assessment.trim().length > 0)
-      .map((ap: any) => ({
-        name: String(ap.name).trim(),
-        assessment: String(ap.assessment).trim(),
-        hireRecommendation: typeof ap.hireRecommendation === 'boolean' ? ap.hireRecommendation : null
+      dimension_scores: scorecard.dimensionScores.map(ds => ({
+        dimension: ds.dimension,
+        dimensionName: ds.dimensionName,
+        score_status: ds.score_status,
+        anchor_score: ds.anchor_score,
+        normalized_score: ds.normalized_score,
+        reason: ds.reason,
+        evidence: ds.evidence,
+        evidenceReferences: ds.evidenceReferences || [],
+        trajectory: ds.trajectory,
+        distinctTurnCount: ds.distinctTurnCount,
+        hasChallengeEvidence: ds.hasChallengeEvidence,
+        confidence: ds.confidence,
       })),
-    questionPerformance: (rawReport.questionPerformance || []).map((qp: any, idx: number) => ({
-      question_text: qp.question_text || history[idx]?.question || 'Question',
-      question_phase: qp.question_phase || 'scenario',
-      user_transcript: qp.user_transcript || history[idx]?.candidateResponse || '',
-      max_impact_response: qp.max_impact_response,
-      feedback: qp.feedback ? String(qp.feedback).trim() : 'Evaluation unavailable.',
-      strengths: Array.isArray(qp.strengths) ? qp.strengths.filter((s: any) => typeof s === 'string' && s.trim().length > 0) : [],
-      improvements: Array.isArray(qp.improvements) ? qp.improvements.filter((i: any) => typeof i === 'string' && i.trim().length > 0) : []
-    })),
-    biggestRiskArea: (isUnscored || !rawReport.biggestRiskArea || !rawReport.biggestRiskArea.title || !rawReport.biggestRiskArea.observation || !rawReport.biggestRiskArea.mitigation) ? null : {
-      title: String(rawReport.biggestRiskArea.title).trim(),
-      observation: String(rawReport.biggestRiskArea.observation).trim(),
-      mitigation: String(rawReport.biggestRiskArea.mitigation).trim()
     },
-    coachPack: (isUnscored || !rawReport.coachPack || !rawReport.coachPack.title || !rawReport.coachPack.redoNow) ? null : {
-      title: String(rawReport.coachPack.title).trim(),
-      redoNow: typeof rawReport.coachPack.redoNow === 'object' && rawReport.coachPack.redoNow?.question && rawReport.coachPack.redoNow?.instruction ? {
-        question: String(rawReport.coachPack.redoNow.question).trim(),
-        instruction: String(rawReport.coachPack.redoNow.instruction).trim()
-      } : {
-        question: history[0]?.question || 'Question',
-        instruction: String(rawReport.coachPack.redoNow).trim()
-      },
-      micro_drills: (rawReport.coachPack.micro_drills || [])
-        .filter((md: any) => md && typeof md === 'object' && md.weakness && md.drill_prompt)
-        .map((md: any) => ({
-          weakness: String(md.weakness).trim(),
-          drill_prompt: String(md.drill_prompt).trim(),
-          focus_point: String(md.focus_point || 'Clarity').trim()
-        }))
-    },
-    trajectoryReplay: isUnscored ? [] : (rawReport.trajectoryReplay || [])
-      .filter((tr: any) => tr && typeof tr.summary === 'string' && tr.summary.trim().length > 0)
-      .map((tr: any) => ({
-        summary: String(tr.summary).trim(),
-        keyMoments: Array.isArray(tr.keyMoments) ? tr.keyMoments.filter((km: any) => typeof km === 'string' && km.trim().length > 0) : []
-      })),
-    auditLayer: isUnscored ? [] : (rawReport.auditLayer || [])
-      .filter((al: any) => al && typeof al.notes === 'string' && al.notes.trim().length > 0 && typeof al.biasDetected === 'boolean')
-      .map((al: any) => ({
-        biasDetected: Boolean(al.biasDetected),
-        notes: String(al.notes).trim()
-      })),
-    simplifiedScore: finalSimplifiedScore,
-    topStrength: isUnscored ? undefined : (rawReport.topStrength ? String(rawReport.topStrength).trim() : undefined),
-    topWeakness: isUnscored ? undefined : (rawReport.topWeakness ? String(rawReport.topWeakness).trim() : undefined),
-    estimatedSessionsToReady: isUnscored ? null : (typeof rawReport.estimatedSessionsToReady === 'number' ? rawReport.estimatedSessionsToReady : null),
-    quickWins: isUnscored ? [] : (Array.isArray(rawReport.quickWins) ? rawReport.quickWins.filter((qw: any) => typeof qw === 'string' && qw.trim().length > 0) : []),
-    prioritizedActions: isUnscored ? [] : (rawReport.prioritizedActions || [])
-      .filter((pa: any) => pa && typeof pa.action === 'string' && pa.action.trim().length > 0 && typeof pa.impact === 'string')
-      .map((pa: any) => ({
-        action: String(pa.action).trim(),
-        impact: pa.impact as any
-      }))
+    advisoryPanel,
+    questionPerformance,
+    biggestRiskArea,
+    coachPack,
+    trajectoryReplay: (narrative && Array.isArray(narrative.trajectoryReplay)) ? narrative.trajectoryReplay : [],
+    auditLayer: [],
+    simplifiedScore: scorecard.simplifiedScore,
+    topStrength,
+    topWeakness,
+    estimatedSessionsToReady: null,
+    quickWins,
+    prioritizedActions,
+    challengeRecoveryTimeline: challengeRecoveryTimeline.length > 0 ? challengeRecoveryTimeline : undefined,
   };
 
   return FinalReportSchema.parse(normalizedReport);

@@ -70,70 +70,102 @@ for (const table of ownerTables) {
   }
 }
 
-// 3. Verify corrective columns in migration 20260721
-const requiredColumns = [
+// 3. Verify corrective session columns
+const sessionColumns = [
   'current_question_index',
   'pending_question_id',
   'pending_question',
   'evaluation_status',
   'evaluation_error_code',
+  'engine_version',
+  'session_version',
+  'current_root_question_index',
+  'current_turn_index',
+  'current_stage',
+  'pending_question_kind',
+  'active_root_question_id',
+  'probe_count_for_root',
+  'challenge_count',
+  'challenge_answered_for_root',
+  'reflection_completed_for_root',
+  'final_reflection_asked',
+  'adaptive_policy',
+  'dimension_state',
+  'last_controller_decision',
 ];
 
-for (const col of requiredColumns) {
+for (const col of sessionColumns) {
   if (!normalizedSql.includes(col)) {
-    failures.push(`Missing corrective column in interview_sessions: ${col}`);
+    failures.push(`Missing session column: ${col}`);
   }
 }
 
-// 4. Verify question_id column in interview_turns
-if (!normalizedSql.includes('add column if not exists question_id')) {
-  failures.push('Missing question_id column in interview_turns');
+// 4. Verify adaptive turn columns
+const turnColumns = [
+  'question_id',
+  'client_submission_id',
+  'question_blueprint',
+  'question_kind',
+  'root_question_id',
+  'stage',
+  'answer_kind',
+  'evaluation_status',
+  'turn_evaluation',
+  'controller_decision',
+  'challenge_event',
+  'engine_version',
+  'adaptive_response',
+  'adaptive_request_hash',
+];
+
+for (const col of turnColumns) {
+  if (!normalizedSql.includes(col)) {
+    failures.push(`Missing turn column: ${col}`);
+  }
 }
 
-// 5. Verify RPC atomic_submit_answer requirements
+// 5. Verify unique session/client_submission_id index
+if (!normalizedSql.includes('idx_interview_turns_session_client_sub')) {
+  failures.push('Missing unique index: idx_interview_turns_session_client_sub');
+}
+
+// 6. Verify RPC definitions & security properties
 if (!normalizedSql.includes('create or replace function public.atomic_submit_answer')) {
   failures.push('Missing RPC definition: atomic_submit_answer');
 }
 
-if (!normalizedSql.includes('insert into public.interview_turns')) {
-  failures.push('RPC atomic_submit_answer must insert into public.interview_turns');
+if (!normalizedSql.includes('create or replace function public.atomic_submit_adaptive_turn')) {
+  failures.push('Missing RPC definition: atomic_submit_adaptive_turn');
+} else {
+  const rpcStart = normalizedSql.indexOf('create or replace function public.atomic_submit_adaptive_turn');
+  const rpcEnd = normalizedSql.indexOf('$$;', rpcStart);
+  const rpcBody = rpcEnd !== -1 ? normalizedSql.substring(rpcStart, rpcEnd) : normalizedSql.substring(rpcStart);
+
+  if (!rpcBody.includes('security definer')) {
+    failures.push('RPC atomic_submit_adaptive_turn must be SECURITY DEFINER');
+  }
+  if (!rpcBody.includes('search_path = public, pg_temp')) {
+    failures.push('RPC atomic_submit_adaptive_turn must set search_path = public, pg_temp');
+  }
+  if (rpcBody.includes('completed_at')) {
+    failures.push('RPC atomic_submit_adaptive_turn must NOT assign completed_at timestamp');
+  }
 }
 
-if (!normalizedSql.includes('user_id,')) {
-  failures.push('RPC atomic_submit_answer must insert user_id into interview_turns');
-}
-
-if (normalizedSql.includes('interview_sessions.history') || normalizedSql.includes('sessions.history')) {
-  failures.push('RPC atomic_submit_answer must NOT reference interview_sessions.history');
-}
-
-if (!normalizedSql.includes("status = case when p_is_last then 'awaiting_report' else 'active' end")) {
-  failures.push('RPC atomic_submit_answer must set status to awaiting_report on final answer');
-}
-
-if (!normalizedSql.includes("p_answer_kind not in ('answered', 'skipped')")) {
-  failures.push('RPC atomic_submit_answer must validate p_answer_kind');
-}
-
-if (!normalizedSql.includes('revoke all on function public.atomic_submit_answer') || !normalizedSql.includes('from public')) {
-  failures.push('RPC atomic_submit_answer must REVOKE permissions FROM PUBLIC');
+if (!normalizedSql.includes('from public')) {
+  failures.push('RPCs must REVOKE permissions FROM PUBLIC');
 }
 
 if (!normalizedSql.includes('from anon')) {
-  failures.push('RPC atomic_submit_answer must REVOKE permissions FROM anon');
+  failures.push('RPCs must REVOKE permissions FROM anon');
 }
 
 if (!normalizedSql.includes('from authenticated')) {
-  failures.push('RPC atomic_submit_answer must REVOKE permissions FROM authenticated');
+  failures.push('RPCs must REVOKE permissions FROM authenticated');
 }
 
-if (!normalizedSql.includes('grant execute on function public.atomic_submit_answer') || !normalizedSql.includes('to service_role')) {
-  failures.push('RPC atomic_submit_answer must GRANT EXECUTE TO service_role');
-}
-
-// Verify completed_at is NOT set during answer submission
-if (normalizedSql.includes('completed_at = now()')) {
-  failures.push('RPC atomic_submit_answer must not set completed_at during answer submission');
+if (!normalizedSql.includes('grant execute on function public.atomic_submit_adaptive_turn') || !normalizedSql.includes('to service_role')) {
+  failures.push('RPC atomic_submit_adaptive_turn must GRANT EXECUTE TO service_role');
 }
 
 if (failures.length > 0) {

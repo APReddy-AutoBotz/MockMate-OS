@@ -50,10 +50,33 @@ if (n4.apiOrigin !== '' || n4.apiBase !== '/api') {
 
 console.log('   All 4 origin normalization cases verified successfully!');
 
-console.log('[Browser Runtime Test] 2. Starting local Supabase Auth & API Stub server on port 3099...');
+async function listenOnAvailablePort(server, preferredPort) {
+  for (let port = preferredPort; port < preferredPort + 20; port++) {
+    try {
+      await new Promise((resolve, reject) => {
+        const onError = (err) => {
+          server.off('listening', onListen);
+          reject(err);
+        };
+        const onListen = () => {
+          server.off('error', onError);
+          resolve();
+        };
+        server.once('error', onError);
+        server.once('listening', onListen);
+        server.listen(port, '127.0.0.1');
+      });
+      return port;
+    } catch (err) {
+      if (err.code !== 'EADDRINUSE') throw err;
+    }
+  }
+  throw new Error(`No free ports found starting at ${preferredPort}`);
+}
+
 const observedRequests = [];
 const apiStubServer = http.createServer((req, res) => {
-  const fullUrl = `http://127.0.0.1:3099${req.url}`;
+  const fullUrl = `http://127.0.0.1:${stubPort}${req.url}`;
   observedRequests.push({ url: req.url, fullUrl, method: req.method });
 
   res.writeHead(200, {
@@ -81,20 +104,20 @@ const apiStubServer = http.createServer((req, res) => {
   res.end(JSON.stringify({ status: 'ok', success: true }));
 });
 
-await new Promise((resolve) => apiStubServer.listen(3099, '127.0.0.1', resolve));
+const stubPort = await listenOnAvailablePort(apiStubServer, 3099);
+console.log(`[Browser Runtime Test] 2. Started local Supabase Auth & API Stub server on port ${stubPort}...`);
 
 console.log('[Browser Runtime Test] 3. Building frontend dist with deterministic stub environment variables...');
 const buildEnv = {
   ...process.env,
-  VITE_SUPABASE_URL: 'http://127.0.0.1:3099',
+  VITE_SUPABASE_URL: `http://127.0.0.1:${stubPort}`,
   VITE_SUPABASE_ANON_KEY: 'test-anon-key',
-  VITE_API_URL: 'http://127.0.0.1:3099',
+  VITE_API_URL: `http://127.0.0.1:${stubPort}`,
   VITE_ENABLE_DEV_AUTH: 'false',
 };
 
 execSync('npm run build', { stdio: 'inherit', cwd: process.cwd(), env: buildEnv });
 
-console.log('[Browser Runtime Test] 4. Launching static web server for built dist on port 4173...');
 const distDir = path.resolve(process.cwd(), 'dist');
 const staticServer = http.createServer((req, res) => {
   let filePath = path.join(distDir, req.url === '/' ? 'index.html' : req.url);
@@ -123,7 +146,8 @@ const staticServer = http.createServer((req, res) => {
   }
 });
 
-await new Promise((resolve) => staticServer.listen(4173, '127.0.0.1', resolve));
+const staticPort = await listenOnAvailablePort(staticServer, 4173);
+console.log(`[Browser Runtime Test] 4. Started static web server for built dist on port ${staticPort}...`);
 
 let browser;
 try {
@@ -154,16 +178,17 @@ try {
     }
   });
 
-  console.log('[Browser Runtime Test] 6. Navigating to http://127.0.0.1:4173...');
-  await page.goto('http://127.0.0.1:4173', { waitUntil: 'domcontentloaded', timeout: 10000 });
+  console.log(`[Browser Runtime Test] 6. Navigating to http://127.0.0.1:${staticPort}...`);
+  await page.goto(`http://127.0.0.1:${staticPort}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
 
   // Execute safe API and Supabase auth probes using actual browser environment
-  await page.evaluate(async () => {
+  const stubUrl = `http://127.0.0.1:${stubPort}`;
+  await page.evaluate(async (url) => {
     try {
-      await fetch('http://127.0.0.1:3099/auth/v1/user', { headers: { apikey: 'test-anon-key' } });
-      await fetch('http://127.0.0.1:3099/api/health');
+      await fetch(`${url}/auth/v1/user`, { headers: { apikey: 'test-anon-key' } });
+      await fetch(`${url}/api/health`);
     } catch (_) {}
-  });
+  }, stubUrl);
 
   await page.waitForTimeout(2000);
 
@@ -204,15 +229,15 @@ try {
   console.log('[Browser Runtime Test] 9. Verifying Supabase startup & API route targets...');
   const supabaseRequests = observedRequests.filter(r => r.url.startsWith('/auth/v1'));
   if (supabaseRequests.length === 0) {
-    throw new Error('Expected Supabase startup/auth request on stub 127.0.0.1:3099, but 0 were observed');
+    throw new Error(`Expected Supabase startup/auth request on stub 127.0.0.1:${stubPort}, but 0 were observed`);
   }
-  console.log(`   Observed ${supabaseRequests.length} Supabase startup request(s) on stub 127.0.0.1:3099`);
+  console.log(`   Observed ${supabaseRequests.length} Supabase startup request(s) on stub 127.0.0.1:${stubPort}`);
 
   const apiRequests = observedRequests.filter(r => r.url.startsWith('/api/'));
   if (apiRequests.length === 0) {
-    throw new Error('Expected API request starting with /api/ on stub 127.0.0.1:3099, but 0 were observed');
+    throw new Error(`Expected API request starting with /api/ on stub 127.0.0.1:${stubPort}, but 0 were observed`);
   }
-  console.log(`   Observed ${apiRequests.length} API request(s) starting with /api/ on stub 127.0.0.1:3099`);
+  console.log(`   Observed ${apiRequests.length} API request(s) starting with /api/ on stub 127.0.0.1:${stubPort}`);
 
   const rootLevelDirectCalls = observedRequests.filter(r => /^\/interview\//.test(r.url));
   if (rootLevelDirectCalls.length > 0) {
@@ -247,13 +272,13 @@ try {
       }
     });
 
-    await new Promise((resolve) => unconfigServer.listen(4174, '127.0.0.1', resolve));
+    const unconfigPort = await listenOnAvailablePort(unconfigServer, 4174);
 
     const page2 = await context.newPage();
     const unconfigErrors = [];
     page2.on('pageerror', (err) => unconfigErrors.push(err.message));
 
-    await page2.goto('http://127.0.0.1:4174', { waitUntil: 'domcontentloaded', timeout: 5000 });
+    await page2.goto(`http://127.0.0.1:${unconfigPort}`, { waitUntil: 'domcontentloaded', timeout: 5000 });
     await page2.waitForTimeout(1000);
 
     unconfigServer.close();

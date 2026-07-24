@@ -1,6 +1,6 @@
 import { UserProfile } from "../types/ui";
-import React, { useMemo, useCallback } from 'react';
-import { FinalReport, QuestionPerformance, AdvisoryPanel } from "mockmate-shared";
+import React, { memo, useCallback, useState } from 'react';
+import { FinalReport, QuestionPerformance, AdvisoryPanel, DimensionScore, ChallengeRecoveryRecord } from "mockmate-shared";
 import { generatePdf } from '../services/pdfGenerator';
 import { motion } from 'framer-motion';
 import { PERSONAS_CONFIG } from '../personas.config';
@@ -13,8 +13,21 @@ const sectionAnimation = {
   transition: { duration: 0.6, ease: [0.22, 1, 0.36, 1] as any }
 };
 
-/* ─── Advisor Score Card ────────────────────────────────────────────────── */
-const PersonaScoreCard: React.FC<{ advisory: AdvisoryPanel[] }> = React.memo(({ advisory }) => (
+const scrollToTurnAnchor = (turnId?: string, fallbackIndex?: number) => {
+  if (!turnId && fallbackIndex === undefined) return;
+  const targetId = turnId ? `turn-anchor-${turnId}` : `turn-anchor-index-${fallbackIndex}`;
+  const el = document.getElementById(targetId);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('ring-2', 'ring-brand-primary', 'transition-all');
+    setTimeout(() => {
+      el.classList.remove('ring-2', 'ring-brand-primary');
+    }, 2500);
+  }
+};
+
+/* ─── Reasoning Review Score Cards ────────────────────────────────────────── */
+const PersonaScoreCard: React.FC<{ advisory: AdvisoryPanel[] }> = memo(({ advisory }) => (
   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
     {advisory.map((adv, i) => {
       const personaNameOnly = adv.name.split('—')[0]?.split('(')[0].trim();
@@ -34,11 +47,8 @@ const PersonaScoreCard: React.FC<{ advisory: AdvisoryPanel[] }> = React.memo(({ 
               </div>
               <div className="flex flex-col">
                 <span className="text-base font-bold text-white tracking-tight leading-tight">{adv.name}</span>
-                <span className="text-[9px] font-bold text-brand-primary uppercase mt-1 tracking-[0.2em] opacity-40">Interviewer Verdict</span>
+                <span className="text-[9px] font-bold text-brand-primary uppercase mt-1 tracking-[0.2em] opacity-40">Reasoning Review</span>
               </div>
-            </div>
-            <div className="flex flex-col items-end">
-              <span className="text-[10px] font-bold text-brand-primary">{adv.hireRecommendation ? 'HIRE' : 'NO HIRE'}</span>
             </div>
           </div>
           <p className="text-sm text-white/60 leading-relaxed italic border-l-2 border-brand-primary/20 pl-4 py-0.5">
@@ -50,33 +60,84 @@ const PersonaScoreCard: React.FC<{ advisory: AdvisoryPanel[] }> = React.memo(({ 
   </div>
 ));
 
-/* ─── Main Scorecard ────────────────────────────────────────────────────── */
-const Scorecard: React.FC<{ report: FinalReport; userProfile?: UserProfile | null }> = ({ report }) => {
+/* ─── Challenge & Recovery Trajectory Timeline ───────────────────────────── */
+const ChallengeRecoveryTimelineCard: React.FC<{ records: ChallengeRecoveryRecord[] }> = ({ records }) => {
+  if (!records || records.length === 0) return null;
+
+  return (
+    <section className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-white/50 uppercase tracking-[0.14em]">Response to Challenge & Recovery Trajectory</h3>
+        <span className="text-[10px] font-bold text-brand-primary uppercase tracking-widest">How Your Reasoning Changed</span>
+      </div>
+
+      <div className="space-y-4">
+        {records.map((rec, i) => {
+          const trajectoryBadgeClass =
+            rec.trajectory === 'improved' ? 'text-green-400 bg-green-500/10 border-green-500/20' :
+            rec.trajectory === 'sustained' ? 'text-blue-400 bg-blue-500/10 border-blue-500/20' :
+            rec.trajectory === 'declined' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
+            'text-red-400 bg-red-500/10 border-red-500/20';
+
+          return (
+            <motion.div
+              key={i}
+              {...sectionAnimation}
+              className="bg-white/[0.02] p-6 rounded-2xl border border-white/[0.06] flex flex-col md:flex-row justify-between items-start md:items-center gap-6"
+            >
+              <div className="space-y-2 max-w-xl">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">
+                    Pushback: {rec.challengeType.replace(/_/g, ' ')}
+                  </span>
+                  <span className={`text-[9px] font-bold uppercase tracking-widest px-2.5 py-0.5 rounded-full border ${trajectoryBadgeClass}`}>
+                    {rec.trajectory}
+                  </span>
+                </div>
+                <p className="text-xs text-white/60">
+                  Initial Reasoning Anchor: <strong className="text-white">{rec.beforeAnchor}/4</strong> ➔ Post-Pushback Recovery Anchor: <strong className="text-white">{rec.afterAnchor}/4</strong>
+                </p>
+              </div>
+
+              <div className="flex gap-3 text-[9px] font-bold uppercase tracking-wider shrink-0">
+                <button
+                  onClick={() => scrollToTurnAnchor(rec.challengeTurnId)}
+                  className="px-3 py-1.5 bg-black/40 hover:bg-black/70 text-white/70 hover:text-brand-primary rounded-lg border border-white/10 transition-all"
+                >
+                  Challenge Turn ↵
+                </button>
+                <button
+                  onClick={() => scrollToTurnAnchor(rec.recoveryTurnId)}
+                  className="px-3 py-1.5 bg-black/40 hover:bg-black/70 text-white/70 hover:text-brand-primary rounded-lg border border-white/10 transition-all"
+                >
+                  Recovery Turn ↵
+                </button>
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
+
+/* ─── Main Canonical Dimension Scorecard ────────────────────────────────── */
+const Scorecard: React.FC<{ report: FinalReport }> = ({ report }) => {
   const rawScore = report.simplifiedScore
-    ?? report.quantitativeAnalysis?.dimension_scores?.find(d => d.normalized_score !== null)?.normalized_score;
+    ?? report.quantitativeAnalysis?.dimension_scores?.find(d => d.score_status === 'scored' && d.normalized_score !== null)?.normalized_score;
     
   const hasValidScore = rawScore !== undefined && rawScore !== null;
   const overallScore = rawScore ?? 0;
   
   const tier = !hasValidScore ? 'INCOMPLETE' : overallScore >= 90 ? 'Very strong' : overallScore >= 80 ? 'Solid progress' : 'Keep practicing';
 
-  const getDimensionScore = (term: string) => {
-    const found = report.quantitativeAnalysis?.dimension_scores?.find(d => d.dimension.toLowerCase().includes(term));
-    return found?.normalized_score;
-  };
-
-  const dimensions = [
-    { name: 'Communication', score: getDimensionScore('comm') },
-    { name: 'Role knowledge', score: getDimensionScore('tech') },
-    { name: 'Confidence', score: getDimensionScore('conf') },
-    { name: 'Structure', score: getDimensionScore('struct') },
-  ];
+  const dimensionScores: DimensionScore[] = report.quantitativeAnalysis?.dimension_scores || [];
 
   return (
-    <div className="bg-white/[0.02] p-8 md:p-12 border border-white/[0.06] rounded-3xl overflow-hidden relative group backdrop-blur-2xl shadow-2xl">
+    <div className="bg-white/[0.02] p-8 md:p-12 border border-white/[0.06] rounded-3xl overflow-hidden relative group backdrop-blur-2xl shadow-2xl space-y-8">
       <div className="absolute top-0 right-0 w-96 h-96 bg-brand-primary/5 rounded-full blur-[100px] -mr-48 -mt-48 pointer-events-none" />
 
-      <div className="flex flex-col lg:flex-row justify-between items-center gap-10 relative z-10">
+      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-10 relative z-10">
         <div className="text-center md:text-left space-y-4">
           <div className="flex items-center justify-center md:justify-start gap-6">
             <span className="text-6xl md:text-8xl font-black text-white tracking-tight leading-none drop-shadow-lg">
@@ -87,49 +148,133 @@ const Scorecard: React.FC<{ report: FinalReport; userProfile?: UserProfile | nul
               <span className="bg-brand-primary text-brand-dark px-3 py-1 rounded-lg font-black text-[9px] tracking-[0.2em] uppercase">{tier}</span>
             </div>
           </div>
-          <p className="text-sm md:text-base text-white/40 max-w-md font-medium leading-relaxed">
+          <p className="text-sm md:text-base text-white/60 max-w-2xl font-medium leading-relaxed">
             {report.overallSummary}
           </p>
         </div>
+      </div>
 
-        <div className="w-full lg:w-72 grid grid-cols-2 lg:grid-cols-1 gap-3 shrink-0">
-          {dimensions.map((d, i) => (
-            <div key={i} className="bg-white/[0.02] p-3.5 rounded-xl border border-white/[0.04] flex items-center justify-between">
-              <span className="text-[10px] font-bold text-white/50 uppercase tracking-widest">{d.name}</span>
-              <span className="text-xs font-bold text-brand-primary tracking-widest">{d.score != null ? `${d.score}%` : 'N/A'}</span>
-            </div>
-          ))}
+      {/* Canonical Dimension Breakdown Grid */}
+      <div className="space-y-4 pt-4 border-t border-white/[0.06]">
+        <h3 className="text-xs font-bold text-white/50 uppercase tracking-[0.16em]">Reasoning Dimension Breakdown</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {dimensionScores.map((dim, i) => {
+            const dimTitle = dim.dimensionName || dim.dimension.replace(/_/g, ' ');
+            const isScored = dim.score_status === 'scored';
+            const isInsufficient = dim.score_status === 'insufficient_evidence';
+
+            return (
+              <div
+                key={i}
+                className="bg-white/[0.02] p-5 rounded-2xl border border-white/[0.05] flex flex-col justify-between space-y-4 hover:border-brand-primary/20 transition-all"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-bold text-white tracking-wide">{dimTitle}</span>
+                    <span className="text-[9px] font-semibold text-white/40 uppercase tracking-widest mt-0.5">
+                      {dim.score_status} {dim.confidence ? `• ${dim.confidence} confidence` : ''}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isScored && (
+                      <span className="text-lg font-black text-brand-primary tracking-tight">
+                        {dim.normalized_score}%
+                      </span>
+                    )}
+                    {isInsufficient && (
+                      <span className="text-xs font-bold text-yellow-400/80 bg-yellow-400/10 px-2 py-0.5 rounded uppercase tracking-wider text-[9px]">
+                        Insufficient Evidence
+                      </span>
+                    )}
+                    {!isScored && !isInsufficient && (
+                      <span className="text-xs font-bold text-white/30 bg-white/5 px-2 py-0.5 rounded uppercase tracking-wider text-[9px]">
+                        Not Tested
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <p className="text-xs text-white/60 leading-relaxed">
+                  {dim.reason}
+                </p>
+
+                {dim.evidenceReferences && dim.evidenceReferences.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-white/[0.04]">
+                    <span className="text-[9px] font-bold text-brand-primary uppercase tracking-widest block">Evidence References</span>
+                    <div className="space-y-1.5">
+                      {dim.evidenceReferences.map((ref, refIdx) => (
+                        <button
+                          key={refIdx}
+                          onClick={() => scrollToTurnAnchor(ref.turnId)}
+                          className="w-full text-left bg-black/30 hover:bg-black/50 p-2.5 rounded-lg border border-white/[0.04] transition-all group/ref"
+                        >
+                          <div className="flex items-center justify-between text-[9px] font-bold text-white/40 uppercase mb-1">
+                            <span className="group-hover/ref:text-brand-primary transition-colors">
+                              Turn ID: {ref.turnId.slice(0, 8)}... ({ref.stage || 'framing'})
+                            </span>
+                            <span className="text-brand-primary">View Source ↵</span>
+                          </div>
+                          <p className="text-xs text-white/70 italic line-clamp-2">
+                            "{ref.excerpt}"
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {dim.hasChallengeEvidence && (
+                  <div className="flex items-center gap-1.5 text-[9px] font-bold text-brand-primary uppercase tracking-wider">
+                    <span>⚡ Includes Challenge/Recovery Pushback Evidence</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
   );
 };
 
-/* ─── Question Breakdown ────────────────────────────────────────────────── */
-const QuestionCard: React.FC<{ q: QuestionPerformance; index: number }> = ({ q, index }) => (
-  <motion.div
-    {...sectionAnimation}
-    className="bg-white/[0.02] p-6 md:p-8 rounded-2xl border border-white/[0.06] space-y-6"
-  >
-    <div className="flex items-center justify-between">
-      <span className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.14em]">Question {index + 1}</span>
-    </div>
+/* ─── Evidence from Responses (Question Breakdown) ─────────────────────── */
+const QuestionCard: React.FC<{ q: QuestionPerformance; index: number }> = ({ q, index }) => {
+  const anchorId = q.turnId ? `turn-anchor-${q.turnId}` : `turn-anchor-index-${index}`;
+  const hasValidFeedback = typeof q.feedback === 'string' && q.feedback.trim().length > 0 && q.feedback !== 'Candidate response recorded and evaluated.';
 
-    <h4 className="text-base md:text-lg font-medium text-white leading-snug">{q.question_text}</h4>
-
-    <div className="space-y-4 pt-2">
-      <div className="bg-black/20 p-4 rounded-xl border border-white/[0.04]">
-        <span className="text-[9px] font-bold text-white/40 uppercase tracking-widest block mb-2">Candidate response</span>
-        <p className="text-xs md:text-sm text-white/70 italic leading-relaxed">"{q.user_transcript}"</p>
+  return (
+    <motion.div
+      id={anchorId}
+      {...sectionAnimation}
+      className="bg-white/[0.02] p-6 md:p-8 rounded-2xl border border-white/[0.06] space-y-6 scroll-mt-24 transition-all"
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.14em]">Question {index + 1}</span>
+        {q.turnId && (
+          <span className="text-[9px] font-bold text-white/30 tracking-widest">
+            ID: {q.turnId}
+          </span>
+        )}
       </div>
 
-      <div className="bg-brand-primary/[0.02] p-4 rounded-xl border border-brand-primary/10 space-y-2">
-        <span className="text-[9px] font-bold text-brand-primary uppercase tracking-widest block">Evaluator feedback</span>
-        <p className="text-xs md:text-sm text-white/80 leading-relaxed">{q.feedback}</p>
+      <h4 className="text-base md:text-lg font-medium text-white leading-snug">{q.question_text}</h4>
+
+      <div className="space-y-4 pt-2">
+        <div className="bg-black/20 p-4 rounded-xl border border-white/[0.04]">
+          <span className="text-[9px] font-bold text-white/40 uppercase tracking-widest block mb-2">Candidate response</span>
+          <p className="text-xs md:text-sm text-white/70 italic leading-relaxed">"{q.user_transcript}"</p>
+        </div>
+
+        {hasValidFeedback && (
+          <div className="bg-brand-primary/[0.02] p-4 rounded-xl border border-brand-primary/10 space-y-2">
+            <span className="text-[9px] font-bold text-brand-primary uppercase tracking-widest block">Practice Feedback</span>
+            <p className="text-xs md:text-sm text-white/80 leading-relaxed">{q.feedback}</p>
+          </div>
+        )}
       </div>
-    </div>
-  </motion.div>
-);
+    </motion.div>
+  );
+};
 
 interface InterviewReportProps {
   report: FinalReport;
@@ -139,7 +284,7 @@ interface InterviewReportProps {
 }
 
 export const InterviewReport: React.FC<InterviewReportProps> = ({ report, onRestart, userProfile, sessionId }) => {
-  const [isDownloading, setIsDownloading] = React.useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const handleDownloadPdf = useCallback(async () => {
     setIsDownloading(true);
@@ -157,7 +302,7 @@ export const InterviewReport: React.FC<InterviewReportProps> = ({ report, onRest
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
         <div>
           <span className="text-[9px] font-bold text-brand-primary uppercase tracking-[0.2em]">Session Complete</span>
-          <h2 className="text-3xl md:text-5xl font-medium text-white tracking-tight mt-1">Detailed Scorecard</h2>
+          <h2 className="text-3xl md:text-5xl font-medium text-white tracking-tight mt-1">Reasoning Scorecard</h2>
         </div>
         <div className="flex gap-4">
           <button
@@ -176,18 +321,22 @@ export const InterviewReport: React.FC<InterviewReportProps> = ({ report, onRest
         </div>
       </div>
 
-      <Scorecard report={report} userProfile={userProfile} />
+      <Scorecard report={report} />
+
+      {report.challengeRecoveryTimeline && report.challengeRecoveryTimeline.length > 0 && (
+        <ChallengeRecoveryTimelineCard records={report.challengeRecoveryTimeline} />
+      )}
 
       {report.advisoryPanel && report.advisoryPanel.length > 0 && (
         <section className="space-y-6">
-          <h3 className="text-sm font-bold text-white/50 uppercase tracking-[0.14em]">Interviewer Panel Feedback</h3>
+          <h3 className="text-sm font-bold text-white/50 uppercase tracking-[0.14em]">Reasoning Review</h3>
           <PersonaScoreCard advisory={report.advisoryPanel} />
         </section>
       )}
 
       {report.questionPerformance && report.questionPerformance.length > 0 && (
         <section className="space-y-6">
-          <h3 className="text-sm font-bold text-white/50 uppercase tracking-[0.14em]">Question Performance</h3>
+          <h3 className="text-sm font-bold text-white/50 uppercase tracking-[0.14em]">Evidence from Your Responses</h3>
           <div className="space-y-6">
             {report.questionPerformance.map((q, i) => (
               <QuestionCard key={i} q={q} index={i} />
