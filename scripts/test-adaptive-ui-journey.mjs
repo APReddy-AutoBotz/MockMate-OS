@@ -392,7 +392,7 @@ try {
   }
 
   // Ensure Hub is rendered
-  await page.waitForSelector('h3:has-text("Mock interview")', { timeout: 20000 });
+  await page.locator('h3', { hasText: 'Mock interview' }).first().waitFor({ state: 'visible', timeout: 20000 });
 
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
