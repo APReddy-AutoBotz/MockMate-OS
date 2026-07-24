@@ -8,6 +8,8 @@ import {
   FinalReport, 
   FinalReportSchema,
   RawFinalReportSchema,
+  RawReportNarrativeSchema,
+  RawReportNarrative,
   CalibrateResponseSchema,
   CalibrateResponse,
   RawCalibrateResponseSchema,
@@ -25,6 +27,7 @@ import * as sessionService from './sessionService';
 
 import { APPROVED_DIMENSIONS, ACTIVE_DIMENSIONS_BY_MODE, DEFAULT_WEIGHTS_BY_MODE } from '../config/evaluationConfig';
 import { callWithFallback, extractJson } from './llmProviderGateway';
+import { aggregateTurnEvidence, generateChallengeRecoveryTimeline } from './evidenceAggregationService';
 
 export { APPROVED_DIMENSIONS, ACTIVE_DIMENSIONS_BY_MODE, callWithFallback, extractJson };
 
@@ -606,44 +609,58 @@ REQUIRED OUTPUT SCHEMA (JSON):
   ]
 }`;
 
-  let qualitativeNarrative: any = {};
+  let narrative: RawReportNarrative | null = null;
   try {
-    const { text, provider, model } = await callWithFallback(masterPrompt);
-    qualitativeNarrative = extractJson(text || '{}');
+    const { text } = await callWithFallback(masterPrompt);
+    const rawJson = extractJson(text || '{}');
+    const parseResult = RawReportNarrativeSchema.safeParse(rawJson);
+    if (parseResult.success) {
+      narrative = parseResult.data;
+    } else {
+      console.warn('[AI Service] Provider narrative output failed strict RawReportNarrativeSchema validation:', parseResult.error.issues);
+    }
   } catch (err: any) {
-    console.warn('[AI Service] Narrative provider call failed, using fallback qualitative summary...', err.message);
+    console.warn('[AI Service] Narrative provider call failed, using deterministic scorecard summary...', err.message);
   }
 
-  const overallSummary = typeof qualitativeNarrative.overallSummary === 'string' && qualitativeNarrative.overallSummary.trim().length > 0
-    ? qualitativeNarrative.overallSummary.trim()
+  const overallSummary = (narrative && narrative.overallSummary && narrative.overallSummary.trim().length > 0)
+    ? narrative.overallSummary.trim()
     : (scorecard.simplifiedScore !== null
         ? `Session complete. Practice score: ${scorecard.simplifiedScore}/100 based on verified candidate turn evidence.`
         : 'Session completed. Evaluation based on verified candidate turn evidence.');
 
-  const topStrength = typeof qualitativeNarrative.topStrength === 'string' && qualitativeNarrative.topStrength.trim().length > 0
-    ? qualitativeNarrative.topStrength.trim()
+  const topStrength = (narrative && narrative.topStrength && narrative.topStrength.trim().length > 0)
+    ? narrative.topStrength.trim()
     : undefined;
 
-  const topWeakness = typeof qualitativeNarrative.topWeakness === 'string' && qualitativeNarrative.topWeakness.trim().length > 0
-    ? qualitativeNarrative.topWeakness.trim()
+  const topWeakness = (narrative && narrative.topWeakness && narrative.topWeakness.trim().length > 0)
+    ? narrative.topWeakness.trim()
     : undefined;
 
-  const quickWins = Array.isArray(qualitativeNarrative.quickWins)
-    ? qualitativeNarrative.quickWins.filter((qw: any) => typeof qw === 'string' && qw.trim().length > 0)
+  const quickWins = (narrative && Array.isArray(narrative.quickWins))
+    ? narrative.quickWins.filter((qw: any) => typeof qw === 'string' && qw.trim().length > 0)
     : [];
 
-  const prioritizedActions = Array.isArray(qualitativeNarrative.prioritizedActions)
-    ? qualitativeNarrative.prioritizedActions.filter((pa: any) => pa && typeof pa.action === 'string' && pa.action.trim().length > 0)
+  const prioritizedActions = (narrative && Array.isArray(narrative.prioritizedActions))
+    ? narrative.prioritizedActions.filter((pa: any) => pa && typeof pa.action === 'string' && pa.action.trim().length > 0)
     : [];
 
-  const questionPerformance = history.map((turn, idx) => ({
-    question_text: turn.question || `Scenario ${idx + 1}`,
-    question_phase: turn.stage || 'framing',
-    user_transcript: turn.candidateResponse || '',
-    feedback: turn.turnEvaluation?.answerSummary || (turn.candidateResponse ? 'Candidate response recorded and evaluated.' : 'No response provided.'),
-    strengths: turn.turnEvaluation?.observations?.filter(o => typeof o.anchorScore === 'number' && o.anchorScore >= 3).map(o => o.signal) || [],
-    improvements: turn.turnEvaluation?.missingSignals || [],
-  }));
+  const questionPerformance = history.map((turn, idx) => {
+    const rawFeedback = turn.turnEvaluation?.answerSummary;
+    const validFeedback = rawFeedback && typeof rawFeedback === 'string' && rawFeedback.trim().length > 0 && rawFeedback !== 'Candidate response recorded and evaluated.'
+      ? rawFeedback.trim()
+      : (turn.turnEvaluation?.evaluationStatus === 'unavailable' ? 'Evaluation unavailable.' : null);
+
+    return {
+      question_text: turn.question || `Scenario ${idx + 1}`,
+      question_phase: turn.stage || 'framing',
+      user_transcript: turn.candidateResponse || '',
+      feedback: validFeedback,
+      strengths: turn.turnEvaluation?.observations?.filter(o => typeof o.anchorScore === 'number' && o.anchorScore >= 3).map(o => o.signal) || [],
+      improvements: turn.turnEvaluation?.missingSignals || [],
+      turnId: turn.turnId || turn.id || undefined,
+    };
+  });
 
   const advisoryPanel = [
     {
@@ -653,49 +670,26 @@ REQUIRED OUTPUT SCHEMA (JSON):
     }
   ];
 
-  const biggestRiskArea = (scorecard.readinessStatus === 'NOT_ASSESSED') ? null : (qualitativeNarrative.biggestRiskArea && typeof qualitativeNarrative.biggestRiskArea === 'object' && qualitativeNarrative.biggestRiskArea.title && qualitativeNarrative.biggestRiskArea.observation && qualitativeNarrative.biggestRiskArea.mitigation ? {
-    title: String(qualitativeNarrative.biggestRiskArea.title).trim(),
-    observation: String(qualitativeNarrative.biggestRiskArea.observation).trim(),
-    mitigation: String(qualitativeNarrative.biggestRiskArea.mitigation).trim(),
-  } : null);
+  const biggestRiskArea = (scorecard.readinessStatus === 'NOT_ASSESSED' || !narrative?.biggestRiskArea) ? null : narrative.biggestRiskArea;
 
   let coachPack = null;
-  if (scorecard.readinessStatus !== 'NOT_ASSESSED' && qualitativeNarrative.coachPack && typeof qualitativeNarrative.coachPack === 'object' && qualitativeNarrative.coachPack.title) {
-    const title = String(qualitativeNarrative.coachPack.title).trim();
-    let redoNow = null;
-    if (typeof qualitativeNarrative.coachPack.redoNow === 'object' && qualitativeNarrative.coachPack.redoNow?.question && qualitativeNarrative.coachPack.redoNow?.instruction) {
-      redoNow = {
-        question: String(qualitativeNarrative.coachPack.redoNow.question).trim(),
-        instruction: String(qualitativeNarrative.coachPack.redoNow.instruction).trim(),
-      };
-    } else if (typeof qualitativeNarrative.coachPack.redoNow === 'string' && qualitativeNarrative.coachPack.redoNow.trim().length > 0) {
-      redoNow = {
-        question: history[0]?.question || 'Scenario 1',
-        instruction: qualitativeNarrative.coachPack.redoNow.trim(),
-      };
-    }
-
-    const microDrills = Array.isArray(qualitativeNarrative.coachPack.micro_drills)
-      ? qualitativeNarrative.coachPack.micro_drills
-          .filter((md: any) => md && md.weakness && md.drill_prompt && md.focus_point)
-          .map((md: any) => ({
-            weakness: String(md.weakness).trim(),
-            drill_prompt: String(md.drill_prompt).trim(),
-            focus_point: String(md.focus_point).trim(),
-          }))
+  if (scorecard.readinessStatus !== 'NOT_ASSESSED' && narrative?.coachPack && narrative.coachPack.title) {
+    const redoNowRaw = narrative.coachPack.redoNow;
+    const isRedoValid = redoNowRaw && typeof redoNowRaw === 'object' && typeof redoNowRaw.question === 'string' && redoNowRaw.question.trim().length > 0 && typeof redoNowRaw.instruction === 'string' && redoNowRaw.instruction.trim().length > 0;
+    const microDrills = Array.isArray(narrative.coachPack.micro_drills)
+      ? narrative.coachPack.micro_drills.filter((md: any) => md && md.weakness && md.drill_prompt && md.focus_point)
       : [];
 
-    if (redoNow || microDrills.length > 0) {
+    if (isRedoValid || microDrills.length > 0) {
       coachPack = {
-        title,
-        redoNow: redoNow || {
-          question: history[0]?.question || 'Scenario 1',
-          instruction: 'Focus on explicit problem framing and trade-off justification.',
-        },
+        title: narrative.coachPack.title.trim(),
+        redoNow: isRedoValid ? { question: redoNowRaw!.question.trim(), instruction: redoNowRaw!.instruction.trim() } : null,
         micro_drills: microDrills,
       };
     }
   }
+
+  const challengeRecoveryTimeline = generateChallengeRecoveryTimeline(history);
 
   const normalizedReport = {
     overallSummary,
@@ -724,7 +718,7 @@ REQUIRED OUTPUT SCHEMA (JSON):
     questionPerformance,
     biggestRiskArea,
     coachPack,
-    trajectoryReplay: [],
+    trajectoryReplay: (narrative && Array.isArray(narrative.trajectoryReplay)) ? narrative.trajectoryReplay : [],
     auditLayer: [],
     simplifiedScore: scorecard.simplifiedScore,
     topStrength,
@@ -732,6 +726,7 @@ REQUIRED OUTPUT SCHEMA (JSON):
     estimatedSessionsToReady: null,
     quickWins,
     prioritizedActions,
+    challengeRecoveryTimeline: challengeRecoveryTimeline.length > 0 ? challengeRecoveryTimeline : undefined,
   };
 
   return FinalReportSchema.parse(normalizedReport);

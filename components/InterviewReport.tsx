@@ -1,6 +1,6 @@
 import { UserProfile } from "../types/ui";
 import React, { useCallback } from 'react';
-import { FinalReport, QuestionPerformance, AdvisoryPanel, DimensionScore } from "mockmate-shared";
+import { FinalReport, QuestionPerformance, AdvisoryPanel, DimensionScore, ChallengeRecoveryRecord } from "mockmate-shared";
 import { generatePdf } from '../services/pdfGenerator';
 import { motion } from 'framer-motion';
 import { PERSONAS_CONFIG } from '../personas.config';
@@ -59,6 +59,67 @@ const PersonaScoreCard: React.FC<{ advisory: AdvisoryPanel[] }> = React.memo(({ 
     })}
   </div>
 ));
+
+/* ─── Challenge & Recovery Trajectory Timeline ───────────────────────────── */
+const ChallengeRecoveryTimelineCard: React.FC<{ records: ChallengeRecoveryRecord[] }> = ({ records }) => {
+  if (!records || records.length === 0) return null;
+
+  return (
+    <section className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-white/50 uppercase tracking-[0.14em]">Response to Challenge & Recovery Trajectory</h3>
+        <span className="text-[10px] font-bold text-brand-primary uppercase tracking-widest">How Your Reasoning Changed</span>
+      </div>
+
+      <div className="space-y-4">
+        {records.map((rec, i) => {
+          const trajectoryBadgeClass =
+            rec.trajectory === 'improved' ? 'text-green-400 bg-green-500/10 border-green-500/20' :
+            rec.trajectory === 'sustained' ? 'text-blue-400 bg-blue-500/10 border-blue-500/20' :
+            rec.trajectory === 'declined' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
+            'text-red-400 bg-red-500/10 border-red-500/20';
+
+          return (
+            <motion.div
+              key={i}
+              {...sectionAnimation}
+              className="bg-white/[0.02] p-6 rounded-2xl border border-white/[0.06] flex flex-col md:flex-row justify-between items-start md:items-center gap-6"
+            >
+              <div className="space-y-2 max-w-xl">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">
+                    Pushback: {rec.challengeType.replace(/_/g, ' ')}
+                  </span>
+                  <span className={`text-[9px] font-bold uppercase tracking-widest px-2.5 py-0.5 rounded-full border ${trajectoryBadgeClass}`}>
+                    {rec.trajectory}
+                  </span>
+                </div>
+                <p className="text-xs text-white/60">
+                  Initial Reasoning Anchor: <strong className="text-white">{rec.beforeAnchor}/4</strong> ➔ Post-Pushback Recovery Anchor: <strong className="text-white">{rec.afterAnchor}/4</strong>
+                </p>
+              </div>
+
+              <div className="flex gap-3 text-[9px] font-bold uppercase tracking-wider shrink-0">
+                <button
+                  onClick={() => scrollToTurnAnchor(rec.challengeTurnId)}
+                  className="px-3 py-1.5 bg-black/40 hover:bg-black/70 text-white/70 hover:text-brand-primary rounded-lg border border-white/10 transition-all"
+                >
+                  Challenge Turn ↵
+                </button>
+                <button
+                  onClick={() => scrollToTurnAnchor(rec.recoveryTurnId)}
+                  className="px-3 py-1.5 bg-black/40 hover:bg-black/70 text-white/70 hover:text-brand-primary rounded-lg border border-white/10 transition-all"
+                >
+                  Recovery Turn ↵
+                </button>
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
 
 /* ─── Main Canonical Dimension Scorecard ────────────────────────────────── */
 const Scorecard: React.FC<{ report: FinalReport }> = ({ report }) => {
@@ -179,6 +240,7 @@ const Scorecard: React.FC<{ report: FinalReport }> = ({ report }) => {
 /* ─── Evidence from Responses (Question Breakdown) ─────────────────────── */
 const QuestionCard: React.FC<{ q: QuestionPerformance; index: number }> = ({ q, index }) => {
   const anchorId = q.turnId ? `turn-anchor-${q.turnId}` : `turn-anchor-index-${index}`;
+  const hasValidFeedback = typeof q.feedback === 'string' && q.feedback.trim().length > 0 && q.feedback !== 'Candidate response recorded and evaluated.';
 
   return (
     <motion.div
@@ -203,7 +265,7 @@ const QuestionCard: React.FC<{ q: QuestionPerformance; index: number }> = ({ q, 
           <p className="text-xs md:text-sm text-white/70 italic leading-relaxed">"{q.user_transcript}"</p>
         </div>
 
-        {q.feedback && q.feedback.trim() !== '' && q.feedback !== 'Candidate response recorded and evaluated.' && (
+        {hasValidFeedback && (
           <div className="bg-brand-primary/[0.02] p-4 rounded-xl border border-brand-primary/10 space-y-2">
             <span className="text-[9px] font-bold text-brand-primary uppercase tracking-widest block">Practice Feedback</span>
             <p className="text-xs md:text-sm text-white/80 leading-relaxed">{q.feedback}</p>
@@ -260,6 +322,10 @@ export const InterviewReport: React.FC<InterviewReportProps> = ({ report, onRest
       </div>
 
       <Scorecard report={report} />
+
+      {report.challengeRecoveryTimeline && report.challengeRecoveryTimeline.length > 0 && (
+        <ChallengeRecoveryTimelineCard records={report.challengeRecoveryTimeline} />
+      )}
 
       {report.advisoryPanel && report.advisoryPanel.length > 0 && (
         <section className="space-y-6">

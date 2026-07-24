@@ -11,6 +11,7 @@ import {
   QuestionKind,
   TurnEvaluation,
   EvidenceReference,
+  ChallengeRecoveryRecord,
 } from 'mockmate-shared';
 import { ACTIVE_DIMENSIONS_BY_MODE, APPROVED_DIMENSIONS } from '../config/evaluationConfig';
 
@@ -260,4 +261,67 @@ export function aggregateTurnEvidence(
     readinessStatus,
     readinessReasoning,
   };
+}
+
+export function generateChallengeRecoveryTimeline(turns: any[]): ChallengeRecoveryRecord[] {
+  if (!Array.isArray(turns) || turns.length === 0) return [];
+  const validTurns = turns.map(toEvidenceTurn).filter((t): t is NonNullable<ReturnType<typeof toEvidenceTurn>> => t !== null && !!t.turnId);
+  const timeline: ChallengeRecoveryRecord[] = [];
+
+  for (const turn of validTurns) {
+    if (turn.questionKind !== 'challenge') continue;
+    const rawTurnObj = turns.find(t => (t.turnId || t.id) === turn.turnId);
+    if (!rawTurnObj) continue;
+
+    const challengeEvent = rawTurnObj.challengeEvent || rawTurnObj.challenge_event;
+    const rootQuestionId = rawTurnObj.rootQuestionId || rawTurnObj.root_question_id || turn.turnId;
+    const challengeType = challengeEvent?.type || rawTurnObj.challengeType || 'counterargument';
+
+    // Find a later reflection/recovery turn for the same rootQuestionId
+    const recoveryTurn = validTurns.find(t => 
+      t.turnId !== turn.turnId &&
+      (t.questionKind === 'reflection' || t.stage === 'reflection') &&
+      turns.find(r => (r.turnId || r.id) === t.turnId && (r.rootQuestionId || r.root_question_id || r.id) === rootQuestionId)
+    );
+
+    if (!recoveryTurn) continue;
+
+    // Calculate beforeAnchor from pre-challenge turns for same root question
+    const preChallengeTurns = validTurns.filter(t => t.turnId !== turn.turnId && t.turnId !== recoveryTurn.turnId);
+    const preObs = preChallengeTurns.flatMap(t => t.evaluation?.observations || []).filter(o => typeof o.anchorScore === 'number');
+    const beforeAnchor = preObs.length > 0
+      ? Math.round(preObs.reduce((acc, curr) => acc + curr.anchorScore!, 0) / preObs.length)
+      : 2;
+
+    // Calculate afterAnchor from recovery turn observations
+    const postObs = (recoveryTurn.evaluation?.observations || []).filter(o => typeof o.anchorScore === 'number');
+    const afterAnchor = postObs.length > 0
+      ? Math.round(postObs.reduce((acc, curr) => acc + curr.anchorScore!, 0) / postObs.length)
+      : null;
+
+    if (afterAnchor === null) continue;
+
+    let trajectory: 'improved' | 'sustained' | 'declined' | 'unrecovered' = 'unrecovered';
+    if (afterAnchor === 0) {
+      trajectory = 'unrecovered';
+    } else if (afterAnchor > beforeAnchor) {
+      trajectory = 'improved';
+    } else if (afterAnchor === beforeAnchor) {
+      trajectory = 'sustained';
+    } else {
+      trajectory = 'declined';
+    }
+
+    timeline.push({
+      rootQuestionId,
+      challengeTurnId: turn.turnId,
+      recoveryTurnId: recoveryTurn.turnId,
+      challengeType,
+      beforeAnchor,
+      afterAnchor: Math.min(4, Math.max(0, afterAnchor)),
+      trajectory,
+    });
+  }
+
+  return timeline;
 }

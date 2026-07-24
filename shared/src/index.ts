@@ -591,12 +591,24 @@ export const QuestionPerformanceSchema = z.object({
   question_phase: z.string().optional(),
   user_transcript: z.string(),
   max_impact_response: z.string().optional(),
-  feedback: z.string(),
+  feedback: z.string().nullable().optional(),
   strengths: z.array(z.string()).optional(),
   improvements: z.array(z.string()).optional(),
   turnId: z.string().optional(),
 }).strict();
 export type QuestionPerformance = z.infer<typeof QuestionPerformanceSchema>;
+
+export const RawReportNarrativeSchema = z.object({
+  overallSummary: z.string().optional(),
+  topStrength: z.string().optional(),
+  topWeakness: z.string().optional(),
+  quickWins: z.array(z.string()).optional(),
+  prioritizedActions: z.array(PrioritizedActionSchema).optional(),
+  biggestRiskArea: BiggestRiskSchema.nullable().optional(),
+  coachPack: CoachPackSchema.nullable().optional(),
+  trajectoryReplay: z.array(TrajectoryReplaySchema).optional(),
+}).strict();
+export type RawReportNarrative = z.infer<typeof RawReportNarrativeSchema>;
 
 export const FinalReportSchema = z.object({
   overallSummary: z.string(),

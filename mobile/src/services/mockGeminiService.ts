@@ -9,7 +9,8 @@ import {
   CalibrateResponse,
   CalibrateResponseSchema,
   InterviewSessionStartResponseSchema,
-  AnswerSubmissionResponseSchema,
+  AdaptiveAnswerSubmissionResponseSchema,
+  AdaptiveAnswerSubmissionResponse,
   HintResponseSchema,
   IdealResponseResponseSchema,
   TranscribeAudioResponseSchema
@@ -32,6 +33,7 @@ export const generateInterviewPlan = async (
     role,
     intent: intentText,
     controls: sessionControls,
+    selectedPanelIDs: ['p1'],
     jdText
   });
 };
@@ -50,19 +52,17 @@ export const startInterviewSession = async (
 export const submitAnswerAndGetNext = async (
   sessionId: string,
   questionId: string,
-  expectedQuestionIndex: number,
+  expectedSessionVersion: number,
+  clientSubmissionId: string,
   answerKind: 'answered' | 'skipped',
   answerText?: string
-): Promise<{ nextQuestion: QuestionBlueprint | null; isLastQuestion: boolean }> => {
+): Promise<AdaptiveAnswerSubmissionResponse> => {
   const data = await apiClient.post(
     `interview/sessions/${sessionId}/answers`,
-    AnswerSubmissionResponseSchema,
-    { questionId, expectedQuestionIndex, answerKind, answerText }
+    AdaptiveAnswerSubmissionResponseSchema,
+    { questionId, expectedSessionVersion, clientSubmissionId, answerKind, answerText }
   );
-  return {
-    nextQuestion: data.nextQuestion,
-    isLastQuestion: data.isLastQuestion
-  };
+  return data;
 };
 
 export const getHintForQuestion = async (questionText: string, expectedSignals?: string[]): Promise<string> => {
@@ -97,7 +97,10 @@ export const transcribeAudio = async (uri: string, mimeType: string): Promise<st
   try {
     const base64Audio = await uriToBase64(uri);
     const data = await apiClient.post('interview/transcribe', TranscribeAudioResponseSchema, { audioBase64: base64Audio, mimeType });
-    return data.transcript || "";
+    if (data.status === 'transcribed' && data.transcript) {
+      return data.transcript;
+    }
+    return '';
   } catch (error) {
     console.error('Transcription failed', error);
     return "";

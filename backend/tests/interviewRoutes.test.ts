@@ -939,4 +939,88 @@ describe('Backend Express API & Route Parity Tests', () => {
       (supabaseAdminModule as any).supabaseAdmin = orig;
     }
   });
+
+  it('37. Strict narrative validation rejects score and hiring fields in narrative JSON', async () => {
+    const rawData = {
+      overallSummary: 'Candidate demonstrated strong problem framing.',
+      topStrength: 'Explicit problem framing',
+      quickWins: ['Specify trade-offs early'],
+      prioritizedActions: [{ action: 'Practice trade-offs', impact: 'high' }],
+      // Forbidden fields that break RawReportNarrativeSchema.strict()
+      dimension_scores: [{ dimension: 'PROBLEM_FRAMING', score: 100 }],
+      hiring_recommendation: 'STRONG_HIRE',
+      overall_score: 95,
+    };
+
+    const spy = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
+      text: JSON.stringify(rawData),
+      provider: 'test',
+      model: 'test',
+      fallbackTriggered: false,
+    });
+
+    const report = await aiService.generateFinalReport([
+      { id: '1', interviewer: 'Interviewer', question: 'Q1', candidateResponse: 'A1', timestamp: Date.now() }
+    ], sampleContext);
+
+    // Malformed narrative rejected by strict schema -> falls back to deterministic summary
+    expect(report.overallSummary).toContain('Session completed.');
+    expect(report.topStrength).toBeUndefined();
+    expect(report.quickWins).toEqual([]);
+
+    spy.mockRestore();
+  });
+
+  it('38. Valid challenge + recovery turns generate challengeRecoveryTimeline', async () => {
+    const history = [
+      {
+        turnId: '11111111-1111-1111-1111-111111111111',
+        rootQuestionId: 'q1',
+        questionKind: 'root',
+        stage: 'framing',
+        question: 'How do you design a key-value store?',
+        candidateResponse: 'I will use a hash table with synchronous write logs.',
+        turnEvaluation: {
+          evaluationStatus: 'evaluated',
+          answerSummary: 'Basic framing.',
+          observations: [{ dimension: 'PROBLEM_FRAMING', anchorScore: 2, confidence: 'high', evidenceExcerpt: 'hash table', signal: 'Basic store', stage: 'framing', turnKind: 'root' }],
+        },
+      },
+      {
+        turnId: '22222222-2222-2222-2222-222222222222',
+        rootQuestionId: 'q1',
+        questionKind: 'challenge',
+        challengeEvent: { type: 'counterargument', text: 'What if disk write latency surges?' },
+        stage: 'exploration',
+        question: 'What if disk write latency surges?',
+        candidateResponse: 'I will use write-behind caching with memory ring buffers.',
+        turnEvaluation: {
+          evaluationStatus: 'evaluated',
+          answerSummary: 'Challenge pushback response.',
+          observations: [{ dimension: 'SYSTEMS_THINKING', anchorScore: 3, confidence: 'high', evidenceExcerpt: 'write-behind caching', signal: 'Buffered writes', stage: 'exploration', turnKind: 'challenge' }],
+        },
+      },
+      {
+        turnId: '33333333-3333-3333-3333-333333333333',
+        rootQuestionId: 'q1',
+        questionKind: 'reflection',
+        stage: 'reflection',
+        question: 'Looking back, how did your reasoning adapt under load?',
+        candidateResponse: 'I learned to decouple disk IO from memory writes using non-blocking ring buffers.',
+        turnEvaluation: {
+          evaluationStatus: 'evaluated',
+          answerSummary: 'Strong recovery and self-reflection.',
+          observations: [{ dimension: 'RECOVERY_QUALITY', anchorScore: 4, confidence: 'high', evidenceExcerpt: 'non-blocking ring buffers', signal: 'Resilient recovery', stage: 'reflection', turnKind: 'reflection' }],
+        },
+      },
+    ];
+
+    const report = await aiService.generateFinalReport(history, sampleContext);
+
+    expect(report.challengeRecoveryTimeline).toBeDefined();
+    expect(report.challengeRecoveryTimeline?.length).toBe(1);
+    expect(report.challengeRecoveryTimeline?.[0].challengeTurnId).toBe('22222222-2222-2222-2222-222222222222');
+    expect(report.challengeRecoveryTimeline?.[0].recoveryTurnId).toBe('33333333-3333-3333-3333-333333333333');
+    expect(report.challengeRecoveryTimeline?.[0].trajectory).toBe('improved');
+  });
 });

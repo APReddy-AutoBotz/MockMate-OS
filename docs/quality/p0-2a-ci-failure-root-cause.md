@@ -85,3 +85,37 @@ Because PostgreSQL attempted to cast positional values to incompatible argument 
    Add `adaptive_request_hash text` to `interview_turns` and include `p_adaptive_request_hash` parameter handling in `atomic_submit_adaptive_turn`.
 3. **Comprehensive Verifier Tests**:
    Ensure all 18 PostgreSQL runtime assertions run using named arguments and pass 100%.
+
+---
+
+## 4. Failed Step & Mobile Failure (Workflow 30080018496)
+
+### Failure Description
+The exact-head workflow `30080018496` failed at step `15. Mobile typecheck` (`cd mobile && npm run mobile:typecheck`).
+
+### Exact TypeScript Diagnostic Messages
+1. `mobile/src/services/apiClient.ts(147,21)`: `error TS2314: Generic type 'ZodType<Output, Def, Input>' requires between 1 and 3 type arguments.`
+2. `mobile/src/services/apiClient.ts(151,22)`: `error TS2314: Generic type 'ZodType<Output, Def, Input>' requires between 1 and 3 type arguments.`
+3. `mobile/src/services/apiClient.ts(159,22)`: `error TS2314: Generic type 'ZodType<Output, Def, Input>' requires between 1 and 3 type arguments.`
+4. `mobile/src/services/apiClient.ts(167,24)`: `error TS2314: Generic type 'ZodType<Output, Def, Input>' requires between 1 and 3 type arguments.`
+5. `mobile/src/services/mockGeminiService.ts(45,71)`: `error TS2339: Property 'expectedQuestionIndex' does not exist on type 'AdaptiveAnswerSubmissionRequest'.`
+6. `mobile/src/services/mockGeminiService.ts(61,42)`: `error TS2345: Argument of type '{ questionId: string; expectedQuestionIndex: number; answerKind: "answered"; answerText: string; }' is not assignable to parameter of type 'never'.`
+7. `mobile/src/services/mockGeminiService.ts(68,17)`: `error TS2339: Property 'completedTurnId' does not exist on type 'AnswerSubmissionResponse'.`
+8. `mobile/src/services/mockGeminiService.ts(108,3)`: `error TS2719: Two different types with this name exist, but they are unrelated.`
+
+### Root Causes
+- **Generic Type Parameter Mismatch**: `mobile/src/services/apiClient.ts` typed schemas using `schema: z.ZodType<T>`, which requires 3 type arguments in Zod (`z.ZodType<Output, Def, Input>`).
+- **Obsolete V1 Session Parameters**: `mobile/src/services/mockGeminiService.ts` called `submitAdaptiveTurn` and `submitAnswerAndGetNext` passing obsolete `expectedQuestionIndex` and expecting `completedTurnId` from V1 schemas instead of mandatory V2 concurrency fields (`expectedSessionVersion: number`, `clientSubmissionId: string`).
+
+### Corrective Action Plan (P0-2D)
+1. Update `mobile/src/services/apiClient.ts` to use schema-first generic type constraints:
+   ```ts
+   async function request<TSchema extends z.ZodTypeAny>(
+     endpoint: string,
+     schema: TSchema,
+     options?: RequestOptions
+   ): Promise<z.output<TSchema>>
+   ```
+2. Update `mobile/src/services/mockGeminiService.ts` to align obsolete internal mobile service method signatures with V2 shared contracts (`expectedSessionVersion`, `clientSubmissionId`) while keeping native mobile Interview screen disabled.
+3. Verify `cd mobile && npm ci && npx tsc --noEmit && npm run lint` passes 100%.
+
