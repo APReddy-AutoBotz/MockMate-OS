@@ -478,7 +478,7 @@ export const DimensionScoreSchema = z.discriminatedUnion('score_status', [
     anchor_score: z.number().min(0).max(4),
     normalized_score: z.number().min(0).max(100),
     reason: z.string(),
-    evidence: z.array(z.string()),
+    evidence: z.array(z.string()).optional().default([]),
     evidenceReferences: z.array(EvidenceReferenceSchema).min(2),
     trajectory: TrajectoryStatusSchema,
     distinctTurnCount: z.number().int().min(2),
