@@ -1,5 +1,5 @@
 import { UserProfile } from "../types/ui";
-import React, { memo, useCallback } from 'react';
+import React, { memo, useCallback, useState } from 'react';
 import { FinalReport, QuestionPerformance, AdvisoryPanel, DimensionScore, ChallengeRecoveryRecord } from "mockmate-shared";
 import { generatePdf } from '../services/pdfGenerator';
 import { motion } from 'framer-motion';
@@ -284,7 +284,7 @@ interface InterviewReportProps {
 }
 
 export const InterviewReport: React.FC<InterviewReportProps> = ({ report, onRestart, userProfile, sessionId }) => {
-  const [isDownloading, setIsDownloading] = React.useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const handleDownloadPdf = useCallback(async () => {
     setIsDownloading(true);
