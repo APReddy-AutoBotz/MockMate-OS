@@ -382,23 +382,25 @@ try {
   }
 
   // Authenticate on Login modal
-  const quickBtn = page.locator('button:has-text("Quick access")').first();
-  if (await quickBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await quickBtn.click({ force: true });
-  } else {
-    const signupToggle = page.locator('button:has-text("Need an account?")').first();
-    if (await signupToggle.isVisible({ timeout: 1500 }).catch(() => false)) {
-      await signupToggle.click({ force: true });
-      await page.waitForTimeout(300);
+  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button'));
+    const quickBtn = btns.find(b => b.innerText.toLowerCase().includes('quick access'));
+    if (quickBtn) {
+      quickBtn.click();
+    } else {
+      const emailInput = document.querySelector('input[type="email"]');
+      const passInput = document.querySelector('input[type="password"]');
+      const submitBtn = document.querySelector('button[type="submit"]');
+      if (emailInput && passInput && submitBtn) {
+        emailInput.value = 'candidate@mockmate.internal';
+        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+        passInput.value = 'password123';
+        passInput.dispatchEvent(new Event('input', { bubbles: true }));
+        submitBtn.click();
+      }
     }
-    const testEmail = `candidate_${Date.now()}@mockmate.internal`;
-    const emailInput = page.locator('input[type="email"]').first();
-    if (await emailInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await emailInput.fill(testEmail);
-      await page.locator('input[type="password"]').first().fill('password123');
-      await page.locator('button[type="submit"]').first().click({ force: true });
-    }
-  }
+  });
 
   const onboardSkipBtn = await page.waitForSelector('button:has-text("Skip"), button:has-text("Complete")', { timeout: 3000 }).catch(() => null);
   if (onboardSkipBtn) {
