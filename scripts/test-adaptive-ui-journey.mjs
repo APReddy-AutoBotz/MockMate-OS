@@ -396,7 +396,7 @@ try {
   }
 
   // Ensure Hub is rendered
-  await page.getByRole('heading', { name: 'Mock interview' }).waitFor({ state: 'visible', timeout: 20000 });
+  await page.getByRole('heading', { name: 'Mock interview', exact: true }).first().waitFor({ state: 'visible', timeout: 20000 });
 
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
