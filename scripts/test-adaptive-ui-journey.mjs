@@ -407,26 +407,23 @@ try {
     }));
   });
 
-  // Wait for Hub
-  try {
-    await page.waitForSelector('button:has-text("Mock interview"), button:has-text("Start interview practice")', { timeout: 15000 });
-  } catch (err) {
-    const text = await page.evaluate(() => document.body.innerText).catch(() => 'UNABLE_TO_GET_BODY_TEXT');
-    console.error('[Adaptive UI Journey Debug] Hub selector timed out. Current body innerText:\n' + text);
-    throw err;
-  }
+  // Ensure Hub is rendered
+  await page.waitForSelector('h3:has-text("Mock interview")', { timeout: 20000 });
 
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
   await page.waitForTimeout(1000);
-
+  
   let attempts = 0;
   while (!(await page.locator('textarea').isVisible({ timeout: 1000 }).catch(() => false)) && attempts < 10) {
     attempts++;
     await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find(b => b.innerText.includes('Mock interview') || b.innerText.includes('Start interview practice'));
-      if (target) target.click();
+      const h3s = Array.from(document.querySelectorAll('h3'));
+      const mockH3 = h3s.find(h => h.innerText.includes('Mock interview'));
+      if (mockH3) {
+        const cardBtn = mockH3.closest('button');
+        if (cardBtn) cardBtn.click();
+      }
     });
     await page.waitForTimeout(500);
   }
