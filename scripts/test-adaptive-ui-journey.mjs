@@ -363,16 +363,14 @@ try {
   const startBtn = page.getByRole('button', { name: /start free|start free practice/i }).first();
   if (await startBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
     await startBtn.click({ force: true });
-    await page.waitForTimeout(500);
   }
 
-  const emailInput = page.locator('input[type="email"]');
-  if (await emailInput.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await emailInput.fill('candidate@mockmate.internal');
-    await page.locator('input[type="password"]').fill('password123');
-    await page.getByRole('button', { name: /sign in|start practice/i }).first().click({ force: true });
-    await page.waitForTimeout(1000);
-  }
+  // Wait for login form inputs to be ready
+  await page.waitForSelector('input[type="email"]', { timeout: 10000 });
+  await page.locator('input[type="email"]').fill('candidate@mockmate.internal');
+  await page.locator('input[type="password"]').fill('password123');
+  await page.getByRole('button', { name: /sign in|start practice/i }).first().click({ force: true });
+  await page.waitForTimeout(1000);
 
   // Handle optional onboarding if shown
   const onboardSkipBtn = page.getByRole('button', { name: /skip for now|complete|continue|get started/i }).first();
