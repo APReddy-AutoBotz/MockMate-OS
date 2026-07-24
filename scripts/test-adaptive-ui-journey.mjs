@@ -419,7 +419,7 @@ try {
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
   await page.waitForTimeout(1000);
-  
+
   let attempts = 0;
   while (!(await page.locator('textarea').isVisible({ timeout: 1000 }).catch(() => false)) && attempts < 10) {
     attempts++;
