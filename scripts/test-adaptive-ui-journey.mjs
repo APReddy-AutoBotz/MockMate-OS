@@ -419,7 +419,7 @@ try {
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
   await page.waitForTimeout(1000);
-  const interviewCard = page.locator('text="Start interview practice"').first();
+  const interviewCard = page.getByText('Start interview practice').first();
   await interviewCard.click({ force: true });
 
   // Fallback click if Framer Motion transition did not trigger on first click
