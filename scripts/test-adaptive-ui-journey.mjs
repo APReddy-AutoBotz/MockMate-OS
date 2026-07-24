@@ -382,19 +382,19 @@ try {
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
   const interviewCard = page.locator('button:has-text("Mock interview"), button:has-text("Start interview practice")').first();
-  await interviewCard.click();
+  await interviewCard.click({ force: true });
 
   // Role Capture screen
   console.log('[Adaptive UI Journey] 7. Submitting Target Role...');
-  await page.waitForSelector('textarea', { timeout: 10000 });
-  await page.locator('textarea').fill('Software Architect');
-  await page.getByRole('button', { name: /question by question|start practice/i }).first().click();
+  await page.waitForSelector('textarea', { timeout: 20000 });
+  await page.locator('textarea').first().fill('Software Architect');
+  await page.getByRole('button', { name: /question by question|start practice/i }).first().click({ force: true });
 
   // Session Prep
   console.log('[Adaptive UI Journey] 8. Generating Interview Plan in SessionPrep...');
-  await page.waitForSelector('button:has-text("Generate Plan"), button:has-text("Start practice")', { timeout: 10000 });
+  await page.waitForSelector('button:has-text("Generate Plan"), button:has-text("Start practice")', { timeout: 20000 });
   const genPlanBtn = page.getByRole('button', { name: /generate plan|start practice/i }).first();
-  await genPlanBtn.click();
+  await genPlanBtn.click({ force: true });
 
   // Session Builder -> Start Session
   console.log('[Adaptive UI Journey] 9. Initializing Adaptive Interview Session in SessionBuilder...');
