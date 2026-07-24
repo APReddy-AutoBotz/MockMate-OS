@@ -352,9 +352,8 @@ try {
   });
   const page = await context.newPage();
 
-  console.log(`[Adaptive UI Journey] 4. Navigating to ${webBase}...`);
-  await page.goto(webBase, { waitUntil: 'domcontentloaded', timeout: 15000 });
-  await page.evaluate(() => {
+  // Add init script so localStorage profile is set BEFORE React mounts
+  await context.addInitScript(() => {
     localStorage.setItem('mockmate_user_profile', JSON.stringify({
       name: 'Test Candidate',
       targetRole: 'Software Architect',
@@ -363,46 +362,38 @@ try {
     }));
   });
 
+  console.log(`[Adaptive UI Journey] 4. Navigating to ${webBase}...`);
+  await page.goto(webBase, { waitUntil: 'domcontentloaded', timeout: 15000 });
+
   // Authenticate & enter Hub
   console.log('[Adaptive UI Journey] 5. Entering practice hub...');
-  // Allow SplashScreen (2.5s duration) to complete
   await page.waitForTimeout(3000);
 
   const startBtn = page.getByRole('button', { name: /start free|start free practice/i }).first();
-  if (await startBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+  if (await startBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
     await startBtn.click({ force: true });
+    await page.waitForTimeout(1000);
   }
 
-  // Wait for Login modal or Hub
-  await page.waitForSelector('button:has-text("Quick access"), input[type="email"], h3:has-text("Mock interview")', { timeout: 15000 }).catch(() => null);
-
   const quickBtn = page.locator('button:has-text("Quick access")').first();
-  if (await quickBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+  if (await quickBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
     await quickBtn.click({ force: true });
   } else {
     const emailField = page.locator('input[type="email"]').first();
-    if (await emailField.isVisible({ timeout: 4000 }).catch(() => false)) {
+    if (await emailField.isVisible({ timeout: 2000 }).catch(() => false)) {
       await emailField.fill('candidate@mockmate.internal');
       await page.locator('input[type="password"]').fill('password123');
       await page.getByRole('button', { name: /sign in|start practice/i }).first().click({ force: true });
     }
   }
 
-  // Handle optional onboarding if shown
-  const onboardSkipBtn = page.getByRole('button', { name: /skip for now|complete|continue|get started/i }).first();
-  if (await onboardSkipBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+  // Wait up to 15s for EITHER Hub or Onboarding
+  await page.waitForSelector('h3:has-text("Mock interview"), button:has-text("Skip"), button:has-text("Complete")', { timeout: 15000 }).catch(() => null);
+
+  const onboardSkipBtn = page.getByRole('button', { name: /skip|complete|continue|get started/i }).first();
+  if (await onboardSkipBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
     await onboardSkipBtn.click({ force: true });
   }
-
-  // Ensure localStorage contains profile
-  await page.evaluate(() => {
-    localStorage.setItem('mockmate_user_profile', JSON.stringify({
-      name: 'Test Candidate',
-      targetRole: 'Software Architect',
-      experienceLevel: 'mid',
-      primaryGoal: 'skill_building'
-    }));
-  });
 
   // Ensure Hub is rendered
   await page.waitForSelector('h3:has-text("Mock interview")', { timeout: 20000 });
