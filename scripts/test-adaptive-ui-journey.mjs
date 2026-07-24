@@ -388,7 +388,7 @@ try {
   }
 
   // Wait up to 15s for EITHER Hub or Onboarding
-  await page.waitForSelector('h3:has-text("Mock interview"), button:has-text("Skip"), button:has-text("Complete")', { timeout: 15000 }).catch(() => null);
+  await page.waitForSelector('text="Mock interview", button:has-text("Skip"), button:has-text("Complete")', { timeout: 15000 }).catch(() => null);
 
   const onboardSkipBtn = page.getByRole('button', { name: /skip|complete|continue|get started/i }).first();
   if (await onboardSkipBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -396,7 +396,7 @@ try {
   }
 
   // Ensure Hub is rendered
-  await page.waitForSelector('h3:has-text("Mock interview")', { timeout: 20000 });
+  await page.getByRole('heading', { name: 'Mock interview' }).waitFor({ state: 'visible', timeout: 20000 });
 
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
