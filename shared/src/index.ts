@@ -594,6 +594,7 @@ export const QuestionPerformanceSchema = z.object({
   feedback: z.string(),
   strengths: z.array(z.string()).optional(),
   improvements: z.array(z.string()).optional(),
+  turnId: z.string().optional(),
 }).strict();
 export type QuestionPerformance = z.infer<typeof QuestionPerformanceSchema>;
 
