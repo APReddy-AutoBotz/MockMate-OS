@@ -386,6 +386,11 @@ try {
   if (await quickBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
     await quickBtn.click({ force: true });
   } else {
+    const signupToggle = page.locator('button:has-text("Need an account?")').first();
+    if (await signupToggle.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await signupToggle.click({ force: true });
+      await page.waitForTimeout(300);
+    }
     const emailInput = page.locator('input[type="email"]').first();
     if (await emailInput.isVisible({ timeout: 2000 }).catch(() => false)) {
       await emailInput.fill('candidate@mockmate.internal');
