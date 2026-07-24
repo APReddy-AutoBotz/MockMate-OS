@@ -419,8 +419,11 @@ try {
   // Navigate to Interview Practice
   console.log('[Adaptive UI Journey] 6. Navigating to Mock Interview via visible UI control...');
   await page.waitForTimeout(1000);
-  const interviewCard = page.getByText('Start interview practice').first();
-  await interviewCard.click({ force: true });
+  await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button'));
+    const target = btns.find(b => b.innerText.includes('Mock interview') || b.innerText.includes('Start interview practice'));
+    if (target) target.click();
+  });
 
   // Fallback click if Framer Motion transition did not trigger on first click
   if (!(await page.locator('textarea').isVisible({ timeout: 2000 }).catch(() => false))) {
