@@ -375,11 +375,21 @@ try {
   }
 
   // Handle optional onboarding if shown
-  const onboardFinishBtn = page.getByRole('button', { name: /complete|continue|get started/i }).first();
-  if (await onboardFinishBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await onboardFinishBtn.click({ force: true });
-    await page.waitForTimeout(500);
+  const onboardSkipBtn = page.getByRole('button', { name: /skip for now|complete|continue|get started/i }).first();
+  if (await onboardSkipBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+    await onboardSkipBtn.click({ force: true });
+    await page.waitForTimeout(1000);
   }
+
+  // Ensure localStorage contains profile and ensure Hub state
+  await page.evaluate(() => {
+    localStorage.setItem('mockmate_user_profile', JSON.stringify({
+      name: 'Test Candidate',
+      targetRole: 'Software Architect',
+      experienceLevel: 'mid',
+      primaryGoal: 'skill_building'
+    }));
+  });
 
   // Wait for Hub
   await page.waitForSelector('button:has-text("Mock interview"), button:has-text("Start interview practice")', { timeout: 20000 });
