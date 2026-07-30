@@ -122,7 +122,13 @@ describe('Shared Canonical Runtime Contracts', () => {
             normalized_score: 0,
             reason: 'Zero score evaluated',
             evidence: ['Tested'],
-            confidence: 'high'
+            confidence: 'high',
+            evidenceReferences: [
+              { turnId: 't1', excerpt: 'ex1', stage: 'framing', questionKind: 'root', signal: 'sig1', anchorScore: 0, confidence: 'high' },
+              { turnId: 't2', excerpt: 'ex2', stage: 'exploration', questionKind: 'probe', signal: 'sig2', anchorScore: 0, confidence: 'high' },
+            ],
+            trajectory: 'stable',
+            distinctTurnCount: 2,
           },
           {
             dimension: 'TRADEOFF_CLARITY',
@@ -131,7 +137,10 @@ describe('Shared Canonical Runtime Contracts', () => {
             normalized_score: null,
             reason: 'Not tested',
             evidence: [],
-            confidence: 'low'
+            confidence: 'low',
+            evidenceReferences: [],
+            trajectory: null,
+            distinctTurnCount: 0,
           }
         ]
       },

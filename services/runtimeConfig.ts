@@ -41,14 +41,20 @@ export function normalizeApiOrigin(rawInput?: string, mode: { isProd?: boolean; 
 }
 
 export function getRuntimeConfig(): RuntimeConfig {
-  const isTest = NODE_ENV === 'test';
-  const isProduction = NODE_ENV === 'production';
-  const isDevelopment = NODE_ENV === 'development' || (!isProduction && !isTest);
+  const envNodeEnv = process.env.NODE_ENV || 'development';
+  const envApiUrl = process.env.VITE_API_URL !== undefined ? process.env.VITE_API_URL : VITE_API_URL;
+  const envSupabaseUrl = process.env.VITE_SUPABASE_URL !== undefined ? process.env.VITE_SUPABASE_URL : VITE_SUPABASE_URL;
+  const envSupabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY !== undefined ? process.env.VITE_SUPABASE_ANON_KEY : VITE_SUPABASE_ANON_KEY;
+  const envEnableDevAuth = process.env.VITE_ENABLE_DEV_AUTH !== undefined ? process.env.VITE_ENABLE_DEV_AUTH === 'true' : VITE_ENABLE_DEV_AUTH;
 
-  const { apiOrigin, apiBase } = normalizeApiOrigin(VITE_API_URL, { isProd: isProduction, isDev: isDevelopment, isTest });
+  const isTest = envNodeEnv === 'test';
+  const isProduction = envNodeEnv === 'production';
+  const isDevelopment = envNodeEnv === 'development' || (!isProduction && !isTest);
 
-  const supabaseUrl = VITE_SUPABASE_URL || (isTest ? 'https://dummy.supabase.co' : '');
-  const supabaseAnonKey = VITE_SUPABASE_ANON_KEY || (isTest ? 'dummy-anon-key' : '');
+  const { apiOrigin, apiBase } = normalizeApiOrigin(envApiUrl, { isProd: isProduction, isDev: isDevelopment, isTest });
+
+  const supabaseUrl = envSupabaseUrl || (isTest ? 'https://dummy.supabase.co' : '');
+  const supabaseAnonKey = envSupabaseAnonKey || (isTest ? 'dummy-anon-key' : '');
 
   return {
     apiOrigin,
@@ -56,7 +62,7 @@ export function getRuntimeConfig(): RuntimeConfig {
     apiUrl: apiBase,
     supabaseUrl,
     supabaseAnonKey,
-    enableDevAuth: VITE_ENABLE_DEV_AUTH,
+    enableDevAuth: envEnableDevAuth,
     isProduction,
     isDevelopment,
     isTest,

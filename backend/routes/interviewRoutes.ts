@@ -6,6 +6,7 @@ import * as sessionService from '../services/sessionService';
 import { 
   InterviewSessionStartRequestSchema, 
   AnswerSubmissionRequestSchema,
+  AdaptiveAnswerSubmissionRequestSchema,
   CalibrateRequestSchema,
   CalibrateResponseSchema,
   PlanGenerationRequestSchema,
@@ -81,6 +82,30 @@ router.post('/sessions/:sessionId/answers', enforceUsageLimit('interview_questio
     const userId = req.user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
+    const session = await sessionService.getSession(userId, sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    // For engine_version='v2' sessions, strictly require Adaptive submission payload
+    if (session.engineVersion === 'v2' || req.body?.clientSubmissionId || req.body?.expectedSessionVersion !== undefined) {
+      const adaptiveParsed = AdaptiveAnswerSubmissionRequestSchema.safeParse(req.body);
+      if (!adaptiveParsed.success) {
+        return res.status(422).json({ error: 'Invalid adaptive answer submission payload', details: adaptiveParsed.error.issues });
+      }
+
+      const { questionId, expectedSessionVersion, clientSubmissionId, answerKind, answerText } = adaptiveParsed.data;
+      const result = await sessionService.submitAdaptiveTurn(
+        userId,
+        sessionId,
+        questionId,
+        expectedSessionVersion,
+        clientSubmissionId,
+        answerKind,
+        answerText ?? undefined
+      );
+      return res.json(result);
+    }
+
+    // Fall back to standard Answer submission ONLY for legacy v1 sessions
     const parsed = AnswerSubmissionRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(422).json({ error: 'Invalid answer submission payload', details: parsed.error.issues });
@@ -88,11 +113,11 @@ router.post('/sessions/:sessionId/answers', enforceUsageLimit('interview_questio
 
     const { questionId, expectedQuestionIndex, answerKind, answerText } = parsed.data;
     const result = await sessionService.submitAnswer(
-      userId, 
-      sessionId, 
-      questionId, 
-      expectedQuestionIndex, 
-      answerKind, 
+      userId,
+      sessionId,
+      questionId,
+      expectedQuestionIndex,
+      answerKind,
       answerText
     );
     res.json(result);
@@ -114,6 +139,12 @@ router.post('/sessions/:sessionId/report', async (req: any, res) => {
     const userId = req.user?.uid;
     if (!sessionId || !userId) return res.status(400).json({ error: 'Missing sessionId' });
     
+    const session = await sessionService.getSession(userId, sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (session.status === 'active') {
+      return res.status(409).json({ error: 'Session is active and not in awaiting_report status' });
+    }
+
     const result = await aiService.generateAuthoritativeReport(userId, sessionId);
     res.json(result);
   } catch (error: any) {
