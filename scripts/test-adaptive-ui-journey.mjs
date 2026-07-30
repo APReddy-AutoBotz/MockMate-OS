@@ -394,6 +394,20 @@ try {
       await emailInput.fill('candidate@mockmate.internal');
       await passInput.fill('password123');
       await submitBtn.click({ force: true });
+      await page.waitForTimeout(1000);
+
+      const isInvalid = await page.locator('text=/invalid email/i').isVisible({ timeout: 1000 }).catch(() => false);
+      if (isInvalid) {
+        console.log('[Adaptive UI Journey] Sign in failed, switching to Register...');
+        const signUpToggle = page.locator('button', { hasText: /sign up/i }).first();
+        if (await signUpToggle.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await signUpToggle.click({ force: true });
+          await page.waitForTimeout(500);
+          await emailInput.fill('candidate@mockmate.internal');
+          await passInput.fill('password123');
+          await submitBtn.click({ force: true });
+        }
+      }
     }
   }
 
