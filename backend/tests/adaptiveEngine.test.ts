@@ -13,7 +13,7 @@ import { MODE_POLICIES, getModePolicy } from '../config/modePolicies';
 import { APPROVED_DIMENSIONS } from '../config/evaluationConfig';
 import { sanitizeAndVerifyEvaluation, isExactSubstring, normalizeWhitespace } from '../services/turnEvaluatorService';
 import { computeAdaptiveDecision, constructNextQuestion } from '../services/adaptiveInterviewController';
-import { aggregateTurnEvidence } from '../services/evidenceAggregationService';
+import { aggregateTurnEvidence, generateChallengeRecoveryTimeline } from '../services/evidenceAggregationService';
 
 describe('P0-2 Adaptive Engine Shared Contracts & Mode Policies', () => {
   it('enforces strict AdaptivePolicy bounds', () => {

@@ -985,8 +985,9 @@ describe('Backend Express API & Route Parity Tests', () => {
         turnEvaluation: {
           evaluationStatus: 'evaluated' as const,
           answerSummary: 'Basic framing.',
-          observations: [{ dimension: 'PROBLEM_FRAMING' as const, anchorScore: 2 as const, confidence: 'high' as const, evidenceExcerpt: 'hash table', signal: 'Basic store', stage: 'framing' as const, turnKind: 'root' as const }],
+          observations: [{ dimension: 'PROBLEM_FRAMING' as const, anchorScore: 2 as const, confidence: 'high' as const, evidenceExcerpt: 'hash table', signal: 'Basic store', rationale: 'Basic store design rationale.', stage: 'framing' as const, turnKind: 'root' as const }],
           missingSignals: [],
+          recommendedProbe: null,
         },
       },
       {
@@ -1002,8 +1003,9 @@ describe('Backend Express API & Route Parity Tests', () => {
         turnEvaluation: {
           evaluationStatus: 'evaluated' as const,
           answerSummary: 'Challenge pushback response.',
-          observations: [{ dimension: 'SYSTEMS_THINKING' as const, anchorScore: 3 as const, confidence: 'high' as const, evidenceExcerpt: 'write-behind caching', signal: 'Buffered writes', stage: 'exploration' as const, turnKind: 'challenge' as const }],
+          observations: [{ dimension: 'SYSTEMS_THINKING' as const, anchorScore: 3 as const, confidence: 'high' as const, evidenceExcerpt: 'write-behind caching', signal: 'Buffered writes', rationale: 'Challenge response rationale.', stage: 'exploration' as const, turnKind: 'challenge' as const }],
           missingSignals: [],
+          recommendedProbe: null,
         },
       },
       {
@@ -1018,8 +1020,9 @@ describe('Backend Express API & Route Parity Tests', () => {
         turnEvaluation: {
           evaluationStatus: 'evaluated' as const,
           answerSummary: 'Strong recovery and self-reflection.',
-          observations: [{ dimension: 'RECOVERY_QUALITY' as const, anchorScore: 4 as const, confidence: 'high' as const, evidenceExcerpt: 'non-blocking ring buffers', signal: 'Resilient recovery', stage: 'reflection' as const, turnKind: 'reflection' as const }],
+          observations: [{ dimension: 'RECOVERY_QUALITY' as const, anchorScore: 4 as const, confidence: 'high' as const, evidenceExcerpt: 'non-blocking ring buffers', signal: 'Resilient recovery', rationale: 'Reflection response rationale.', stage: 'reflection' as const, turnKind: 'reflection' as const }],
           missingSignals: [],
+          recommendedProbe: null,
         },
       },
     ];
