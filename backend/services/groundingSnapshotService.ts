@@ -1,0 +1,159 @@
+import {
+  CareerContextSnapshot,
+  GroundingPurpose,
+  CareerContextModule,
+  CareerContextSnapshotSchema,
+  CareerContextItem
+} from 'mockmate-shared';
+import { supabaseAdmin } from '../supabaseAdmin';
+import { projectCareerContext } from './careerContextProjectionService';
+
+export interface CreateSnapshotInput {
+  userId: string;
+  purpose: GroundingPurpose;
+  includedItemIds: string[];
+  excludedItemIds: string[];
+  scope: 'one_time' | 'future_sessions';
+  sourceModules: CareerContextModule[];
+  expectedContextVersion?: number;
+}
+
+export async function createGroundingSnapshot(input: CreateSnapshotInput): Promise<CareerContextSnapshot> {
+  const { userId, purpose, includedItemIds, excludedItemIds, scope, sourceModules } = input;
+  const acknowledgedAt = new Date().toISOString();
+
+  // 1. Load active state version for user
+  let contextVersion = 1;
+  if (supabaseAdmin) {
+    const { data: stateData } = await supabaseAdmin
+      .from('career_context_state')
+      .select('context_version')
+      .eq('user_id', userId)
+      .single();
+    if (stateData) contextVersion = Number(stateData.context_version);
+  }
+
+  // 2. Load specified items (verifying ownership, active status, and non-contact sensitivity)
+  let items: CareerContextItem[] = [];
+  if (supabaseAdmin && includedItemIds.length > 0) {
+    const { data: rawItems, error } = await supabaseAdmin
+      .from('career_context_items')
+      .select('*')
+      .eq('user_id', userId)
+      .in('id', includedItemIds);
+
+    if (!error && rawItems) {
+      items = rawItems
+        .filter(r => r.item_status === 'active' && r.sensitivity !== 'personal_contact' && r.provenance !== 'inferred_pending')
+        .map(mapDbToCareerContextItem);
+    }
+  }
+
+  // 3. Project context & compute conflicts
+  const { projection, conflicts } = projectCareerContext(items);
+
+  const snapshotPayload = {
+    id: `snap_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    userId,
+    purpose,
+    contextVersion,
+    itemIds: items.map(i => i.id),
+    projection,
+    conflicts,
+    consent: {
+      scope,
+      purpose,
+      includedItemIds: items.map(i => i.id),
+      excludedItemIds,
+      sourceModules,
+      acknowledgedAt,
+    },
+    createdAt: acknowledgedAt,
+    sourceModules,
+  };
+
+  const snapshot = CareerContextSnapshotSchema.parse(snapshotPayload);
+
+  // 4. Persist if Supabase available
+  if (supabaseAdmin) {
+    const { error: snapErr } = await supabaseAdmin
+      .from('career_context_snapshots')
+      .insert({
+        id: snapshot.id,
+        user_id: userId,
+        purpose: snapshot.purpose,
+        context_version: snapshot.contextVersion,
+        projection: snapshot.projection,
+        conflicts: snapshot.conflicts,
+        consent: snapshot.consent,
+        source_modules: snapshot.sourceModules,
+        created_at: snapshot.createdAt,
+      });
+
+    if (snapErr) {
+      console.error('[SnapshotService] Failed to insert snapshot:', snapErr.message);
+    } else if (items.length > 0) {
+      const itemRows = items.map((item, idx) => ({
+        snapshot_id: snapshot.id,
+        item_id: item.id,
+        position: idx,
+      }));
+      await supabaseAdmin.from('career_context_snapshot_items').insert(itemRows);
+    }
+  }
+
+  return snapshot;
+}
+
+export async function getSnapshotById(userId: string, snapshotId: string): Promise<CareerContextSnapshot | null> {
+  if (!supabaseAdmin) return null;
+
+  const { data, error } = await supabaseAdmin
+    .from('career_context_snapshots')
+    .select('*')
+    .eq('id', snapshotId)
+    .eq('user_id', userId)
+    .single();
+
+  if (error || !data) return null;
+
+  return CareerContextSnapshotSchema.parse({
+    id: data.id,
+    userId: data.user_id,
+    purpose: data.purpose,
+    contextVersion: Number(data.context_version),
+    projection: data.projection,
+    conflicts: data.conflicts || [],
+    consent: data.consent,
+    createdAt: data.created_at,
+    sourceModules: data.source_modules,
+    itemIds: data.consent?.includedItemIds || [],
+  });
+}
+
+function mapDbToCareerContextItem(r: any): CareerContextItem {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    kind: r.item_kind,
+    canonicalKey: r.canonical_key,
+    label: r.label,
+    value: r.value,
+    source: {
+      module: r.source_module,
+      recordId: r.source_record_id,
+      fieldPath: r.source_path,
+      sourceRevision: r.source_revision,
+      sourceHash: r.source_hash,
+      capturedAt: r.created_at,
+    },
+    exactExcerpt: r.exact_excerpt,
+    provenance: r.provenance,
+    status: r.item_status,
+    sensitivity: r.sensitivity,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    supersededBy: r.superseded_by,
+    userConfirmedAt: r.user_confirmed_at,
+  };
+}
