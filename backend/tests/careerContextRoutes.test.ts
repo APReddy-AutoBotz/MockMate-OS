@@ -143,11 +143,18 @@ app.use(express.json());
 app.use('/api/career-context', careerContextRoutes);
 
 describe('Career Context API Routes (P0-3)', () => {
-  let supabaseSpy: jest.SpyInstance;
+  let origSupabaseAdmin: any;
+
+  beforeAll(() => {
+    origSupabaseAdmin = (supabaseAdminModule as any).supabaseAdmin;
+    (supabaseAdminModule as any).supabaseAdmin = mockSupabaseClient;
+  });
+
+  afterAll(() => {
+    (supabaseAdminModule as any).supabaseAdmin = origSupabaseAdmin;
+  });
 
   beforeEach(() => {
-    supabaseSpy = jest.spyOn(supabaseAdminModule, 'supabaseAdmin', 'get').mockReturnValue(mockSupabaseClient);
-
     mockItems.length = 0;
     mockSnapshots.length = 0;
     mockBridges.length = 0;
@@ -212,10 +219,6 @@ describe('Career Context API Routes (P0-3)', () => {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
-  });
-
-  afterEach(() => {
-    supabaseSpy.mockRestore();
   });
 
   it('1. GET /api/career-context returns state, activeItems, and pendingItems', async () => {
