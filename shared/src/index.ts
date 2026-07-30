@@ -261,6 +261,232 @@ export const AdaptiveSessionStateSchema = z.object({
 export type AdaptiveSessionState = z.infer<typeof AdaptiveSessionStateSchema>;
 
 // ============================================================================
+// P0-3 CAREER CONTEXT & CROSS-MODULE GROUNDING
+// ============================================================================
+
+export const CareerContextModuleSchema = z.enum([
+  'user_profile',
+  'resume',
+  'clearspeak',
+  'interview',
+  'manual',
+]);
+export type CareerContextModule = z.infer<typeof CareerContextModuleSchema>;
+
+export const CareerContextItemKindSchema = z.enum([
+  'target_role',
+  'career_goal',
+  'skill',
+  'experience_claim',
+  'achievement',
+  'project',
+  'education',
+  'certification',
+  'audience_context',
+  'communication_goal',
+  'speaking_challenge',
+  'practiced_vocabulary',
+  'practice_metric',
+  'interview_practice_signal',
+  'development_priority',
+]);
+export type CareerContextItemKind = z.infer<typeof CareerContextItemKindSchema>;
+
+export const CareerContextProvenanceSchema = z.enum([
+  'direct_source',
+  'user_confirmed',
+  'user_edited',
+  'system_observed',
+  'inferred_pending',
+]);
+export type CareerContextProvenance = z.infer<typeof CareerContextProvenanceSchema>;
+
+export const CareerContextItemStatusSchema = z.enum([
+  'active',
+  'pending_confirmation',
+  'superseded',
+  'revoked',
+  'disputed',
+]);
+export type CareerContextItemStatus = z.infer<typeof CareerContextItemStatusSchema>;
+
+export const CareerContextSensitivitySchema = z.enum([
+  'standard',
+  'private',
+  'personal_contact',
+]);
+export type CareerContextSensitivity = z.infer<typeof CareerContextSensitivitySchema>;
+
+export const TextContextValueSchema = z.object({
+  type: z.literal('text'),
+  text: z.string(),
+}).strict();
+export type TextContextValue = z.infer<typeof TextContextValueSchema>;
+
+export const StringListContextValueSchema = z.object({
+  type: z.literal('string_list'),
+  values: z.array(z.string()),
+}).strict();
+export type StringListContextValue = z.infer<typeof StringListContextValueSchema>;
+
+export const MetricContextValueSchema = z.object({
+  type: z.literal('metric'),
+  metric: z.string(),
+  value: z.number(),
+  scale: z.string().nullable(),
+  measuredAt: z.string(),
+}).strict();
+export type MetricContextValue = z.infer<typeof MetricContextValueSchema>;
+
+export const EvidenceContextValueSchema = z.object({
+  type: z.literal('evidence'),
+  summary: z.string(),
+  evidenceReferenceIds: z.array(z.string()),
+}).strict();
+export type EvidenceContextValue = z.infer<typeof EvidenceContextValueSchema>;
+
+export const CareerContextValueSchema = z.discriminatedUnion('type', [
+  TextContextValueSchema,
+  StringListContextValueSchema,
+  MetricContextValueSchema,
+  EvidenceContextValueSchema,
+]);
+export type CareerContextValue = z.infer<typeof CareerContextValueSchema>;
+
+export const CareerContextSourceSchema = z.object({
+  module: CareerContextModuleSchema,
+  recordId: z.string(),
+  fieldPath: z.string(),
+  sourceRevision: z.string(),
+  sourceHash: z.string(),
+  capturedAt: z.string(),
+}).strict();
+export type CareerContextSource = z.infer<typeof CareerContextSourceSchema>;
+
+export const CareerContextItemSchema = z.object({
+  id: z.string(),
+  userId: z.string().optional(),
+  kind: CareerContextItemKindSchema,
+  canonicalKey: z.string().min(1),
+  label: z.string(),
+  value: CareerContextValueSchema,
+  source: CareerContextSourceSchema,
+  exactExcerpt: z.string().nullable().optional(),
+  provenance: CareerContextProvenanceSchema,
+  status: CareerContextItemStatusSchema,
+  sensitivity: CareerContextSensitivitySchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  supersededBy: z.string().nullable().optional(),
+  userConfirmedAt: z.string().nullable().optional(),
+}).strict();
+export type CareerContextItem = z.infer<typeof CareerContextItemSchema>;
+
+export const CareerContextStateSchema = z.object({
+  userId: z.string(),
+  contextVersion: z.number().int(),
+  personalizationEnabled: z.boolean(),
+  updatedAt: z.string(),
+}).strict();
+export type CareerContextState = z.infer<typeof CareerContextStateSchema>;
+
+export const GroundingPurposeSchema = z.enum([
+  'resume_to_interview',
+  'resume_to_clearspeak',
+  'clearspeak_to_interview',
+  'interview_personalization',
+  'general_practice',
+  'manual_selection',
+]);
+export type GroundingPurpose = z.infer<typeof GroundingPurposeSchema>;
+
+export const GroundingConsentSchema = z.object({
+  scope: z.enum(['one_time', 'future_sessions']),
+  purpose: GroundingPurposeSchema,
+  includedItemIds: z.array(z.string()),
+  excludedItemIds: z.array(z.string()),
+  sourceModules: z.array(CareerContextModuleSchema),
+  acknowledgedAt: z.string(),
+}).strict();
+export type GroundingConsent = z.infer<typeof GroundingConsentSchema>;
+
+export const GroundingConflictSchema = z.object({
+  canonicalKey: z.string(),
+  competingItemIds: z.array(z.string()),
+  descriptions: z.array(z.string()),
+  requiresUserChoice: z.boolean(),
+}).strict();
+export type GroundingConflict = z.infer<typeof GroundingConflictSchema>;
+
+export const GroundingProjectionSchema = z.object({
+  targetRole: z.string().nullable().optional(),
+  alternativeTargetRoles: z.array(z.string()).optional(),
+  careerGoals: z.array(z.string()).optional(),
+  skills: z.array(z.string()).optional(),
+  achievements: z.array(z.string()).optional(),
+  experienceClaims: z.array(z.string()).optional(),
+  projects: z.array(z.string()).optional(),
+  audienceContext: z.string().nullable().optional(),
+  communicationGoals: z.array(z.string()).optional(),
+  speakingSupport: z.array(z.string()).optional(),
+  practicedVocabulary: z.array(z.string()).optional(),
+  interviewPracticeSignals: z.array(z.string()).optional(),
+  conflicts: z.array(GroundingConflictSchema).optional(),
+}).strict();
+export type GroundingProjection = z.infer<typeof GroundingProjectionSchema>;
+
+export const CareerContextSnapshotSchema = z.object({
+  id: z.string(),
+  userId: z.string().optional(),
+  purpose: GroundingPurposeSchema,
+  contextVersion: z.number().int(),
+  itemIds: z.array(z.string()),
+  projection: GroundingProjectionSchema,
+  conflicts: z.array(GroundingConflictSchema),
+  consent: GroundingConsentSchema,
+  createdAt: z.string(),
+  sourceModules: z.array(CareerContextModuleSchema),
+}).strict();
+export type CareerContextSnapshot = z.infer<typeof CareerContextSnapshotSchema>;
+
+export const GroundingReferenceSchema = z.object({
+  contextItemId: z.string(),
+  sourceModule: CareerContextModuleSchema,
+  sourceRecordId: z.string(),
+  sourcePath: z.string(),
+  label: z.string(),
+  exactExcerpt: z.string().nullable().optional(),
+  purpose: GroundingPurposeSchema,
+}).strict();
+export type GroundingReference = z.infer<typeof GroundingReferenceSchema>;
+
+export const ModuleBridgeSessionStatusSchema = z.enum([
+  'drafted',
+  'confirmed',
+  'consumed',
+  'cancelled',
+  'expired',
+]);
+export type ModuleBridgeSessionStatus = z.infer<typeof ModuleBridgeSessionStatusSchema>;
+
+export const ModuleBridgeSessionSchema = z.object({
+  id: z.string(),
+  userId: z.string().optional(),
+  sourceModule: CareerContextModuleSchema,
+  targetModule: CareerContextModuleSchema,
+  purpose: GroundingPurposeSchema,
+  snapshotId: z.string(),
+  sourceRecordId: z.string().optional(),
+  targetSessionId: z.string().nullable().optional(),
+  status: ModuleBridgeSessionStatusSchema,
+  clientRequestId: z.string(),
+  createdAt: z.string(),
+  confirmedAt: z.string().nullable().optional(),
+  consumedAt: z.string().nullable().optional(),
+}).strict();
+export type ModuleBridgeSession = z.infer<typeof ModuleBridgeSessionSchema>;
+
+// ============================================================================
 // QUESTION BLUEPRINT & JD INSIGHTS
 // ============================================================================
 
@@ -284,6 +510,7 @@ export const QuestionBlueprintSchema = z.object({
   stage: InterviewStageSchema.optional(),
   targetDimensions: z.array(DimensionKeySchema).optional(),
   challengeEventId: z.string().optional(),
+  groundingReferences: z.array(GroundingReferenceSchema).optional(),
 }).strict();
 export type QuestionBlueprint = z.infer<typeof QuestionBlueprintSchema>;
 
@@ -323,6 +550,7 @@ export function normalizeQuestionBlueprint(raw: any): QuestionBlueprint {
     stage: raw?.stage || 'framing',
     targetDimensions: Array.isArray(raw?.targetDimensions) ? raw.targetDimensions : (Array.isArray(raw?.relatedDimensions) ? raw.relatedDimensions : undefined),
     challengeEventId: raw?.challengeEventId ? String(raw.challengeEventId) : undefined,
+    groundingReferences: Array.isArray(raw?.groundingReferences) ? raw.groundingReferences.map((gr: any) => GroundingReferenceSchema.parse(gr)) : undefined,
   });
 }
 
@@ -338,6 +566,95 @@ export const JDInsightsSchema = z.object({
   competencyWeights: z.record(z.string(), z.number()).optional(),
 }).strict();
 export type JDInsights = z.infer<typeof JDInsightsSchema>;
+
+export const InterviewSetupDraftSchema = z.object({
+  candidateRole: z.string(),
+  intentText: z.string(),
+  selectedPanelIDs: z.array(z.string()),
+  sessionType: z.enum(['structured', 'conversational']),
+  controls: SessionControlsSchema,
+  jdText: z.string().optional(),
+  resumeText: z.string().optional(),
+  groundingRequest: z.object({
+    snapshotId: z.string(),
+    bridgeId: z.string().optional(),
+  }).optional(),
+  bridgeIntent: z.object({
+    sourceModule: CareerContextModuleSchema,
+    sourceRecordId: z.string().optional(),
+    bridgeQuestion: z.string().optional(),
+  }).optional(),
+  draftVersion: z.number().int().default(1),
+}).strict();
+export type InterviewSetupDraft = z.infer<typeof InterviewSetupDraftSchema>;
+
+export function createBlankInterviewSetupDraft(
+  candidateRole: string = 'Software Engineer',
+  intentText: string = 'General practice interview',
+  sessionType: 'structured' | 'conversational' = 'structured',
+  controls?: Partial<SessionControls>
+): InterviewSetupDraft {
+  const defaultControls: SessionControls = {
+    difficulty: 'intermediate',
+    totalQuestions: 4,
+    includeBehavioral: true,
+    includeCoding: false,
+    timePerQuestion: '90s',
+    deliveryMode: 'exam',
+    reasoningMode: 'classic_behavioral',
+    sourceMode: 'job_description',
+    ...controls,
+  };
+  return InterviewSetupDraftSchema.parse({
+    candidateRole,
+    intentText,
+    selectedPanelIDs: ['p1', 'p3'],
+    sessionType,
+    controls: defaultControls,
+    draftVersion: 1,
+  });
+}
+
+export function createResumeGroundedInterviewDraft(
+  snapshotId: string,
+  bridgeId: string,
+  targetRole: string,
+  intentText: string,
+  controls?: Partial<SessionControls>
+): InterviewSetupDraft {
+  const draft = createBlankInterviewSetupDraft(targetRole, intentText, 'structured', controls);
+  return InterviewSetupDraftSchema.parse({
+    ...draft,
+    groundingRequest: {
+      snapshotId,
+      bridgeId,
+    },
+    bridgeIntent: {
+      sourceModule: 'resume',
+    },
+  });
+}
+
+export function createClearSpeakGroundedInterviewDraft(
+  snapshotId: string,
+  bridgeId: string,
+  targetRole: string,
+  bridgeQuestion: string,
+  controls?: Partial<SessionControls>
+): InterviewSetupDraft {
+  const draft = createBlankInterviewSetupDraft(targetRole, bridgeQuestion, 'structured', controls);
+  return InterviewSetupDraftSchema.parse({
+    ...draft,
+    groundingRequest: {
+      snapshotId,
+      bridgeId,
+    },
+    bridgeIntent: {
+      sourceModule: 'clearspeak',
+      bridgeQuestion,
+    },
+  });
+}
 
 // ============================================================================
 // INTERVIEW PLAN & CONTEXT
@@ -363,8 +680,29 @@ export const InterviewSessionContextSchema = z.object({
   sessionType: z.enum(['structured', 'conversational']),
   competencyWeights: z.array(z.unknown()).optional(),
   jdInsights: JDInsightsSchema.optional(),
+  groundingSnapshot: CareerContextSnapshotSchema.optional(),
+  bridgeSessionId: z.string().optional(),
 }).strict();
 export type InterviewSessionContext = z.infer<typeof InterviewSessionContextSchema>;
+
+export function completeInterviewSessionContext(
+  draft: InterviewSetupDraft,
+  plan: InterviewPlan,
+  groundingSnapshot?: CareerContextSnapshot,
+  bridgeSessionId?: string
+): InterviewSessionContext {
+  return InterviewSessionContextSchema.parse({
+    candidateRole: draft.candidateRole,
+    intentText: draft.intentText,
+    selectedPanelIDs: draft.selectedPanelIDs.length > 0 ? draft.selectedPanelIDs : ['p1', 'p3'],
+    controls: draft.controls,
+    interviewPlan: plan,
+    sessionType: draft.sessionType,
+    jdInsights: plan.jdInsights,
+    groundingSnapshot,
+    bridgeSessionId: bridgeSessionId || draft.groundingRequest?.bridgeId,
+  });
+}
 
 export const InterviewTurnSchema = z.object({
   id: z.string(),
