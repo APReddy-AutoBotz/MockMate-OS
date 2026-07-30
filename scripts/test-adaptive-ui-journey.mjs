@@ -6,6 +6,7 @@ import cors from 'cors';
 import { execSync } from 'child_process';
 import { createRequire } from 'module';
 import { chromium } from '@playwright/test';
+import { createServer } from 'vite';
 
 const require = createRequire(import.meta.url);
 const llmGateway = require('../backend/dist/services/llmProviderGateway.js');
@@ -337,48 +338,27 @@ const apiPort = await listenOnAvailablePort(apiServer, 3097);
 const apiBase = `http://127.0.0.1:${apiPort}`;
 console.log(`   Express API server running on ${apiBase}`);
 
-console.log('[Adaptive UI Journey] 2. Building frontend dist for Playwright Chromium UI test...');
-const buildEnv = {
-  ...process.env,
-  VITE_SUPABASE_URL: apiBase,
-  VITE_SUPABASE_ANON_KEY: 'test-anon-key',
-  VITE_API_URL: apiBase,
-  VITE_ENABLE_DEV_AUTH: 'true',
-};
-
-const distDir = path.resolve(process.cwd(), 'dist');
-execSync('npm run build', { stdio: 'inherit', cwd: process.cwd(), env: buildEnv });
-
-const staticServer = http.createServer((req, res) => {
-  let filePath = path.join(distDir, req.url === '/' ? 'index.html' : req.url);
-  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-    filePath = path.join(distDir, 'index.html');
-  }
-
-  const ext = path.extname(filePath);
-  const mimeTypes = {
-    '.html': 'text/html',
-    '.js': 'application/javascript',
-    '.css': 'text/css',
-    '.json': 'application/json',
-    '.png': 'image/png',
-    '.svg': 'image/svg+xml'
-  };
-
-  const contentType = mimeTypes[ext] || 'application/octet-stream';
-  try {
-    const data = fs.readFileSync(filePath);
-    res.writeHead(200, { 'Content-Type': contentType });
-    res.end(data);
-  } catch (err) {
-    res.writeHead(404);
-    res.end();
-  }
+console.log('[Adaptive UI Journey] 2. Starting Vite development server for Playwright Chromium UI test...');
+const viteDevServer = await createServer({
+  configFile: path.resolve(process.cwd(), 'vite.config.ts'),
+  root: process.cwd(),
+  server: {
+    host: '127.0.0.1',
+    port: 4175,
+    strictPort: false,
+  },
+  define: {
+    'process.env.NODE_ENV': JSON.stringify('development'),
+    'process.env.VITE_API_URL': JSON.stringify(apiBase),
+    'process.env.VITE_SUPABASE_URL': JSON.stringify(apiBase),
+    'process.env.VITE_SUPABASE_ANON_KEY': JSON.stringify('test-anon-key'),
+    'process.env.VITE_ENABLE_DEV_AUTH': JSON.stringify('true'),
+  },
 });
-
-const staticPort = await listenOnAvailablePort(staticServer, 4175);
+await viteDevServer.listen();
+const staticPort = viteDevServer.config.server.port;
 const webBase = `http://127.0.0.1:${staticPort}`;
-console.log(`   Static web server running on ${webBase}`);
+console.log(`   Vite development server running on ${webBase}`);
 
 let browser;
 try {
@@ -590,22 +570,13 @@ try {
   console.log('[Adaptive UI Journey] 15. Submitting Turn 3 (challenge recovery) through visible UI...');
   await submitTurnAnswer('To address network partitions, we employ circuit breakers with exponential backoff and fallback read-replicas.');
 
-  // Wait for either the next turn input (Turn 4 Reflection) or report transition
-  console.log('[Adaptive UI Journey] 16. Waiting for next turn (Reflection) or session completion...');
-  const micOrTextarea = page.locator('button[aria-label*="answer"], textarea');
-  const reportHeading = page.locator('text=Reasoning Scorecard');
+  // Hard Assertion 5: Reflection stage appears (no Promise.race allowed!)
+  console.log('[Adaptive UI Journey] 16. Asserting Reflection stage appears (hard assertion)...');
+  await page.waitForSelector('text=Reflection', { timeout: 20000 });
+  console.log('   Hard Assertion 5 PASSED: "Reflection" stage is visible in DOM.');
 
-  await Promise.race([
-    micOrTextarea.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {}),
-    reportHeading.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {}),
-  ]);
-
-  if (await micOrTextarea.isVisible().catch(() => false)) {
-    console.log('[Adaptive UI Journey] 16b. Submitting Turn 4 (reflection answer) through visible UI...');
-    await page.waitForSelector('text=Reflection', { timeout: 5000 });
-    console.log('   Hard Assertion 5 PASSED: "Reflection" stage is visible in DOM.');
-    await submitTurnAnswer('I learned to quantify maximum acceptable latency before choosing consistency models.');
-  }
+  console.log('[Adaptive UI Journey] 16b. Submitting Turn 4 (reflection answer) through visible UI...');
+  await submitTurnAnswer('I learned to quantify maximum acceptable latency before choosing consistency models.');
 
   // Hard Assertion 6: Reasoning Scorecard is visible after completion
   console.log('[Adaptive UI Journey] 17. Waiting for actual InterviewReport component rendering in DOM...');
@@ -621,14 +592,54 @@ try {
   await page.waitForSelector('text=Problem Framing', { timeout: 5000 });
   console.log('   Hard Assertion 7 PASSED: Dimension card "Problem Framing" IS VISIBLE!');
 
-  // Hard Assertion 8 & 9: Exact candidate evidence & View Source navigation
-  console.log('[Adaptive UI Journey] 19. Verifying evidence-reference button and turn scroll navigation...');
-  const evidenceBtn = page.getByRole('button', { name: /view source/i }).first();
+  // Hard Assertion 8 & 9: Exact candidate evidence excerpt & View Source navigation
+  console.log('[Adaptive UI Journey] 19. Verifying exact evidence-reference excerpt and turn scroll navigation (hard assertion)...');
+  const knownExcerpt = 'asynchronous messaging with Kafka';
+
+  // 1. The exact excerpt is visible in the dimension evidence card
+  const excerptElement = page.getByText(knownExcerpt).first();
+  await excerptElement.waitFor({ state: 'visible', timeout: 10000 });
+  console.log(`   Hard Assertion 8a PASSED: Exact candidate evidence excerpt "${knownExcerpt}" is visible in DOM.`);
+
+  // 2. The View Source button belongs to that exact evidence reference
+  const evidenceBtn = page.locator('button', { hasText: knownExcerpt }).first();
   await evidenceBtn.waitFor({ state: 'visible', timeout: 5000 });
-  console.log('   Hard Assertion 8 PASSED: Exact candidate evidence button "View Source" is visible.');
+  console.log('   Hard Assertion 8b PASSED: View Source button belonging to exact evidence reference is visible.');
+
+  // 3. Click View Source button and hard-assert target turn-anchor ID
   await evidenceBtn.click();
-  await page.waitForSelector('[id^="turn-anchor-"]', { timeout: 5000 });
-  console.log('   Hard Assertion 9 PASSED: Clicked View Source and navigated to turn scroll target anchor.');
+  await page.waitForTimeout(500);
+
+  const targetId = await page.evaluate(() => {
+    const highlightedEl = document.querySelector('[id^="turn-anchor-"].ring-2, [id^="turn-anchor-"].ring-brand-primary, [id^="turn-anchor-"]');
+    return highlightedEl ? highlightedEl.id : null;
+  });
+
+  if (!targetId || !targetId.startsWith('turn-anchor-')) {
+    throw new Error(`Target anchor element id starting with 'turn-anchor-' was not found in DOM!`);
+  }
+  console.log(`   Hard Assertion 8c PASSED: Target anchor element id equals "${targetId}".`);
+
+  // 4. Hard-assert target receives highlight styling or scrolled into view
+  await page.waitForFunction((tId) => {
+    const el = document.getElementById(tId);
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const vHeight = (window.innerHeight || document.documentElement.clientHeight);
+    const inViewport = rect.top < vHeight && rect.bottom > 0;
+    const hasHighlightClass = el.classList.contains('ring-2') || el.className.includes('ring-brand-primary');
+    return inViewport || hasHighlightClass;
+  }, targetId, { timeout: 5000 }).catch(async (err) => {
+    const debugInfo = await page.evaluate((tId) => {
+      const el = document.getElementById(tId);
+      if (!el) return { found: false };
+      const rect = el.getBoundingClientRect();
+      return { found: true, rect, className: el.className, windowHeight: window.innerHeight };
+    }, targetId);
+    console.error('[Adaptive UI Journey Debug] Step 19 navigation check failed:', JSON.stringify(debugInfo));
+    throw err;
+  });
+  console.log(`   Hard Assertion 9 PASSED: Clicked View Source for exact excerpt "${knownExcerpt}" -> Target #${targetId} successfully highlighted/scrolled into view.`);
 
   // Hard Assertion 10: Zero hire/no-hire or Interviewer Verdict text in DOM
   console.log('[Adaptive UI Journey] 20. Asserting zero "Interviewer Verdict" or "hire/no-hire" text in DOM...');
@@ -641,6 +652,6 @@ try {
   console.log('[Adaptive UI Journey] ALL REAL ADAPTIVE UI JOURNEY CHECKS PASSED 100%!');
 } finally {
   if (browser) await browser.close();
-  staticServer.close();
+  if (viteDevServer) await viteDevServer.close();
   apiServer.close();
 }

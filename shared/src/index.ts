@@ -562,7 +562,7 @@ export const MicroDrillSchema = z.object({
 export type MicroDrill = z.infer<typeof MicroDrillSchema>;
 
 export const CoachPackSchema = z.object({
-  title: z.string(),
+  title: z.string().trim().min(1),
   redoNow: z.union([RedoNowSchema, z.string()]),
   micro_drills: z.array(z.union([MicroDrillSchema, z.string()])),
 }).strict();

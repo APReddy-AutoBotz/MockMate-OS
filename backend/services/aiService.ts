@@ -678,6 +678,8 @@ REQUIRED OUTPUT SCHEMA (JSON):
   if (
     scorecard.readinessStatus !== 'NOT_ASSESSED' &&
     rawCoachPack &&
+    typeof rawCoachPack.title === 'string' &&
+    rawCoachPack.title.trim().length > 0 &&
     typeof rawCoachPack.redoNow === 'object' &&
     rawCoachPack.redoNow !== null &&
     typeof rawCoachPack.redoNow.question === 'string' &&
@@ -694,7 +696,7 @@ REQUIRED OUTPUT SCHEMA (JSON):
       : [];
 
     coachPack = CoachPackSchema.parse({
-      title: typeof rawCoachPack.title === 'string' && rawCoachPack.title.trim().length > 0 ? rawCoachPack.title.trim() : 'Targeted Practice Drill',
+      title: rawCoachPack.title.trim(),
       redoNow: {
         question: rawCoachPack.redoNow.question.trim(),
         instruction: rawCoachPack.redoNow.instruction.trim(),

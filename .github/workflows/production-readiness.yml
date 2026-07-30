@@ -73,6 +73,9 @@ jobs:
       - name: 11a. Static runtime configuration precheck
         run: npm run test:runtime-config-static
 
+      - name: 11f. Production mock-auth rejection test
+        run: npm run test:production-auth-rejection
+
       - name: 11b. Install Playwright Browsers
         run: npx playwright install --with-deps chromium
 
