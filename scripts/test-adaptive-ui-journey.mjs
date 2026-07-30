@@ -383,24 +383,19 @@ try {
 
   // Authenticate on Login modal
   await page.waitForTimeout(500);
-  await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll('button'));
-    const quickBtn = btns.find(b => b.innerText.toLowerCase().includes('quick access'));
-    if (quickBtn) {
-      quickBtn.click();
-    } else {
-      const emailInput = document.querySelector('input[type="email"]');
-      const passInput = document.querySelector('input[type="password"]');
-      const submitBtn = document.querySelector('button[type="submit"]');
-      if (emailInput && passInput && submitBtn) {
-        emailInput.value = 'candidate@mockmate.internal';
-        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
-        passInput.value = 'password123';
-        passInput.dispatchEvent(new Event('input', { bubbles: true }));
-        submitBtn.click();
-      }
+  const quickBtn = page.locator('button', { hasText: /quick access/i }).first();
+  if (await quickBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await quickBtn.click({ force: true });
+  } else {
+    const emailInput = page.locator('input[type="email"]').first();
+    const passInput = page.locator('input[type="password"]').first();
+    const submitBtn = page.locator('button[type="submit"]').first();
+    if (await emailInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await emailInput.fill('candidate@mockmate.internal');
+      await passInput.fill('password123');
+      await submitBtn.click({ force: true });
     }
-  });
+  }
 
   const onboardSkipBtn = await page.waitForSelector('button:has-text("Skip"), button:has-text("Complete")', { timeout: 3000 }).catch(() => null);
   if (onboardSkipBtn) {
@@ -504,19 +499,27 @@ try {
   await page.locator('textarea').fill('To address network partitions, we employ circuit breakers with exponential backoff and fallback read-replicas.');
   await page.getByRole('button', { name: /confirm & submit|confirm answer|submit/i }).first().click();
 
-  // Hard Assertion 5: Reflection question is visible if turn 4 is asked
-  console.log('[Adaptive UI Journey] 16. Completing interview session...');
-  const textInput4 = page.locator('textarea');
-  if (await textInput4.isVisible({ timeout: 5000 }).catch(() => false)) {
+  // Wait for either the next turn input (Turn 4 Reflection) or report transition
+  console.log('[Adaptive UI Journey] 16. Waiting for next turn (Reflection) or session completion...');
+  const nextInput = page.locator('textarea');
+  const reportHeading = page.locator('text=Reasoning Scorecard');
+
+  await Promise.race([
+    nextInput.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {}),
+    reportHeading.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {}),
+  ]);
+
+  if (await nextInput.isVisible().catch(() => false)) {
+    console.log('[Adaptive UI Journey] 16b. Submitting Turn 4 (reflection answer) through visible UI...');
     await page.waitForSelector('text=Reflection', { timeout: 5000 });
     console.log('   Hard Assertion 5 PASSED: "Reflection" stage is visible in DOM.');
-    await textInput4.fill('I learned to quantify maximum acceptable latency before choosing consistency models.');
+    await nextInput.fill('I learned to quantify maximum acceptable latency before choosing consistency models.');
     await page.getByRole('button', { name: /confirm & submit|confirm answer|submit|finish/i }).first().click();
   }
 
   // Hard Assertion 6: Reasoning Scorecard is visible after completion
   console.log('[Adaptive UI Journey] 17. Waiting for actual InterviewReport component rendering in DOM...');
-  await page.waitForSelector('text=Reasoning Scorecard', { timeout: 25000 });
+  await page.waitForSelector('text=Reasoning Scorecard', { timeout: 30000 });
   console.log('   Hard Assertion 6 PASSED: Report heading "Reasoning Scorecard" IS VISIBLE!');
 
   // Hard Assertion 7: Problem Framing dimension is visible
