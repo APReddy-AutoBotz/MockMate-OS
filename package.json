@@ -92,5 +92,8 @@
   "workspaces": [
     "shared",
     "backend"
-  ]
+  ],
+  "overrides": {
+    "brace-expansion": "^2.0.1"
+  }
 }
