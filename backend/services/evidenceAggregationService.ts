@@ -1,7 +1,6 @@
 import {
   DimensionKey,
   DimensionScore,
-  DimensionScoreStatus,
   ReadinessStatus,
   ReasoningMode,
   ChallengeRecoveryRecord,
