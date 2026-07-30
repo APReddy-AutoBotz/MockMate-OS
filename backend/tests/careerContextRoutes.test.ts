@@ -1,5 +1,6 @@
 import request from 'supertest';
 import express from 'express';
+import * as supabaseAdminModule from '../supabaseAdmin';
 import careerContextRoutes from '../routes/careerContextRoutes';
 
 // Mock Auth Middleware
@@ -10,142 +11,143 @@ jest.mock('../middleware/authMiddleware', () => ({
   },
 }));
 
-// Mock Supabase Admin
 const mockItems: any[] = [];
 const mockSnapshots: any[] = [];
 const mockBridges: any[] = [];
 
-jest.mock('../supabaseAdmin', () => ({
-  supabaseAdmin: {
-    from: (table: string) => {
-      if (table === 'career_context_state') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: async () => ({ data: { user_id: 'test_user_p03', context_version: 1, personalization_enabled: true } }),
-              maybeSingle: async () => ({ data: { user_id: 'test_user_p03', context_version: 1, personalization_enabled: true } }),
+const mockSupabaseClient: any = {
+  from: (table: string) => {
+    if (table === 'career_context_state') {
+      return {
+        select: () => ({
+          eq: () => ({
+            single: async () => ({ data: { user_id: 'test_user_p03', context_version: 1, personalization_enabled: true } }),
+            maybeSingle: async () => ({ data: { user_id: 'test_user_p03', context_version: 1, personalization_enabled: true } }),
+          }),
+        }),
+        upsert: async (row: any) => ({ data: row, error: null }),
+        insert: async (row: any) => ({ data: row, error: null }),
+      };
+    }
+    if (table === 'career_context_items') {
+      return {
+        select: () => ({
+          eq: (_col: string, val: string) => ({
+            order: () => ({ data: mockItems }),
+            single: async () => {
+              const found = mockItems.find(i => i.id === val || i.user_id === val);
+              return { data: found || null, error: found ? null : new Error('Not found') };
+            },
+            in: (_col2: string, vals: string[]) => ({
+              data: mockItems.filter(i => vals.includes(i.id)),
+              error: null,
             }),
           }),
-          upsert: async (row: any) => ({ data: row, error: null }),
-          insert: async (row: any) => ({ data: row, error: null }),
-        };
-      }
-      if (table === 'career_context_items') {
-        return {
-          select: () => ({
-            eq: (_col: string, val: string) => ({
-              order: () => ({ data: mockItems }),
+        }),
+        upsert: async (rows: any) => {
+          const arr = Array.isArray(rows) ? rows : [rows];
+          arr.forEach(r => {
+            const idx = mockItems.findIndex(i => i.id === r.id);
+            if (idx >= 0) mockItems[idx] = r;
+            else mockItems.push(r);
+          });
+          return { error: null };
+        },
+        update: (fields: any) => ({
+          eq: (col1: string, val1: string) => ({
+            eq: (_col2: string, _val2: string) => {
+              const item = mockItems.find(i => i[col1] === val1);
+              if (item) Object.assign(item, fields);
+              return { error: null };
+            },
+          }),
+        }),
+        insert: async (rows: any) => {
+          const arr = Array.isArray(rows) ? rows : [rows];
+          mockItems.push(...arr);
+          return { error: null };
+        },
+      };
+    }
+    if (table === 'career_context_snapshots') {
+      return {
+        insert: async (row: any) => {
+          mockSnapshots.push(row);
+          return { error: null };
+        },
+        select: () => ({
+          eq: (col1: string, val1: string) => ({
+            eq: (_col2: string, _val2: string) => ({
               single: async () => {
-                const found = mockItems.find(i => i.id === val || i.user_id === val);
-                return { data: found || null, error: found ? null : new Error('Not found') };
-              },
-              in: (_col2: string, vals: string[]) => ({
-                data: mockItems.filter(i => vals.includes(i.id)),
-                error: null,
-              }),
-            }),
-          }),
-          upsert: async (rows: any) => {
-            const arr = Array.isArray(rows) ? rows : [rows];
-            arr.forEach(r => {
-              const idx = mockItems.findIndex(i => i.id === r.id);
-              if (idx >= 0) mockItems[idx] = r;
-              else mockItems.push(r);
-            });
-            return { error: null };
-          },
-          update: (fields: any) => ({
-            eq: (col1: string, val1: string) => ({
-              eq: (_col2: string, _val2: string) => {
-                const item = mockItems.find(i => i[col1] === val1);
-                if (item) Object.assign(item, fields);
-                return { error: null };
+                const snap = mockSnapshots.find(s => s[col1] === val1);
+                return { data: snap || null, error: snap ? null : new Error('Not found') };
               },
             }),
           }),
-          insert: async (rows: any) => {
-            const arr = Array.isArray(rows) ? rows : [rows];
-            mockItems.push(...arr);
-            return { error: null };
-          },
-        };
-      }
-      if (table === 'career_context_snapshots') {
-        return {
-          insert: async (row: any) => {
-            mockSnapshots.push(row);
-            return { error: null };
-          },
-          select: () => ({
-            eq: (col1: string, val1: string) => ({
-              eq: (_col2: string, _val2: string) => ({
-                single: async () => {
-                  const snap = mockSnapshots.find(s => s[col1] === val1);
-                  return { data: snap || null, error: snap ? null : new Error('Not found') };
-                },
-              }),
+        }),
+      };
+    }
+    if (table === 'career_context_snapshot_items') {
+      return {
+        insert: async () => ({ error: null }),
+      };
+    }
+    if (table === 'career_context_bridges') {
+      return {
+        select: () => ({
+          eq: (col1: string, val1: string) => ({
+            eq: (col2: string, val2: string) => ({
+              maybeSingle: async () => {
+                const b = mockBridges.find(x => x[col1] === val1 && x[col2] === val2);
+                return { data: b || null };
+              },
+              single: async () => {
+                const b = mockBridges.find(x => x[col1] === val1 && x[col2] === val2);
+                return { data: b || null, error: b ? null : new Error('Not found') };
+              },
             }),
           }),
-        };
-      }
-      if (table === 'career_context_snapshot_items') {
-        return {
-          insert: async () => ({ error: null }),
-        };
-      }
-      if (table === 'career_context_bridges') {
-        return {
+        }),
+        insert: (row: any) => ({
           select: () => ({
-            eq: (col1: string, val1: string) => ({
-              eq: (col2: string, val2: string) => ({
-                maybeSingle: async () => {
-                  const b = mockBridges.find(x => x[col1] === val1 && x[col2] === val2);
-                  return { data: b || null };
-                },
+            single: async () => {
+              mockBridges.push(row);
+              return { data: row, error: null };
+            },
+          }),
+        }),
+        update: (fields: any) => ({
+          eq: (col1: string, val1: string) => ({
+            eq: (_col2: string, _val2: string) => ({
+              select: () => ({
                 single: async () => {
-                  const b = mockBridges.find(x => x[col1] === val1 && x[col2] === val2);
+                  const b = mockBridges.find(x => x[col1] === val1);
+                  if (b) Object.assign(b, fields);
                   return { data: b || null, error: b ? null : new Error('Not found') };
                 },
               }),
             }),
           }),
-          insert: (row: any) => ({
-            select: () => ({
-              single: async () => {
-                mockBridges.push(row);
-                return { data: row, error: null };
-              },
-            }),
-          }),
-          update: (fields: any) => ({
-            eq: (col1: string, val1: string) => ({
-              eq: (_col2: string, _val2: string) => ({
-                select: () => ({
-                  single: async () => {
-                    const b = mockBridges.find(x => x[col1] === val1);
-                    if (b) Object.assign(b, fields);
-                    return { data: b || null, error: b ? null : new Error('Not found') };
-                  },
-                }),
-              }),
-            }),
-          }),
-        };
-      }
-      return {
-        select: () => ({ eq: () => ({ order: () => ({ data: [] }), single: async () => ({ data: null }) }) }),
-        delete: () => ({ eq: async () => ({ error: null }) }),
+        }),
       };
-    },
+    }
+    return {
+      select: () => ({ eq: () => ({ order: () => ({ data: [] }), single: async () => ({ data: null }) }) }),
+      delete: () => ({ eq: async () => ({ error: null }) }),
+    };
   },
-}));
+};
 
 const app = express();
 app.use(express.json());
 app.use('/api/career-context', careerContextRoutes);
 
 describe('Career Context API Routes (P0-3)', () => {
+  let supabaseSpy: jest.SpyInstance;
+
   beforeEach(() => {
+    supabaseSpy = jest.spyOn(supabaseAdminModule, 'supabaseAdmin', 'get').mockReturnValue(mockSupabaseClient);
+
     mockItems.length = 0;
     mockSnapshots.length = 0;
     mockBridges.length = 0;
@@ -210,6 +212,10 @@ describe('Career Context API Routes (P0-3)', () => {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
+  });
+
+  afterEach(() => {
+    supabaseSpy.mockRestore();
   });
 
   it('1. GET /api/career-context returns state, activeItems, and pendingItems', async () => {
