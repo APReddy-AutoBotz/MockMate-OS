@@ -134,6 +134,7 @@ jest.mock('../supabaseAdmin', () => ({
       }
       return {
         select: () => ({ eq: () => ({ order: () => ({ data: [] }), single: async () => ({ data: null }) }) }),
+        delete: () => ({ eq: async () => ({ error: null }) }),
       };
     },
   },
