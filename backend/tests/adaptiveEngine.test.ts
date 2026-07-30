@@ -414,3 +414,130 @@ describe('P0-2 Evidence Aggregation & Scorecard Rules', () => {
     expect(res.readinessStatus).toBe('NOT_ASSESSED');
   });
 });
+
+describe('generateChallengeRecoveryTimeline Evidence Rules', () => {
+  const rootId = 'q_root_1';
+
+  const makeTurn = (overrides: any) => ({
+    id: overrides.id || `turn_${Math.random()}`,
+    turnId: overrides.turnId || overrides.id || `turn_${Math.random()}`,
+    questionKind: overrides.questionKind || 'root',
+    stage: overrides.stage || 'framing',
+    rootQuestionId: overrides.rootQuestionId !== undefined ? overrides.rootQuestionId : rootId,
+    challengeEvent: overrides.challengeEvent,
+    turnEvaluation: overrides.turnEvaluation || {
+      observations: overrides.anchorScore !== undefined ? [
+        { anchorScore: overrides.anchorScore, signal: 'test', rationale: 'test', stage: 'framing', turnKind: 'root' }
+      ] : []
+    }
+  });
+
+  it('1. valid challenge + valid recovery -> record', () => {
+    const turns = [
+      makeTurn({ id: 't1', questionKind: 'root', anchorScore: 2 }),
+      makeTurn({ id: 't2', questionKind: 'challenge', challengeEvent: { type: 'assumption_challenge' } }),
+      makeTurn({ id: 't3', questionKind: 'reflection', stage: 'reflection', anchorScore: 3 })
+    ];
+    const res = generateChallengeRecoveryTimeline(turns);
+    expect(res).toHaveLength(1);
+    expect(res[0].challengeType).toBe('assumption_challenge');
+    expect(res[0].beforeAnchor).toBe(2);
+    expect(res[0].afterAnchor).toBe(3);
+    expect(res[0].trajectory).toBe('improved');
+  });
+
+  it('2. no challengeEvent -> no record', () => {
+    const turns = [
+      makeTurn({ id: 't1', questionKind: 'root', anchorScore: 2 }),
+      makeTurn({ id: 't2', questionKind: 'challenge', challengeEvent: null }),
+      makeTurn({ id: 't3', questionKind: 'reflection', stage: 'reflection', anchorScore: 3 })
+    ];
+    expect(generateChallengeRecoveryTimeline(turns)).toHaveLength(0);
+  });
+
+  it('3. no real challenge type -> no record', () => {
+    const turns = [
+      makeTurn({ id: 't1', questionKind: 'root', anchorScore: 2 }),
+      makeTurn({ id: 't2', questionKind: 'challenge', challengeEvent: { type: '' } }),
+      makeTurn({ id: 't3', questionKind: 'reflection', stage: 'reflection', anchorScore: 3 })
+    ];
+    expect(generateChallengeRecoveryTimeline(turns)).toHaveLength(0);
+  });
+
+  it('4. no rootQuestionId -> no record', () => {
+    const turns = [
+      makeTurn({ id: 't1', questionKind: 'root', anchorScore: 2, rootQuestionId: null }),
+      makeTurn({ id: 't2', questionKind: 'challenge', challengeEvent: { type: 'scale_change' }, rootQuestionId: null }),
+      makeTurn({ id: 't3', questionKind: 'reflection', stage: 'reflection', anchorScore: 3, rootQuestionId: null })
+    ];
+    expect(generateChallengeRecoveryTimeline(turns)).toHaveLength(0);
+  });
+
+  it('5. no pre-challenge scored evidence -> no record', () => {
+    const turns = [
+      makeTurn({ id: 't1', questionKind: 'root' }), // no observations / anchorScore
+      makeTurn({ id: 't2', questionKind: 'challenge', challengeEvent: { type: 'scale_change' } }),
+      makeTurn({ id: 't3', questionKind: 'reflection', stage: 'reflection', anchorScore: 3 })
+    ];
+    expect(generateChallengeRecoveryTimeline(turns)).toHaveLength(0);
+  });
+
+  it('6. challenge and recovery from different roots -> no record', () => {
+    const turns = [
+      makeTurn({ id: 't1', questionKind: 'root', anchorScore: 2, rootQuestionId: 'root_A' }),
+      makeTurn({ id: 't2', questionKind: 'challenge', challengeEvent: { type: 'scale_change' }, rootQuestionId: 'root_A' }),
+      makeTurn({ id: 't3', questionKind: 'reflection', stage: 'reflection', anchorScore: 3, rootQuestionId: 'root_B' })
+    ];
+    expect(generateChallengeRecoveryTimeline(turns)).toHaveLength(0);
+  });
+
+  it('7. recovery before challenge -> no record', () => {
+    const turns = [
+      makeTurn({ id: 't1', questionKind: 'reflection', stage: 'reflection', anchorScore: 3 }),
+      makeTurn({ id: 't2', questionKind: 'challenge', challengeEvent: { type: 'scale_change' } })
+    ];
+    expect(generateChallengeRecoveryTimeline(turns)).toHaveLength(0);
+  });
+
+  it('8. real improvement -> improved', () => {
+    const turns = [
+      makeTurn({ id: 't1', questionKind: 'root', anchorScore: 1 }),
+      makeTurn({ id: 't2', questionKind: 'challenge', challengeEvent: { type: 'scale_change' } }),
+      makeTurn({ id: 't3', questionKind: 'reflection', stage: 'reflection', anchorScore: 3 })
+    ];
+    const res = generateChallengeRecoveryTimeline(turns);
+    expect(res).toHaveLength(1);
+    expect(res[0].trajectory).toBe('improved');
+  });
+
+  it('9. same anchor -> sustained', () => {
+    const turns = [
+      makeTurn({ id: 't1', questionKind: 'root', anchorScore: 3 }),
+      makeTurn({ id: 't2', questionKind: 'challenge', challengeEvent: { type: 'scale_change' } }),
+      makeTurn({ id: 't3', questionKind: 'reflection', stage: 'reflection', anchorScore: 3 })
+    ];
+    const res = generateChallengeRecoveryTimeline(turns);
+    expect(res).toHaveLength(1);
+    expect(res[0].trajectory).toBe('sustained');
+  });
+
+  it('10. lower anchor -> declined', () => {
+    const turns = [
+      makeTurn({ id: 't1', questionKind: 'root', anchorScore: 4 }),
+      makeTurn({ id: 't2', questionKind: 'challenge', challengeEvent: { type: 'scale_change' } }),
+      makeTurn({ id: 't3', questionKind: 'reflection', stage: 'reflection', anchorScore: 2 })
+    ];
+    const res = generateChallengeRecoveryTimeline(turns);
+    expect(res).toHaveLength(1);
+    expect(res[0].trajectory).toBe('declined');
+  });
+
+  it('11. no recovery evidence -> no completed-recovery record', () => {
+    const turns = [
+      makeTurn({ id: 't1', questionKind: 'root', anchorScore: 2 }),
+      makeTurn({ id: 't2', questionKind: 'challenge', challengeEvent: { type: 'scale_change' } }),
+      makeTurn({ id: 't3', questionKind: 'reflection', stage: 'reflection' }) // no observations
+    ];
+    expect(generateChallengeRecoveryTimeline(turns)).toHaveLength(0);
+  });
+});

@@ -1,17 +1,19 @@
 import {
   DimensionKey,
   DimensionScore,
+  DimensionScoreStatus,
+  ReadinessStatus,
+  ReasoningMode,
+  ChallengeRecoveryRecord,
+  ChallengeEventTypeSchema,
   DimensionObservation,
   DimensionEvidenceState,
   EvidenceConfidence,
   TrajectoryStatus,
-  ReadinessStatus,
-  ReasoningMode,
   InterviewStage,
   QuestionKind,
   TurnEvaluation,
   EvidenceReference,
-  ChallengeRecoveryRecord,
 } from 'mockmate-shared';
 import { ACTIVE_DIMENSIONS_BY_MODE, APPROVED_DIMENSIONS } from '../config/evaluationConfig';
 
@@ -263,43 +265,85 @@ export function aggregateTurnEvidence(
   };
 }
 
+function getRootQuestionId(turn: any): string | null {
+  const rootId = turn.rootQuestionId || turn.root_question_id || turn.questionBlueprint?.rootQuestionId;
+  if (rootId && typeof rootId === 'string' && rootId.trim().length > 0) {
+    return rootId.trim();
+  }
+  return null;
+}
+
 export function generateChallengeRecoveryTimeline(turns: any[]): ChallengeRecoveryRecord[] {
   if (!Array.isArray(turns) || turns.length === 0) return [];
-  const validTurns = turns.map(toEvidenceTurn).filter((t): t is NonNullable<ReturnType<typeof toEvidenceTurn>> => t !== null && !!t.turnId);
+
   const timeline: ChallengeRecoveryRecord[] = [];
 
-  for (const turn of validTurns) {
-    if (turn.questionKind !== 'challenge') continue;
-    const rawTurnObj = turns.find(t => (t.turnId || t.id) === turn.turnId);
-    if (!rawTurnObj) continue;
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i];
+    const turnId = turn.turnId || turn.id;
+    const kind = turn.questionKind || turn.questionBlueprint?.questionKind;
+    if (!turnId || kind !== 'challenge') continue;
 
-    const challengeEvent = rawTurnObj.challengeEvent || rawTurnObj.challenge_event;
-    const rootQuestionId = rawTurnObj.rootQuestionId || rawTurnObj.root_question_id || turn.turnId;
-    const challengeType = challengeEvent?.type || rawTurnObj.challengeType || 'counterargument';
+    const challengeEvent = turn.challengeEvent || turn.challenge_event;
+    if (!challengeEvent || typeof challengeEvent !== 'object') continue;
 
-    // Find a later reflection/recovery turn for the same rootQuestionId
-    const recoveryTurn = validTurns.find(t => 
-      t.turnId !== turn.turnId &&
-      (t.questionKind === 'reflection' || t.stage === 'reflection') &&
-      turns.find(r => (r.turnId || r.id) === t.turnId && (r.rootQuestionId || r.root_question_id || r.id) === rootQuestionId)
-    );
+    const rawChallengeType = challengeEvent.type || challengeEvent.challengeType;
+    if (!rawChallengeType || typeof rawChallengeType !== 'string' || rawChallengeType.trim().length === 0) continue;
+    const parsedChallengeType = ChallengeEventTypeSchema.safeParse(rawChallengeType.trim());
+    if (!parsedChallengeType.success) continue;
+    const challengeType = parsedChallengeType.data;
+
+    const rootQuestionId = getRootQuestionId(turn);
+    if (!rootQuestionId) continue;
+
+    // Pre-challenge turns for the SAME root question before index i
+    const preObs: number[] = [];
+    for (let k = 0; k < i; k++) {
+      const prevTurn = turns[k];
+      const prevRootId = getRootQuestionId(prevTurn);
+      if (prevRootId === rootQuestionId) {
+        const obsList = prevTurn.turnEvaluation?.observations || prevTurn.evaluation?.observations || [];
+        for (const obs of obsList) {
+          if (typeof obs.anchorScore === 'number' && !isNaN(obs.anchorScore)) {
+            preObs.push(obs.anchorScore);
+          }
+        }
+      }
+    }
+
+    if (preObs.length === 0) continue;
+    const rawBeforeAnchor = Math.round(preObs.reduce((a, b) => a + b, 0) / preObs.length);
+    const beforeAnchor = (Math.min(4, Math.max(0, rawBeforeAnchor))) as 0 | 1 | 2 | 3 | 4;
+
+    // Find later recovery/reflection turn for SAME root question after index i
+    let recoveryTurn: any = null;
+    for (let j = i + 1; j < turns.length; j++) {
+      const candidate = turns[j];
+      const candKind = candidate.questionKind || candidate.questionBlueprint?.questionKind;
+      const candStage = candidate.stage || candidate.questionBlueprint?.stage;
+      const candRootId = getRootQuestionId(candidate);
+
+      if (candRootId === rootQuestionId && (candKind === 'reflection' || candStage === 'reflection')) {
+        recoveryTurn = candidate;
+        break;
+      }
+    }
 
     if (!recoveryTurn) continue;
+    const recoveryTurnId = recoveryTurn.turnId || recoveryTurn.id;
+    if (!recoveryTurnId) continue;
 
-    // Calculate beforeAnchor from pre-challenge turns for same root question
-    const preChallengeTurns = validTurns.filter(t => t.turnId !== turn.turnId && t.turnId !== recoveryTurn.turnId);
-    const preObs = preChallengeTurns.flatMap(t => t.evaluation?.observations || []).filter(o => typeof o.anchorScore === 'number');
-    const beforeAnchor = preObs.length > 0
-      ? Math.round(preObs.reduce((acc, curr) => acc + curr.anchorScore!, 0) / preObs.length)
-      : 2;
+    const postObsList = recoveryTurn.turnEvaluation?.observations || recoveryTurn.evaluation?.observations || [];
+    const postObs: number[] = [];
+    for (const obs of postObsList) {
+      if (typeof obs.anchorScore === 'number' && !isNaN(obs.anchorScore)) {
+        postObs.push(obs.anchorScore);
+      }
+    }
 
-    // Calculate afterAnchor from recovery turn observations
-    const postObs = (recoveryTurn.evaluation?.observations || []).filter(o => typeof o.anchorScore === 'number');
-    const afterAnchor = postObs.length > 0
-      ? Math.round(postObs.reduce((acc, curr) => acc + curr.anchorScore!, 0) / postObs.length)
-      : null;
-
-    if (afterAnchor === null) continue;
+    if (postObs.length === 0) continue;
+    const rawAfterAnchor = Math.round(postObs.reduce((a, b) => a + b, 0) / postObs.length);
+    const afterAnchor = (Math.min(4, Math.max(0, rawAfterAnchor))) as 0 | 1 | 2 | 3 | 4;
 
     let trajectory: 'improved' | 'sustained' | 'declined' | 'unrecovered' = 'unrecovered';
     if (afterAnchor === 0) {
@@ -314,11 +358,11 @@ export function generateChallengeRecoveryTimeline(turns: any[]): ChallengeRecove
 
     timeline.push({
       rootQuestionId,
-      challengeTurnId: turn.turnId,
-      recoveryTurnId: recoveryTurn.turnId,
+      challengeTurnId: turnId,
+      recoveryTurnId,
       challengeType,
       beforeAnchor,
-      afterAnchor: Math.min(4, Math.max(0, afterAnchor)),
+      afterAnchor,
       trajectory,
     });
   }

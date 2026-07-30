@@ -974,7 +974,9 @@ describe('Backend Express API & Route Parity Tests', () => {
   it('38. Valid challenge + recovery turns generate challengeRecoveryTimeline', async () => {
     const history = [
       {
+        id: '11111111-1111-1111-1111-111111111111',
         turnId: '11111111-1111-1111-1111-111111111111',
+        interviewer: 'Alex',
         rootQuestionId: 'q1',
         questionKind: 'root',
         stage: 'framing',
@@ -987,7 +989,9 @@ describe('Backend Express API & Route Parity Tests', () => {
         },
       },
       {
+        id: '22222222-2222-2222-2222-222222222222',
         turnId: '22222222-2222-2222-2222-222222222222',
+        interviewer: 'Alex',
         rootQuestionId: 'q1',
         questionKind: 'challenge',
         challengeEvent: { type: 'counterargument', text: 'What if disk write latency surges?' },
@@ -1001,7 +1005,9 @@ describe('Backend Express API & Route Parity Tests', () => {
         },
       },
       {
+        id: '33333333-3333-3333-3333-333333333333',
         turnId: '33333333-3333-3333-3333-333333333333',
+        interviewer: 'Alex',
         rootQuestionId: 'q1',
         questionKind: 'reflection',
         stage: 'reflection',

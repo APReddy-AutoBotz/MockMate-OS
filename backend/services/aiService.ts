@@ -19,7 +19,9 @@ import {
   CodeAnalysisResponseSchema,
   CodeAnalysisResponse,
   TranscribeAudioResponseSchema,
-  TranscribeAudioResponse
+  TranscribeAudioResponse,
+  CoachPack,
+  CoachPackSchema
 } from 'mockmate-shared';
 import { PERSONAS_CONFIG } from '../config/personas';
 import { GoogleGenAI } from '@google/genai';
@@ -546,8 +548,6 @@ export const transcribeAudio = async (
 
 // --- Report Generation ---
 
-import { aggregateTurnEvidence } from './evidenceAggregationService';
-
 export const generateFinalReport = async (
   history: InterviewTurn[],
   context: InterviewSessionContext
@@ -658,7 +658,7 @@ REQUIRED OUTPUT SCHEMA (JSON):
       feedback: validFeedback,
       strengths: turn.turnEvaluation?.observations?.filter(o => typeof o.anchorScore === 'number' && o.anchorScore >= 3).map(o => o.signal) || [],
       improvements: turn.turnEvaluation?.missingSignals || [],
-      turnId: turn.turnId || turn.id || undefined,
+      turnId: turn.id || undefined,
     };
   });
 
@@ -672,21 +672,35 @@ REQUIRED OUTPUT SCHEMA (JSON):
 
   const biggestRiskArea = (scorecard.readinessStatus === 'NOT_ASSESSED' || !narrative?.biggestRiskArea) ? null : narrative.biggestRiskArea;
 
-  let coachPack = null;
-  if (scorecard.readinessStatus !== 'NOT_ASSESSED' && narrative?.coachPack && narrative.coachPack.title) {
-    const redoNowRaw = narrative.coachPack.redoNow;
-    const isRedoValid = redoNowRaw && typeof redoNowRaw === 'object' && typeof redoNowRaw.question === 'string' && redoNowRaw.question.trim().length > 0 && typeof redoNowRaw.instruction === 'string' && redoNowRaw.instruction.trim().length > 0;
-    const microDrills = Array.isArray(narrative.coachPack.micro_drills)
-      ? narrative.coachPack.micro_drills.filter((md: any) => md && md.weakness && md.drill_prompt && md.focus_point)
+  const rawCoachPack = narrative?.coachPack;
+  let coachPack: CoachPack | null = null;
+
+  if (
+    scorecard.readinessStatus !== 'NOT_ASSESSED' &&
+    rawCoachPack &&
+    typeof rawCoachPack.redoNow === 'object' &&
+    rawCoachPack.redoNow !== null &&
+    typeof rawCoachPack.redoNow.question === 'string' &&
+    rawCoachPack.redoNow.question.trim().length > 0 &&
+    typeof rawCoachPack.redoNow.instruction === 'string' &&
+    rawCoachPack.redoNow.instruction.trim().length > 0
+  ) {
+    const validatedMicroDrills = Array.isArray(rawCoachPack.micro_drills)
+      ? rawCoachPack.micro_drills.filter((md: any) =>
+          typeof md === 'string'
+            ? md.trim().length > 0
+            : (md && typeof md.weakness === 'string' && typeof md.drill_prompt === 'string' && typeof md.focus_point === 'string')
+        )
       : [];
 
-    if (isRedoValid || microDrills.length > 0) {
-      coachPack = {
-        title: narrative.coachPack.title.trim(),
-        redoNow: isRedoValid ? { question: redoNowRaw!.question.trim(), instruction: redoNowRaw!.instruction.trim() } : null,
-        micro_drills: microDrills,
-      };
-    }
+    coachPack = CoachPackSchema.parse({
+      title: typeof rawCoachPack.title === 'string' && rawCoachPack.title.trim().length > 0 ? rawCoachPack.title.trim() : 'Targeted Practice Drill',
+      redoNow: {
+        question: rawCoachPack.redoNow.question.trim(),
+        instruction: rawCoachPack.redoNow.instruction.trim(),
+      },
+      micro_drills: validatedMicroDrills,
+    });
   }
 
   const challengeRecoveryTimeline = generateChallengeRecoveryTimeline(history);

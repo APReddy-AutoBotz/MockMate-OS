@@ -441,9 +441,26 @@ try {
   const roleSubmitBtn = page.getByRole('button', { name: /question by question|start practice/i }).first();
   await roleSubmitBtn.click({ force: true });
 
-  // Session Prep
-  console.log('[Adaptive UI Journey] 8. Generating Interview Plan in SessionPrep...');
+  // Session Prep - Explicitly select Problem Framing reasoning mode
+  console.log('[Adaptive UI Journey] 8. Selecting Problem Framing mode & Generating Interview Plan...');
   await page.waitForSelector('button:has-text("Generate Plan"), button:has-text("Start practice")', { timeout: 20000 });
+
+  const problemFramingBtn = page.locator('button', { hasText: 'Problem Framing' }).first();
+  await problemFramingBtn.waitFor({ state: 'visible', timeout: 5000 });
+  await problemFramingBtn.click({ force: true });
+  await page.waitForTimeout(300);
+
+  // Hard Assertion 1: Selected control visibly indicates Problem Framing
+  const isProblemFramingSelected = await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button'));
+    const btn = btns.find(b => b.innerText.includes('Problem Framing'));
+    return btn ? (btn.className.includes('border-brand-primary') || btn.className.includes('bg-brand-primary')) : false;
+  });
+  if (!isProblemFramingSelected) {
+    throw new Error('Problem Framing mode button was not visibly selected in SessionPrep UI!');
+  }
+  console.log('   Hard Assertion 1 PASSED: Problem Framing mode button is visibly selected in UI.');
+
   const genPlanBtn = page.getByRole('button', { name: /generate plan|start practice/i }).first();
   await genPlanBtn.click({ force: true });
 
@@ -452,62 +469,77 @@ try {
   await page.waitForSelector('button:has-text("Start Interview"), button:has-text("Initialize Session")', { timeout: 15000 });
   await page.getByRole('button', { name: /start interview|initialize session/i }).first().click();
 
-  // MockSession - Turn 1 (vague answer)
-  console.log('[Adaptive UI Journey] 10. Submitting Turn 1 (vague answer) through visible UI...');
+  // MockSession - Verify Active Session Header
+  console.log('[Adaptive UI Journey] 10. Asserting active session header displays Reasoning Mode: Problem Framing...');
   await page.waitForSelector('textarea', { timeout: 15000 });
+
+  // Hard Assertion 2: Active session header displays Reasoning Mode: Problem Framing
+  await page.waitForSelector('text=/Reasoning Mode:.*problem framing/i', { timeout: 10000 });
+  console.log('   Hard Assertion 2 PASSED: Active session header displays "Reasoning Mode: problem framing".');
+
+  // Turn 1 (vague answer)
+  console.log('[Adaptive UI Journey] 11. Submitting Turn 1 (vague answer) through visible UI...');
   await page.locator('textarea').fill('We use vague messaging queues and databases.');
   await page.getByRole('button', { name: /confirm & submit|confirm answer|submit/i }).first().click();
 
-  // Verify Probe Badge or Probe question text
-  console.log('[Adaptive UI Journey] 11. Asserting Follow-up Probe appears...');
-  await page.waitForSelector('text=Follow-up Probe', { timeout: 15000 }).catch(() => {});
+  // Hard Assertion 3: Follow-up Probe appears
+  console.log('[Adaptive UI Journey] 12. Asserting Follow-up Probe appears (hard assertion)...');
+  await page.waitForSelector('text=Follow-up Probe', { timeout: 15000 });
+  console.log('   Hard Assertion 3 PASSED: "Follow-up Probe" is visible in DOM.');
 
   // Turn 2 (grounded answer)
-  console.log('[Adaptive UI Journey] 12. Submitting Turn 2 (grounded answer) through visible UI...');
+  console.log('[Adaptive UI Journey] 13. Submitting Turn 2 (grounded answer) through visible UI...');
   await page.waitForSelector('textarea', { timeout: 10000 });
   await page.locator('textarea').fill('We implement eventual consistency using asynchronous messaging with Kafka, outbox pattern, and strict idempotency keys.');
   await page.getByRole('button', { name: /confirm & submit|confirm answer|submit/i }).first().click();
 
-  // Verify Challenge Pushback
-  console.log('[Adaptive UI Journey] 13. Asserting Challenge pushback banner appears...');
-  await page.waitForSelector('text=Challenge', { timeout: 15000 }).catch(() => {});
+  // Hard Assertion 4: Challenge pushback banner appears
+  console.log('[Adaptive UI Journey] 14. Asserting Challenge pushback banner appears (hard assertion)...');
+  await page.waitForSelector('text=Challenge', { timeout: 15000 });
+  console.log('   Hard Assertion 4 PASSED: "Challenge" banner is visible in DOM.');
 
   // Turn 3 (challenge response)
-  console.log('[Adaptive UI Journey] 14. Submitting Turn 3 (challenge recovery) through visible UI...');
+  console.log('[Adaptive UI Journey] 15. Submitting Turn 3 (challenge recovery) through visible UI...');
   await page.waitForSelector('textarea', { timeout: 10000 });
   await page.locator('textarea').fill('To address network partitions, we employ circuit breakers with exponential backoff and fallback read-replicas.');
   await page.getByRole('button', { name: /confirm & submit|confirm answer|submit/i }).first().click();
 
-  // Turn 4 (reflection answer) if present
-  console.log('[Adaptive UI Journey] 15. Completing interview session...');
+  // Hard Assertion 5: Reflection question is visible if turn 4 is asked
+  console.log('[Adaptive UI Journey] 16. Completing interview session...');
   const textInput4 = page.locator('textarea');
-  if (await textInput4.isVisible({ timeout: 3000 }).catch(() => false)) {
+  if (await textInput4.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await page.waitForSelector('text=Reflection', { timeout: 5000 });
+    console.log('   Hard Assertion 5 PASSED: "Reflection" stage is visible in DOM.');
     await textInput4.fill('I learned to quantify maximum acceptable latency before choosing consistency models.');
     await page.getByRole('button', { name: /confirm & submit|confirm answer|submit|finish/i }).first().click();
   }
 
-  // Verify Report Component Rendering
-  console.log('[Adaptive UI Journey] 16. Waiting for actual InterviewReport component rendering in DOM...');
+  // Hard Assertion 6: Reasoning Scorecard is visible after completion
+  console.log('[Adaptive UI Journey] 17. Waiting for actual InterviewReport component rendering in DOM...');
   await page.waitForSelector('text=Reasoning Scorecard', { timeout: 25000 });
-  console.log('   Report heading "Reasoning Scorecard" IS VISIBLE!');
+  console.log('   Hard Assertion 6 PASSED: Report heading "Reasoning Scorecard" IS VISIBLE!');
 
-  console.log('[Adaptive UI Journey] 17. Verifying Problem Framing dimension card...');
+  // Hard Assertion 7: Problem Framing dimension is visible
+  console.log('[Adaptive UI Journey] 18. Verifying Problem Framing dimension card...');
   await page.waitForSelector('text=Problem Framing', { timeout: 5000 });
-  console.log('   Dimension card "Problem Framing" IS VISIBLE!');
+  console.log('   Hard Assertion 7 PASSED: Dimension card "Problem Framing" IS VISIBLE!');
 
-  console.log('[Adaptive UI Journey] 18. Verifying evidence-reference button and turn scroll navigation...');
+  // Hard Assertion 8 & 9: Exact candidate evidence & View Source navigation
+  console.log('[Adaptive UI Journey] 19. Verifying evidence-reference button and turn scroll navigation...');
   const evidenceBtn = page.getByRole('button', { name: /view source/i }).first();
   await evidenceBtn.waitFor({ state: 'visible', timeout: 5000 });
+  console.log('   Hard Assertion 8 PASSED: Exact candidate evidence button "View Source" is visible.');
   await evidenceBtn.click();
   await page.waitForSelector('[id^="turn-anchor-"]', { timeout: 5000 });
-  console.log('   Clicked Evidence Reference button and verified turn anchor scroll target.');
+  console.log('   Hard Assertion 9 PASSED: Clicked View Source and navigated to turn scroll target anchor.');
 
-  console.log('[Adaptive UI Journey] 19. Asserting zero "Interviewer Verdict" or "hire/no-hire" text in DOM...');
+  // Hard Assertion 10: Zero hire/no-hire or Interviewer Verdict text in DOM
+  console.log('[Adaptive UI Journey] 20. Asserting zero "Interviewer Verdict" or "hire/no-hire" text in DOM...');
   const pageText = await page.evaluate(() => document.body.innerText);
   if (/Interviewer Verdict/i.test(pageText) || /hire\/no-hire/i.test(pageText) || /hiring recommendation/i.test(pageText)) {
     throw new Error('Forbidden legacy verdict or hiring recommendation text detected in browser DOM!');
   }
-  console.log('   Assertion PASSED: Zero forbidden verdict/hiring text found in rendered browser DOM.');
+  console.log('   Hard Assertion 10 PASSED: Zero forbidden verdict/hiring text found in rendered browser DOM.');
 
   console.log('[Adaptive UI Journey] ALL REAL ADAPTIVE UI JOURNEY CHECKS PASSED 100%!');
 } finally {

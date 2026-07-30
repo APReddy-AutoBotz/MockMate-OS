@@ -119,3 +119,59 @@ The exact-head workflow `30080018496` failed at step `15. Mobile typecheck` (`cd
 2. Update `mobile/src/services/mockGeminiService.ts` to align obsolete internal mobile service method signatures with V2 shared contracts (`expectedSessionVersion`, `clientSubmissionId`) while keeping native mobile Interview screen disabled.
 3. Verify `cd mobile && npm ci && npx tsc --noEmit && npm run lint` passes 100%.
 
+---
+
+## 5. Failed Step & Backend Build Failure (Workflow 30097586974)
+
+### Failure Description
+The exact-head workflow `30097586974` failed at step `10. Backend build` (`cd backend && npm run build`).
+
+### Workflow Details
+- **Workflow ID**: `30097586974`
+- **Branch**: `antigravity/p0-2-future-ready-interview-engine`
+- **Commit SHA**: `a5f5f10d1e5343f42bb23c44aeaafebe669b0317`
+- **Status**: `FAILURE`
+- **Failed Gate**: `10. Backend build` (All subsequent gates 11a through 22 were skipped)
+
+### Exact TypeScript Diagnostic Messages
+1. `services/aiService.ts(3,10)`: `error TS2300: Duplicate identifier 'aggregateTurnEvidence'.`
+   - `services/aiService.ts(1,10)`: `'aggregateTurnEvidence' was also declared here.`
+2. `services/aiService.ts(672,3)`: `error TS2322: Type '{ title: string; redoNow: { question: string; instruction: string; }; micro_drills: { title: string; instruction: string; }[]; } | null' is not assignable to type 'CoachPack | null'.`
+
+### Root Causes
+- **Duplicate Import**: `aggregateTurnEvidence` was imported at both line 1 (`import { generateChallengeRecoveryTimeline, aggregateTurnEvidence } from './evidenceAggregationService';`) and line 30 (`import { aggregateTurnEvidence } from './evidenceAggregationService';`) of `backend/services/aiService.ts`.
+- **Incompatible CoachPack Union Type**: The `coachPack` assignment inside `generateFinalReport` constructed an object containing `redoNow: null`, which violates `CoachPackSchema` (`z.union([RedoNowSchema, z.string()])` does not accept `null`).
+
+### Corrective Action Plan (P0-2E)
+1. **Remove Duplicate Import**: Remove line 30 (`import { aggregateTurnEvidence } from './evidenceAggregationService';`) in `backend/services/aiService.ts`.
+2. **Contract-Safe CoachPack Normalization**:
+   Update `aiService.ts` to perform explicit type narrowing on `narrative?.coachPack`, verifying that `redoNow` contains non-empty `question` and `instruction` strings, and validating the final object with `CoachPackSchema.parse`:
+   ```ts
+   const rawCoachPack = narrative?.coachPack;
+   let coachPack: CoachPack | null = null;
+   if (
+     scorecard.readinessStatus !== 'NOT_ASSESSED' &&
+     rawCoachPack &&
+     typeof rawCoachPack.redoNow === 'object' &&
+     rawCoachPack.redoNow !== null &&
+     rawCoachPack.redoNow.question.trim().length > 0 &&
+     rawCoachPack.redoNow.instruction.trim().length > 0
+   ) {
+     const validatedMicroDrills = Array.isArray(rawCoachPack.micro_drills)
+       ? rawCoachPack.micro_drills.filter((md: any) =>
+           typeof md === 'string' ? md.trim().length > 0 : (md && typeof md.weakness === 'string' && typeof md.drill_prompt === 'string' && typeof md.focus_point === 'string')
+         )
+       : [];
+     coachPack = CoachPackSchema.parse({
+       title: typeof rawCoachPack.title === 'string' && rawCoachPack.title.trim().length > 0 ? rawCoachPack.title.trim() : 'Targeted Practice Drill',
+       redoNow: {
+         question: rawCoachPack.redoNow.question.trim(),
+         instruction: rawCoachPack.redoNow.instruction.trim(),
+       },
+       micro_drills: validatedMicroDrills,
+     });
+   }
+   ```
+3. **Verification**: Run `cd backend && npm run build && npm test` to verify zero TypeScript errors and 100% test pass.
+
+
