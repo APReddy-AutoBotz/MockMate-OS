@@ -183,6 +183,7 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, context, onGo
     audioService.playConfirm();
     onContextReady({
       ...currentContext,
+      controls: sessionControls,
       selectedPanelIDs,
       interviewPlan: plan,
       competencyWeights: Object.entries(plan.jdInsights?.competencyWeights || {}),

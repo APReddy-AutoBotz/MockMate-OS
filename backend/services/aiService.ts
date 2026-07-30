@@ -611,7 +611,7 @@ REQUIRED OUTPUT SCHEMA (JSON):
 
   let narrative: RawReportNarrative | null = null;
   try {
-    const { text } = await callWithFallback(masterPrompt);
+    const { text } = await exports.callWithFallback(masterPrompt);
     const rawJson = extractJson(text || '{}');
     const parseResult = RawReportNarrativeSchema.safeParse(rawJson);
     if (parseResult.success) {
@@ -626,8 +626,8 @@ REQUIRED OUTPUT SCHEMA (JSON):
   const overallSummary = (narrative && narrative.overallSummary && narrative.overallSummary.trim().length > 0)
     ? narrative.overallSummary.trim()
     : (scorecard.simplifiedScore !== null
-        ? `Session complete. Practice score: ${scorecard.simplifiedScore}/100 based on verified candidate turn evidence.`
-        : 'Session completed. Evaluation based on verified candidate turn evidence.');
+        ? `Session completed. Practice score: ${scorecard.simplifiedScore}/100 based on verified candidate turn evidence.`
+        : `Session completed. ${scorecard.readinessReasoning || 'Evaluation based on verified candidate turn evidence.'}`);
 
   const topStrength = (narrative && narrative.topStrength && narrative.topStrength.trim().length > 0)
     ? narrative.topStrength.trim()
@@ -732,7 +732,7 @@ REQUIRED OUTPUT SCHEMA (JSON):
     questionPerformance,
     biggestRiskArea,
     coachPack,
-    trajectoryReplay: (narrative && Array.isArray(narrative.trajectoryReplay)) ? narrative.trajectoryReplay : [],
+    trajectoryReplay: (scorecard.readinessStatus === 'NOT_ASSESSED' || !narrative || !Array.isArray(narrative.trajectoryReplay)) ? [] : narrative.trajectoryReplay,
     auditLayer: [],
     simplifiedScore: scorecard.simplifiedScore,
     topStrength,

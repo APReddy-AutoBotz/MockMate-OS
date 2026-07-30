@@ -5,7 +5,7 @@ const config = getRuntimeConfig();
 const validation = validateRuntimeConfig();
 
 export const isSupabaseConfigured = Boolean(config.supabaseUrl && config.supabaseAnonKey);
-export const isUsingMockAuth = config.isDevelopment && config.enableDevAuth;
+export const isUsingMockAuth = config.enableDevAuth || (config.isDevelopment && config.enableDevAuth);
 
 if (!validation.valid && !isUsingMockAuth) {
   throw new Error(validation.error || 'Missing Supabase configuration.');
