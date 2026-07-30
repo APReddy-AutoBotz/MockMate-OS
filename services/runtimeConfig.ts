@@ -11,11 +11,11 @@ export interface RuntimeConfig {
 }
 
 // Direct statically replaceable references for Vite define / env replacement
-const VITE_API_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) || (typeof process !== 'undefined' && process.env?.VITE_API_URL) || '';
-const VITE_SUPABASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) || '';
-const VITE_SUPABASE_ANON_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY) || '';
-const VITE_ENABLE_DEV_AUTH = ((typeof import.meta !== 'undefined' && import.meta.env?.VITE_ENABLE_DEV_AUTH) || (typeof process !== 'undefined' && process.env?.VITE_ENABLE_DEV_AUTH)) === 'true';
-const NODE_ENV = (typeof import.meta !== 'undefined' && import.meta.env?.MODE) || (typeof process !== 'undefined' && process.env?.NODE_ENV) || 'development';
+const VITE_API_URL = process.env.VITE_API_URL || '';
+const VITE_SUPABASE_URL = process.env.VITE_SUPABASE_URL || '';
+const VITE_SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || '';
+const VITE_ENABLE_DEV_AUTH = process.env.VITE_ENABLE_DEV_AUTH === 'true';
+const NODE_ENV = process.env.NODE_ENV || 'development';
 
 export function normalizeApiOrigin(rawInput?: string, mode: { isProd?: boolean; isDev?: boolean; isTest?: boolean } = {}): { apiOrigin: string; apiBase: string } {
   const trimmed = (rawInput || '').trim().replace(/\/+$/, '');
@@ -41,13 +41,11 @@ export function normalizeApiOrigin(rawInput?: string, mode: { isProd?: boolean; 
 }
 
 export function getRuntimeConfig(): RuntimeConfig {
-  const envNodeEnv = (typeof process !== 'undefined' && process.env?.NODE_ENV) || (typeof import.meta !== 'undefined' && import.meta.env?.MODE) || 'development';
-  const envApiUrl = (typeof process !== 'undefined' && process.env?.VITE_API_URL !== undefined) ? process.env.VITE_API_URL : VITE_API_URL;
-  const envSupabaseUrl = (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL !== undefined) ? process.env.VITE_SUPABASE_URL : VITE_SUPABASE_URL;
-  const envSupabaseAnonKey = (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY !== undefined) ? process.env.VITE_SUPABASE_ANON_KEY : VITE_SUPABASE_ANON_KEY;
-  const envEnableDevAuth = (typeof process !== 'undefined' && process.env?.VITE_ENABLE_DEV_AUTH !== undefined)
-    ? process.env.VITE_ENABLE_DEV_AUTH === 'true'
-    : VITE_ENABLE_DEV_AUTH;
+  const envNodeEnv = process.env.NODE_ENV || 'development';
+  const envApiUrl = process.env.VITE_API_URL !== undefined ? process.env.VITE_API_URL : VITE_API_URL;
+  const envSupabaseUrl = process.env.VITE_SUPABASE_URL !== undefined ? process.env.VITE_SUPABASE_URL : VITE_SUPABASE_URL;
+  const envSupabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY !== undefined ? process.env.VITE_SUPABASE_ANON_KEY : VITE_SUPABASE_ANON_KEY;
+  const envEnableDevAuth = process.env.VITE_ENABLE_DEV_AUTH !== undefined ? process.env.VITE_ENABLE_DEV_AUTH === 'true' : VITE_ENABLE_DEV_AUTH;
 
   const isTest = envNodeEnv === 'test';
   const isProduction = envNodeEnv === 'production';
