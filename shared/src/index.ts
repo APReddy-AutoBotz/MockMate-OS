@@ -1076,6 +1076,8 @@ export const PlanGenerationRequestSchema = z.object({
   jdText: z.string().optional(),
   resumeText: z.string().optional(),
   selectedPanelIDs: z.array(z.string()).min(1),
+  snapshotId: z.string().optional(),
+  bridgeId: z.string().optional(),
 }).strict();
 
 export const InterviewSessionStartRequestSchema = z.object({

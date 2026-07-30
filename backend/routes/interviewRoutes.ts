@@ -45,8 +45,14 @@ router.post('/plan', enforceUsageLimit('interview_question'), async (req: any, r
     if (!parsed.success) {
       return res.status(422).json({ error: 'Invalid plan generation payload', details: parsed.error.issues });
     }
-    const { role, intent, controls, jdText, resumeText, selectedPanelIDs } = parsed.data;
-    const result = await aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText, selectedPanelIDs);
+    const { role, intent, controls, jdText, resumeText, selectedPanelIDs, snapshotId } = parsed.data;
+    const userId = req.user?.uid;
+    let groundingSnapshot: any;
+    if (snapshotId && userId) {
+      const { getSnapshotById } = require('../services/groundingSnapshotService');
+      groundingSnapshot = (await getSnapshotById(userId, snapshotId)) || undefined;
+    }
+    const result = await aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText, selectedPanelIDs, groundingSnapshot);
     res.json(InterviewPlanSchema.parse(result));
   } catch (error: any) {
     console.error('[Interview] plan error:', error);

@@ -142,12 +142,14 @@ try {
   const meRoutes = require('./routes/meRoutes').default;
   const interviewRoutes = require('./routes/interviewRoutes').default;
   const adminRoutes = require('./routes/adminRoutes').default;
+  const careerContextRoutes = require('./routes/careerContextRoutes').default;
 
   app.use('/api/user', userRoutes);
   app.use('/api/resume', resumeRoutes);
   app.use('/api/me', meRoutes);
   app.use('/api/interview', interviewRoutes);
   app.use('/api/admin', adminRoutes);
+  app.use('/api/career-context', careerContextRoutes);
 } catch (e) {
   console.error("Failed to mount routes", e);
 }

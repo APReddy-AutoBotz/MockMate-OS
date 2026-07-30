@@ -71,7 +71,7 @@ describe('Career Context Pure Adapters', () => {
       audienceContext: 'Board Members',
       mainStruggle: 'Rushing explanations',
       comfortLanguage: 'English',
-      practiceDuration: 10,
+      practiceDuration: 5,
       createdAt: '2026-07-30T10:00:00Z',
       updatedAt: '2026-07-30T10:00:00Z'
     };
@@ -115,7 +115,7 @@ describe('Career Context Pure Adapters', () => {
     const mockReport: FinalReport = {
       overallSummary: 'Good performance overall',
       evaluationModel: 'v1_dimensions',
-      readiness: { status: 'READY', reasoning: 'Strong framing' },
+      readiness: { status: 'INTERVIEW_READY', reasoning: 'Strong framing' },
       quantitativeAnalysis: {
         dimension_scores: [
           {
@@ -126,7 +126,7 @@ describe('Career Context Pure Adapters', () => {
             reason: 'Clear structure',
             evidence: ['Structured response'],
             confidence: 'high',
-            evidenceReferences: [{ turnId: 'turn_1', excerpt: 'ex', stage: 'framing', questionKind: 'root', signal: 'sig', anchorScore: 85, confidence: 'high' }],
+            evidenceReferences: [{ turnId: 'turn_1', excerpt: 'ex', stage: 'framing', questionKind: 'root', signal: 'sig', anchorScore: 4, confidence: 'high' }],
             trajectory: 'stable',
             distinctTurnCount: 1
           }

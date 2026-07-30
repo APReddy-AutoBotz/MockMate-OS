@@ -284,13 +284,17 @@ export const buildDeterministicInterviewPlan = (
   });
 };
 
+import { buildGroundingPromptSection } from './groundingPromptBuilder';
+import { CareerContextSnapshot } from 'mockmate-shared';
+
 export const generateInterviewPlan = async (
   role: string,
   intentText: string,
   sessionControls: SessionControls,
   jdText?: string,
   resumeText?: string,
-  selectedPanelIDs: string[] = ['p1', 'p3']
+  selectedPanelIDs: string[] = ['p1', 'p3'],
+  groundingSnapshot?: CareerContextSnapshot
 ): Promise<InterviewPlan> => {
   if (!intentText || intentText.trim().length < 2) throw new Error('Goal too short');
 
@@ -307,6 +311,12 @@ export const generateInterviewPlan = async (
   const activeDimensions = ACTIVE_DIMENSIONS_BY_MODE[sessionMode] || ACTIVE_DIMENSIONS_BY_MODE['classic_behavioral'];
   const dimensionWeights = DEFAULT_WEIGHTS_BY_MODE[sessionMode] || DEFAULT_WEIGHTS_BY_MODE['classic_behavioral'];
 
+  const groundingPromptSection = groundingSnapshot ? buildGroundingPromptSection({
+    purpose: groundingSnapshot.purpose,
+    projection: groundingSnapshot.projection,
+    targetModule: 'interview',
+  }) : '';
+
   const masterPrompt = `You are an expert interview strategist. Create a comprehensive interview plan.
   
   CONTEXT:
@@ -315,6 +325,8 @@ export const generateInterviewPlan = async (
   Difficulty: ${sessionControls.difficulty}
   Session Mode: ${sessionMode}
   Total Questions Requested: ${sessionControls.totalQuestions}
+
+  ${groundingPromptSection}
   
   SELECTED INTERVIEW PANEL PERSONAS (personaFocus MUST be one of these IDs):
   ${panelSummary}

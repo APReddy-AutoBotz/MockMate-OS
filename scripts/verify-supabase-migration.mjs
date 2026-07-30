@@ -34,6 +34,11 @@ const requiredTables = [
   'clearspeak_beta_feedback',
   'usage_ledger',
   'ai_cache',
+  'career_context_state',
+  'career_context_items',
+  'career_context_snapshots',
+  'career_context_snapshot_items',
+  'career_context_bridges',
 ];
 
 for (const table of requiredTables) {
@@ -56,6 +61,10 @@ const ownerTables = [
   'clearspeak_progress',
   'clearspeak_ledgers',
   'clearspeak_beta_feedback',
+  'career_context_state',
+  'career_context_items',
+  'career_context_snapshots',
+  'career_context_bridges',
 ];
 
 for (const table of ownerTables) {

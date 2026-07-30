@@ -14,7 +14,7 @@ import AppContainer from './components/AppContainer';
 import SplashScreen from './components/SplashScreen';
 import SimplifiedReport from './components/SimplifiedReport';
 import InterviewOrbit from './components/InterviewOrbit';
-import { FinalReport, InterviewSessionContext as SessionContext, SessionControls } from "mockmate-shared";
+import { FinalReport, InterviewSessionContext as SessionContext, SessionControls, InterviewSetupDraft, createBlankInterviewSetupDraft, createResumeGroundedInterviewDraft, createClearSpeakGroundedInterviewDraft } from "mockmate-shared";
 import { Logo } from './components/icons/Logo';
 import LandingPage from './components/LandingPage';
 import Login from './components/Login';
@@ -22,6 +22,7 @@ import OnboardingQuestions from './components/OnboardingQuestions';
 import GrowthDashboard from './components/GrowthDashboard';
 import ClearSpeakDashboard from './components/clearspeak/ClearSpeakDashboard';
 import ResumeBuilderFlow from './components/resume/ResumeBuilderFlow';
+import CareerContextPanel from './components/CareerContextPanel';
 import LegalPage from './components/LegalPage';
 import SystemStatus from './components/SystemStatus';
 import type { ClearSpeakBridgePayload } from './components/clearspeak/types';
@@ -36,7 +37,7 @@ const LazyGrowthDashboard = React.lazy(() => import('./components/GrowthDashboar
 const LazyInterviewReport = React.lazy(() => import('./components/InterviewReport'));
 const LazyMockSession = React.lazy(() => import('./components/MockSession'));
 
-type AppState = 'SPLASH' | 'LOADING' | 'LANDING' | 'LOGIN' | 'ONBOARDING' | 'HUB' | 'ROLE_SELECTION' | 'CONTEXT_UPLOAD' | 'SESSION_ACTIVE' | 'REPORT_VIEW' | 'HISTORY_VIEW' | 'CLEARSPEAK' | 'RESUME_BUILDER' | 'PRIVACY' | 'TERMS';
+type AppState = 'SPLASH' | 'LOADING' | 'LANDING' | 'LOGIN' | 'ONBOARDING' | 'HUB' | 'ROLE_SELECTION' | 'CONTEXT_UPLOAD' | 'SESSION_ACTIVE' | 'REPORT_VIEW' | 'HISTORY_VIEW' | 'CLEARSPEAK' | 'RESUME_BUILDER' | 'CAREER_CONTEXT' | 'PRIVACY' | 'TERMS';
 
 type MobileTabId = 'home' | 'resume' | 'speak' | 'interview' | 'journal';
 
@@ -141,27 +142,12 @@ const App: React.FC = () => {
         setAppState('LANDING');
     };
 
+    const [setupDraft, setSetupDraft] = useState<InterviewSetupDraft | null>(null);
+
     const handleRoleSubmit = (intent: string, sessionType: 'structured' | 'conversational') => {
         audioService.playConfirm();
-        const initialControls: SessionControls = {
-            difficulty: 'intermediate',
-            totalQuestions: 5,
-            includeBehavioral: true,
-            includeCoding: false,
-            timePerQuestion: '90s',
-            deliveryMode: 'exam',
-            reasoningMode: 'classic_behavioral',
-            sourceMode: 'job_description'
-        };
-        const initialContext: SessionContext = {
-            candidateRole: intent,
-            intentText: intent,
-            selectedPanelIDs: ['p1', 'p3'],
-            sessionType: sessionType,
-            controls: initialControls,
-            interviewPlan: undefined as any
-        };
-        setSessionContext(initialContext);
+        const draft = createBlankInterviewSetupDraft(intent, intent, sessionType);
+        setSetupDraft(draft);
         setAppState('CONTEXT_UPLOAD');
     };
 
@@ -183,6 +169,7 @@ const App: React.FC = () => {
     const handleRestart = () => {
         audioService.playConfirm();
         setAppState('HUB');
+        setSetupDraft(null);
         setSessionContext(null);
         setFinalReport(null);
     }
@@ -190,6 +177,7 @@ const App: React.FC = () => {
     const handleGoBack = () => {
         if (appState === 'CONTEXT_UPLOAD') {
             setAppState('HUB');
+            setSetupDraft(null);
             setSessionContext(null);
         }
     };
@@ -201,6 +189,7 @@ const App: React.FC = () => {
                 setAppState('CONTEXT_UPLOAD');
             } else {
                 setAppState('HUB');
+                setSetupDraft(null);
                 setSessionContext(null);
             }
         }
@@ -240,80 +229,32 @@ const App: React.FC = () => {
         if (module === 'INTERVIEW') setAppState('ROLE_SELECTION');
     };
 
-    /**
-     * T26 — Interview Bridge handler.
-     *
-     * Receives the full ClearSpeakBridgePayload and seeds a structured
-     * SessionContext so the Interview enters with the bridge question as context.
-     *
-     * Design contract:
-     *   - source: 'clearspeak_bridge'  (lets future analytics identify bridge sessions)
-     *   - candidateRole: derived from ClearSpeak role → Interview role string
-     *   - intentText: the generated bridge question (pre-populates the JD/intent field)
-     *   - sessionType: 'structured' — so the user goes through CONTEXT_UPLOAD for panel setup
-     *   - sessionMode: 'coach' — bridge sessions are practice, not exam mode
-     *
-     * No Interview mode changes required. CONTEXT_UPLOAD accepts any SessionContext.
-     */
     const handleInterviewBridge = (payload: ClearSpeakBridgePayload) => {
         audioService.playStart();
-
-        // Map ClearSpeak role identifiers to Interview candidateRole strings
         const ROLE_MAP: Record<ClearSpeakBridgePayload['role'], string> = {
             business_analyst:  'Business Analyst',
             project_manager:   'Project Manager',
             general_corporate: 'Corporate Professional',
         };
 
-        const bridgeContext: any = {
-            candidateRole: ROLE_MAP[payload.role] ?? 'Business Professional',
-            // Pre-populate intentText with the bridge question so the user
-            // can review/edit before confirming in SessionPrep / CONTEXT_UPLOAD.
-            intentText: payload.bridgeQuestion,
-            selectedPanelIDs: [],
-            sessionType: 'structured',
-            
-            // MVP analytics: replace companyBrief string packing with a
-            // dedicated Supabase bridge_sessions record containing typed fields:
-            //   { userId, sessionId, source, topicTag, practicedWords, recentScores, bridgeQuestion, triggeredAt }
-            // companyBrief is a SessionContext field intended for JD text — repurposing it
-            // for bridge metadata is an MVP shortcut only. It must not be user-visible.
-            
-        };
-
-        setSessionContext(bridgeContext);
-        // Navigate to CONTEXT_UPLOAD so the user can confirm panel selection
-        // before the session starts. Does not bypass interview flow.
+        const role = ROLE_MAP[payload.role] ?? 'Business Professional';
+        const draft = createClearSpeakGroundedInterviewDraft('snap_clearspeak', 'br_clearspeak', role, payload.bridgeQuestion);
+        setSetupDraft(draft);
         setAppState('CONTEXT_UPLOAD');
     };
 
-    // MVP P0 Resume integration hooks via sessionStorage & context payload
     const handleResumeSpeakBridge = (summary: string) => {
         audioService.playStart();
-        // In a real app we'd pass this via context to clearSpeak.
-        // For MVP, we switch to CLEARSPEAK.
-        // sessionStorage.setItem('mockmate_bridge_speak_summary', summary);
         setAppState('CLEARSPEAK');
     };
 
     const handleResumeInterviewBridge = (jdText: string, resumeData: any) => {
         audioService.playStart();
-
-        // Support P1 Feature: Extract 3 most complex bullets for targeted STAR drilling
-        const allBullets = (resumeData?.experience || []).flatMap((exp: any) => exp.bullets || []) as string[];
-        const targetStarBullets = allBullets.sort((a, b) => b.length - a.length).slice(0, 3);
-
-        // Pre-populate interview with JD and role
-        const bridgeContext: any = {
-            candidateRole: resumeData?.basics?.name ? `Candidate: ${resumeData.basics.name}` : 'Candidate',
-            intentText: jdText || 'General interview based on my resume.',
-            selectedPanelIDs: [],
-            sessionType: 'structured',
-            
-             // Pass parsed resume into companyBrief as an MVP hack to give AI context
-             // Pass bullets downward to fuel advanced drill scenarios if Interview Agent supports it
-        };
-        setSessionContext(bridgeContext);
+        const targetRole = userProfile?.targetRole || 'Software Professional';
+        const intentText = jdText || 'General interview based on my resume.';
+        const draft = createResumeGroundedInterviewDraft('snap_resume', 'br_resume', targetRole, intentText);
+        if (jdText) draft.jdText = jdText;
+        setSetupDraft(draft);
         setAppState('CONTEXT_UPLOAD');
     };
 
@@ -406,9 +347,10 @@ const App: React.FC = () => {
                         <ErrorBoundary>
                             <Hub
                                 userProfile={userProfile}
-                                betaEnabled={betaEnabled}
+                                 betaEnabled={betaEnabled}
                                 onNavigate={handleHubNavigate}
                                 onViewHistory={toggleHistory}
+                                onOpenCareerContext={() => setAppState('CAREER_CONTEXT')}
                                 onDeleteData={handleDeleteData}
                             />
                         </ErrorBoundary>
@@ -456,7 +398,7 @@ const App: React.FC = () => {
                             <ErrorBoundary>
                                 <SessionPrep
                                     onContextReady={handleContextReady}
-                                    context={sessionContext!}
+                                    draft={setupDraft!}
                                     onGoBack={handleGoBack}
                                 />
                             </ErrorBoundary>
@@ -496,7 +438,7 @@ const App: React.FC = () => {
                                         report={finalReport}
                                         onRestart={handleRestart}
                                         userProfile={userProfile}
-                                        sessionId={(sessionContext as any)?.sessionId}
+                                        sessionId={sessionContext?.bridgeSessionId}
                                     />
                                 )}
                             </ErrorBoundary>
@@ -521,6 +463,14 @@ const App: React.FC = () => {
                                 onSpeakBridge={handleResumeSpeakBridge}
                                 onInterviewBridge={handleResumeInterviewBridge}
                             />
+                        </ErrorBoundary>
+                    </motion.div>
+                );
+            case 'CAREER_CONTEXT':
+                return (
+                    <motion.div key="career_context" {...pageAnimation} className="w-full max-w-5xl px-0 sm:px-4">
+                        <ErrorBoundary>
+                            <CareerContextPanel onBack={handleRestart} />
                         </ErrorBoundary>
                     </motion.div>
                 );

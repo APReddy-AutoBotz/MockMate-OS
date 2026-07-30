@@ -60,6 +60,10 @@ router.delete('/data', async (req, res) => {
     }
 
     const userOwnedTables = [
+      'career_context_bridges',
+      'career_context_snapshots',
+      'career_context_items',
+      'career_context_state',
       'resume_reviews',
       'interview_sessions',
       'clearspeak_sessions',

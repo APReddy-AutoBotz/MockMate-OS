@@ -48,7 +48,7 @@ const ToolCard: React.FC<{
     </motion.button>
 );
 
-export const Hub: React.FC<HubProps> = ({ userProfile, onNavigate, onViewHistory, onDeleteData }) => {
+export const Hub: React.FC<HubProps> = ({ userProfile, onNavigate, onViewHistory, onOpenCareerContext, onDeleteData }) => {
     const [confirmDelete, setConfirmDelete] = React.useState(false);
     const [isDeleting, setIsDeleting] = React.useState(false);
     const [deleteError, setDeleteError] = React.useState('');
@@ -142,6 +142,15 @@ export const Hub: React.FC<HubProps> = ({ userProfile, onNavigate, onViewHistory
                             <p className="max-w-xs text-xs leading-relaxed text-brand-tint">
                                 This removes saved practice data from MockMate. Press delete again to confirm.
                             </p>
+                        )}
+                        {onOpenCareerContext && (
+                            <button
+                                type="button"
+                                onClick={onOpenCareerContext}
+                                className="inline-flex items-center justify-center gap-2 rounded-xl border border-brand-tint/15 bg-white/5 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.1em] text-brand-tint transition-colors hover:border-brand-primary/30 hover:text-white"
+                            >
+                                Career context
+                            </button>
                         )}
                         <button
                             type="button"
