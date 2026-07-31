@@ -1,86 +1,85 @@
-// Resume to Interview Grounding Journey Verification
-import { createResumeGroundedInterviewDraft, completeInterviewSessionContext, InterviewPlanSchema } from '../shared/dist/index.js';
+import app from '../backend/dist/server.js';
+import http from 'node:http';
 
-console.log('[Resume -> Interview Journey] Verifying typed draft creation and context completion...');
+console.log('[Resume -> Interview Journey] Starting Real HTTP End-to-End Grounding Journey...');
 
-const snapshotId = '33333333-3333-3333-3333-333333333333';
-const bridgeId = '44444444-4444-4444-4444-444444444444';
+const server = http.createServer(app);
+await new Promise(resolve => server.listen(0, resolve));
+const port = server.address().port;
+const baseUrl = `http://localhost:${port}`;
 
-const draft = createResumeGroundedInterviewDraft(
-  snapshotId,
-  bridgeId,
-  'Staff Engineer',
-  'Interview based on resume claims'
-);
+const headers = {
+  'Content-Type': 'application/json',
+  'Authorization': 'Bearer dev_user_a',
+};
 
-if (draft.groundingRequest?.snapshotId !== snapshotId) {
-  console.error('FAILED: snapshotId mismatch');
-  process.exit(1);
+try {
+  // 1. Rebuild context items from Resume
+  const rebuildRes = await fetch(`${baseUrl}/api/career-context/rebuild`, {
+    method: 'POST',
+    headers,
+  });
+  if (rebuildRes.status !== 200) {
+    throw new Error(`Rebuild failed with status ${rebuildRes.status}`);
+  }
+
+  // 2. Fetch context items
+  const getRes = await fetch(`${baseUrl}/api/career-context`, { headers });
+  const contextData = await getRes.json();
+  if (!contextData.success) {
+    throw new Error('Failed to fetch career context');
+  }
+
+  // 3. Create grounding snapshot
+  const clientReqId = '66666666-6666-6666-6666-666666666666';
+  const snapRes = await fetch(`${baseUrl}/api/career-context/snapshots`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      purpose: 'resume_to_interview',
+      includedItemIds: contextData.activeItems.map(i => i.id),
+      excludedItemIds: [],
+      consent: { scope: 'one_time', sourceModules: ['resume'] },
+      clientRequestId: clientReqId,
+    }),
+  });
+  if (snapRes.status !== 200) {
+    throw new Error(`Snapshot creation failed with status ${snapRes.status}`);
+  }
+  const snapData = await snapRes.json();
+  const snapshotId = snapData.snapshot.id;
+
+  // 4. Create module bridge
+  const bridgeReqId = '77777777-7777-7777-7777-777777777777';
+  const bridgeRes = await fetch(`${baseUrl}/api/career-context/bridges`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      sourceModule: 'resume',
+      targetModule: 'interview',
+      purpose: 'resume_to_interview',
+      snapshotId,
+      clientRequestId: bridgeReqId,
+    }),
+  });
+  if (bridgeRes.status !== 200) {
+    throw new Error(`Bridge creation failed with status ${bridgeRes.status}`);
+  }
+  const bridgeData = await bridgeRes.json();
+  const bridgeId = bridgeData.bridge.id;
+
+  // 5. Consume bridge into interview session
+  const targetSessionId = '88888888-8888-8888-8888-888888888888';
+  const consumeRes = await fetch(`${baseUrl}/api/career-context/bridges/${bridgeId}/consume`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ targetSessionId }),
+  });
+  if (consumeRes.status !== 200) {
+    throw new Error(`Bridge consume failed with status ${consumeRes.status}`);
+  }
+
+  console.log('[Resume -> Interview Journey] PASSED: Real HTTP Resume to Interview Grounding flow verified 100%!');
+} finally {
+  server.close();
 }
-
-const mockPlan = InterviewPlanSchema.parse({
-  meta: {
-    intent: 'Interview based on resume claims',
-    controls: {
-      difficulty: 'intermediate',
-      totalQuestions: 4,
-      includeBehavioral: true,
-      includeCoding: false,
-      timePerQuestion: '90s',
-      deliveryMode: 'exam',
-      reasoningMode: 'classic_behavioral',
-    }
-  },
-  jdInsights: {
-    role: 'Staff Engineer'
-  },
-  questionSet: [
-    {
-      id: 'q1',
-      phase: 'scenario',
-      difficulty: 'intermediate',
-      question: 'Tell me about Node.js performance tuning.',
-      expectedSignals: ['Signal 1'],
-      personaFocus: 'p1',
-      questionKind: 'root',
-      rootQuestionId: 'q1',
-      stage: 'framing',
-      targetDimensions: ['SYSTEMS_THINKING'],
-      groundingReferences: [
-        {
-          contextItemId: '22222222-2222-2222-2222-222222222222',
-          sourceModule: 'resume',
-          sourceRecordId: 'res_1',
-          sourcePath: 'skills',
-          label: 'Resume Skills',
-          exactExcerpt: 'Node.js',
-          purpose: 'resume_to_interview'
-        }
-      ]
-    }
-  ]
-});
-
-const sessionContext = completeInterviewSessionContext(
-  draft,
-  mockPlan,
-  {
-    id: snapshotId,
-    purpose: 'resume_to_interview',
-    contextVersion: 1,
-    itemIds: ['22222222-2222-2222-2222-222222222222'],
-    projection: { targetRole: 'Staff Engineer', skills: ['Node.js'] },
-    conflicts: [],
-    consent: { scope: 'one_time', purpose: 'resume_to_interview', includedItemIds: ['22222222-2222-2222-2222-222222222222'], excludedItemIds: [], sourceModules: ['resume'], acknowledgedAt: new Date().toISOString() },
-    createdAt: new Date().toISOString(),
-    sourceModules: ['resume']
-  },
-  bridgeId
-);
-
-if (!sessionContext.interviewPlan) {
-  console.error('FAILED: expected interviewPlan on completed context');
-  process.exit(1);
-}
-
-console.log('[Resume -> Interview Journey] PASSED: Typed draft separation & completion verified 100%!');

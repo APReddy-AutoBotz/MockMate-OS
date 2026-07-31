@@ -364,8 +364,8 @@ export const CareerContextSourceSchema = z.object({
 export type CareerContextSource = z.infer<typeof CareerContextSourceSchema>;
 
 export const CareerContextItemSchema = z.object({
-  id: z.string(),
-  userId: z.string().optional(),
+  id: z.string().uuid(),
+  userId: z.string().uuid(),
   kind: CareerContextItemKindSchema,
   canonicalKey: z.string().min(1),
   label: z.string(),
@@ -375,18 +375,18 @@ export const CareerContextItemSchema = z.object({
   provenance: CareerContextProvenanceSchema,
   status: CareerContextItemStatusSchema,
   sensitivity: CareerContextSensitivitySchema,
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  supersededBy: z.string().nullable().optional(),
-  userConfirmedAt: z.string().nullable().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  supersededBy: z.string().uuid().nullable().optional(),
+  userConfirmedAt: z.string().datetime().nullable().optional(),
 }).strict();
 export type CareerContextItem = z.infer<typeof CareerContextItemSchema>;
 
 export const CareerContextStateSchema = z.object({
-  userId: z.string(),
+  userId: z.string().uuid(),
   contextVersion: z.number().int(),
   personalizationEnabled: z.boolean(),
-  updatedAt: z.string(),
+  updatedAt: z.string().datetime(),
 }).strict();
 export type CareerContextState = z.infer<typeof CareerContextStateSchema>;
 
@@ -403,10 +403,10 @@ export type GroundingPurpose = z.infer<typeof GroundingPurposeSchema>;
 export const GroundingConsentSchema = z.object({
   scope: z.enum(['one_time', 'future_sessions']),
   purpose: GroundingPurposeSchema,
-  includedItemIds: z.array(z.string()),
-  excludedItemIds: z.array(z.string()),
+  includedItemIds: z.array(z.string().uuid()),
+  excludedItemIds: z.array(z.string().uuid()),
   sourceModules: z.array(CareerContextModuleSchema),
-  acknowledgedAt: z.string(),
+  acknowledgedAt: z.string().datetime(),
 }).strict();
 export type GroundingConsent = z.infer<typeof GroundingConsentSchema>;
 
@@ -443,21 +443,21 @@ export const GroundingProjectionSchema = z.object({
 export type GroundingProjection = z.infer<typeof GroundingProjectionSchema>;
 
 export const CareerContextSnapshotSchema = z.object({
-  id: z.string(),
-  userId: z.string().optional(),
+  id: z.string().uuid(),
+  userId: z.string().uuid(),
   purpose: GroundingPurposeSchema,
   contextVersion: z.number().int(),
-  itemIds: z.array(z.string()),
+  itemIds: z.array(z.string().uuid()),
   projection: GroundingProjectionSchema,
   conflicts: z.array(GroundingConflictSchema),
   consent: GroundingConsentSchema,
-  createdAt: z.string(),
+  createdAt: z.string().datetime(),
   sourceModules: z.array(CareerContextModuleSchema),
 }).strict();
 export type CareerContextSnapshot = z.infer<typeof CareerContextSnapshotSchema>;
 
 export const GroundingReferenceSchema = z.object({
-  contextItemId: z.string(),
+  contextItemId: z.string().uuid(),
   sourceModule: CareerContextModuleSchema,
   sourceRecordId: z.string(),
   sourcePath: z.string(),
@@ -477,20 +477,20 @@ export const ModuleBridgeStatusSchema = z.enum([
 export type ModuleBridgeStatus = z.infer<typeof ModuleBridgeStatusSchema>;
 
 export const ModuleBridgeSessionSchema = z.object({
-  id: z.string(),
-  userId: z.string().optional(),
+  id: z.string().uuid(),
+  userId: z.string().uuid(),
   sourceModule: CareerContextModuleSchema,
   targetModule: CareerContextModuleSchema,
   purpose: GroundingPurposeSchema,
-  snapshotId: z.string(),
+  snapshotId: z.string().uuid(),
   sourceRecordId: z.string().nullable().optional(),
-  targetSessionId: z.string().nullable().optional(),
+  targetSessionId: z.string().uuid().nullable().optional(),
   status: ModuleBridgeStatusSchema,
   clientRequestId: z.string(),
-  confirmedAt: z.string().nullable().optional(),
-  consumedAt: z.string().nullable().optional(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
+  confirmedAt: z.string().datetime().nullable().optional(),
+  consumedAt: z.string().datetime().nullable().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
 }).strict();
 export type ModuleBridgeSession = z.infer<typeof ModuleBridgeSessionSchema>;
 
@@ -557,8 +557,8 @@ export type CareerContextItemDecisionResponse = z.infer<typeof CareerContextItem
 
 export const GroundingSnapshotCreateRequestSchema = z.object({
   purpose: GroundingPurposeSchema,
-  includedItemIds: z.array(z.string()),
-  excludedItemIds: z.array(z.string()).default([]),
+  includedItemIds: z.array(z.string().uuid()),
+  excludedItemIds: z.array(z.string().uuid()).default([]),
   conflictSelections: z.record(z.string(), z.string()).default({}),
   consent: GroundingConsentSchema,
   expectedContextVersion: z.number().int().optional(),
@@ -582,7 +582,7 @@ export const ModuleBridgeCreateRequestSchema = z.object({
   sourceModule: CareerContextModuleSchema,
   targetModule: CareerContextModuleSchema,
   purpose: GroundingPurposeSchema,
-  snapshotId: z.string(),
+  snapshotId: z.string().uuid(),
   sourceRecordId: z.string().optional(),
   clientRequestId: z.string().min(1),
 }).strict();
@@ -595,7 +595,7 @@ export const ModuleBridgeCreateResponseSchema = z.object({
 export type ModuleBridgeCreateResponse = z.infer<typeof ModuleBridgeCreateResponseSchema>;
 
 export const ModuleBridgeConsumeRequestSchema = z.object({
-  targetSessionId: z.string(),
+  targetSessionId: z.string().uuid(),
   expectedStatus: z.enum(['drafted', 'confirmed']).optional(),
   clientRequestId: z.string().optional(),
 }).strict();
@@ -697,8 +697,8 @@ export const InterviewSetupDraftSchema = z.object({
   jdText: z.string().optional(),
   resumeText: z.string().optional(),
   groundingRequest: z.object({
-    snapshotId: z.string(),
-    bridgeId: z.string().optional(),
+    snapshotId: z.string().uuid(),
+    bridgeId: z.string().uuid().optional(),
   }).optional(),
   bridgeIntent: z.object({
     sourceModule: CareerContextModuleSchema,
@@ -802,7 +802,7 @@ export const InterviewSessionContextSchema = z.object({
   competencyWeights: z.array(z.unknown()).optional(),
   jdInsights: JDInsightsSchema.optional(),
   groundingSnapshot: CareerContextSnapshotSchema.optional(),
-  bridgeSessionId: z.string().optional(),
+  bridgeSessionId: z.string().uuid().optional(),
 }).strict();
 export type InterviewSessionContext = z.infer<typeof InterviewSessionContextSchema>;
 
@@ -1197,8 +1197,8 @@ export const PlanGenerationRequestSchema = z.object({
   jdText: z.string().optional(),
   resumeText: z.string().optional(),
   selectedPanelIDs: z.array(z.string()).min(1),
-  snapshotId: z.string().optional(),
-  bridgeId: z.string().optional(),
+  snapshotId: z.string().uuid().optional(),
+  bridgeId: z.string().uuid().optional(),
 }).strict();
 
 export const InterviewSessionStartRequestSchema = z.object({

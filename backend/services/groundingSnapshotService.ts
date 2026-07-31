@@ -7,17 +7,6 @@ import {
 } from 'mockmate-shared';
 import { supabaseAdmin } from '../supabaseAdmin';
 import { projectCareerContext } from './careerContextProjectionService';
-
-export interface CreateSnapshotInput {
-  userId: string;
-  purpose: GroundingPurpose;
-  includedItemIds: string[];
-  excludedItemIds: string[];
-  scope: 'one_time' | 'future_sessions';
-  sourceModules: CareerContextModule[];
-  expectedContextVersion?: number;
-}
-
 import crypto from 'crypto';
 
 export interface CreateSnapshotInput {
@@ -33,7 +22,17 @@ export interface CreateSnapshotInput {
 }
 
 export async function createGroundingSnapshot(input: CreateSnapshotInput): Promise<CareerContextSnapshot> {
-  const { userId, purpose, includedItemIds, excludedItemIds, conflictSelections = {}, scope, sourceModules, expectedContextVersion } = input;
+  const {
+    userId,
+    purpose,
+    includedItemIds,
+    excludedItemIds,
+    conflictSelections = {},
+    scope,
+    sourceModules,
+    expectedContextVersion,
+    clientRequestId = crypto.randomUUID()
+  } = input;
   const acknowledgedAt = new Date().toISOString();
 
   // 1. Load active state version for user
@@ -44,7 +43,7 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
       .from('career_context_state')
       .select('context_version, personalization_enabled')
       .eq('user_id', userId)
-      .single();
+      .maybeSingle();
     if (stateData) {
       contextVersion = Number(stateData.context_version);
       personalizationEnabled = Boolean(stateData.personalization_enabled);
@@ -57,7 +56,42 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
     throw err;
   }
 
-  // 2. Load specified items (verifying ownership, active status, and non-contact sensitivity)
+  // 2. Canonical request hash for idempotency
+  const sortedInc = [...includedItemIds].sort();
+  const sortedExc = [...excludedItemIds].sort();
+  const sortedMods = [...sourceModules].sort();
+  const rawHashPayload = JSON.stringify({
+    userId,
+    purpose,
+    contextVersion,
+    includedItemIds: sortedInc,
+    excludedItemIds: sortedExc,
+    conflictSelections,
+    scope,
+    sourceModules: sortedMods,
+  });
+  const requestHash = crypto.createHash('sha256').update(rawHashPayload).digest('hex');
+
+  // Idempotency replay check
+  if (supabaseAdmin && clientRequestId) {
+    const { data: existing } = await supabaseAdmin
+      .from('career_context_snapshots')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('client_request_id', clientRequestId)
+      .maybeSingle();
+
+    if (existing) {
+      if (existing.request_hash === requestHash) {
+        return getSnapshotFromDbRow(existing);
+      }
+      const err: any = new Error(`Idempotency conflict: client_request_id '${clientRequestId}' already used with different payload.`);
+      err.status = 409;
+      throw err;
+    }
+  }
+
+  // 3. Load specified items (verifying ownership, active status, and sensitivity)
   let items: CareerContextItem[] = [];
   if (supabaseAdmin && includedItemIds.length > 0) {
     const { data: rawItems, error } = await supabaseAdmin
@@ -71,7 +105,7 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
     }
 
     if (rawItems) {
-      // Reject any requested item that is absent, ineligible, or contact
+      // Reject if any requested item is missing, cross-user, or non-active
       if (rawItems.length !== includedItemIds.length) {
         const err: any = new Error('One or more requested career context items were missing or not owned by user.');
         err.status = 422;
@@ -89,16 +123,27 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
           err.status = 422;
           throw err;
         }
+        if (r.sensitivity === 'personal_contact') {
+          const err: any = new Error(`Item ${r.id} has personal_contact sensitivity and cannot be grounded.`);
+          err.status = 422;
+          throw err;
+        }
       }
 
-      items = rawItems
-        .filter(r => r.sensitivity !== 'personal_contact')
-        .map(mapDbToCareerContextItem);
+      items = rawItems.map(mapDbToCareerContextItem);
     }
   }
 
-  // 3. Project context & compute conflicts
+  // 4. Project context & compute conflicts
   const { projection, conflicts } = projectCareerContext(items, purpose, conflictSelections, personalizationEnabled);
+
+  // Reject unresolved conflicts
+  const unresolved = conflicts.find(c => c.requiresUserChoice && !conflictSelections[c.canonicalKey]);
+  if (unresolved) {
+    const err: any = new Error(`Unresolved conflict for key '${unresolved.canonicalKey}'. Explicit selection required.`);
+    err.status = 422;
+    throw err;
+  }
 
   const snapshotId = crypto.randomUUID();
   const snapshotPayload = {
@@ -123,7 +168,7 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
 
   const snapshot = CareerContextSnapshotSchema.parse(snapshotPayload);
 
-  // 4. Persist if Supabase available
+  // 5. Transactional insert if Supabase available
   if (supabaseAdmin) {
     const { error: snapErr } = await supabaseAdmin
       .from('career_context_snapshots')
@@ -136,6 +181,8 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
         conflicts: snapshot.conflicts,
         consent: snapshot.consent,
         source_modules: snapshot.sourceModules,
+        client_request_id: clientRequestId,
+        request_hash: requestHash,
         created_at: snapshot.createdAt,
       });
 
@@ -175,6 +222,10 @@ export async function getSnapshotById(userId: string, snapshotId: string): Promi
 
   if (error || !data) return null;
 
+  return getSnapshotFromDbRow(data);
+}
+
+function getSnapshotFromDbRow(data: any): CareerContextSnapshot {
   return CareerContextSnapshotSchema.parse({
     id: data.id,
     userId: data.user_id,

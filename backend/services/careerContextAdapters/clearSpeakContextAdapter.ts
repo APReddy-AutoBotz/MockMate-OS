@@ -1,4 +1,4 @@
-import { ClearSpeakProfile, ClearSpeakSessionScore, CareerContextItem } from 'mockmate-shared';
+import { ClearSpeakProfile, ClearSpeakSessionScore, CareerContextItemDraft } from 'mockmate-shared';
 import crypto from 'crypto';
 
 export interface ClearSpeakAdapterInput {
@@ -14,16 +14,13 @@ function computeHash(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex').substring(0, 16);
 }
 
-export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): CareerContextItem[] {
+export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): CareerContextItemDraft[] {
   const { profile, sessionRecordId, sessionScore, practicedWords, topicTag, revision = 'v1' } = input;
-  const items: CareerContextItem[] = [];
-  const capturedAt = new Date().toISOString();
+  const items: CareerContextItemDraft[] = [];
 
   // 1. Profile Role
   if (profile?.role) {
-    const sourceHash = computeHash(profile.role);
     items.push({
-      id: `ctx_cs_profile_${profile.userId || 'user'}_role`,
       kind: 'target_role',
       canonicalKey: 'clearspeak.profile.role',
       label: 'ClearSpeak Target Role',
@@ -33,22 +30,19 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
         recordId: profile.userId || 'profile',
         fieldPath: 'role',
         sourceRevision: revision,
-        sourceHash,
-        capturedAt,
+        sourceHash: computeHash(profile.role),
+        capturedAt: new Date().toISOString(),
       },
       exactExcerpt: profile.role,
       provenance: 'user_confirmed',
       status: 'active',
       sensitivity: 'standard',
-      createdAt: capturedAt,
-      updatedAt: capturedAt,
     });
   }
 
   // 2. Profile Goal & Audience Context
   if (profile?.goal) {
     items.push({
-      id: `ctx_cs_profile_${profile.userId || 'user'}_goal`,
       kind: 'communication_goal',
       canonicalKey: 'clearspeak.profile.goal',
       label: 'ClearSpeak Goal',
@@ -59,20 +53,17 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
         fieldPath: 'goal',
         sourceRevision: revision,
         sourceHash: computeHash(profile.goal),
-        capturedAt,
+        capturedAt: new Date().toISOString(),
       },
       exactExcerpt: profile.goal,
       provenance: 'user_confirmed',
       status: 'active',
       sensitivity: 'standard',
-      createdAt: capturedAt,
-      updatedAt: capturedAt,
     });
   }
 
   if (profile?.audienceContext) {
     items.push({
-      id: `ctx_cs_profile_${profile.userId || 'user'}_audience`,
       kind: 'audience_context',
       canonicalKey: 'clearspeak.profile.audience',
       label: 'Target Audience Context',
@@ -83,46 +74,43 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
         fieldPath: 'audienceContext',
         sourceRevision: revision,
         sourceHash: computeHash(profile.audienceContext),
-        capturedAt,
+        capturedAt: new Date().toISOString(),
       },
       exactExcerpt: profile.audienceContext,
       provenance: 'user_confirmed',
       status: 'active',
       sensitivity: 'standard',
-      createdAt: capturedAt,
-      updatedAt: capturedAt,
     });
   }
 
-  // 3. Practiced Vocabulary
+  // 3. Practiced Vocabulary (from practiced_words, NOT raw transcript/audio)
   if (practicedWords && practicedWords.length > 0 && sessionRecordId) {
-    items.push({
-      id: `ctx_cs_sess_${sessionRecordId}_vocab`,
-      kind: 'practiced_vocabulary',
-      canonicalKey: 'clearspeak.practiced_vocab',
-      label: `Practiced Vocabulary (${topicTag || 'General'})`,
-      value: { type: 'string_list', values: practicedWords },
-      source: {
-        module: 'clearspeak',
-        recordId: sessionRecordId,
-        fieldPath: 'practicedWords',
-        sourceRevision: revision,
-        sourceHash: computeHash(practicedWords.join(',')),
-        capturedAt,
-      },
-      exactExcerpt: practicedWords.join(', '),
-      provenance: 'system_observed',
-      status: 'active',
-      sensitivity: 'standard',
-      createdAt: capturedAt,
-      updatedAt: capturedAt,
-    });
+    const cleanWords = practicedWords.map(w => w.trim()).filter(Boolean);
+    if (cleanWords.length > 0) {
+      items.push({
+        kind: 'practiced_vocabulary',
+        canonicalKey: 'clearspeak.practiced_vocab',
+        label: `Practiced Vocabulary (${topicTag || 'General'})`,
+        value: { type: 'string_list', values: cleanWords },
+        source: {
+          module: 'clearspeak',
+          recordId: sessionRecordId,
+          fieldPath: 'practicedWords',
+          sourceRevision: revision,
+          sourceHash: computeHash(cleanWords.join(',')),
+          capturedAt: new Date().toISOString(),
+        },
+        exactExcerpt: cleanWords.join(', '),
+        provenance: 'system_observed',
+        status: 'active',
+        sensitivity: 'standard',
+      });
+    }
   }
 
-  // 4. Speech Delivery Score (practice_metric - NEVER converted to Interview technical score or Resume claim)
+  // 4. Speech Delivery Score (practice_metric - NEVER enters clearspeak_to_interview projection)
   if (sessionScore && sessionRecordId) {
     items.push({
-      id: `ctx_cs_sess_${sessionRecordId}_metric`,
       kind: 'practice_metric',
       canonicalKey: 'clearspeak.delivery_composite_score',
       label: 'ClearSpeak Delivery Practice Score',
@@ -131,7 +119,7 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
         metric: 'clearspeak_composite',
         value: sessionScore.composite,
         scale: '100',
-        measuredAt: capturedAt,
+        measuredAt: new Date().toISOString(),
       },
       source: {
         module: 'clearspeak',
@@ -139,14 +127,12 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
         fieldPath: 'score.composite',
         sourceRevision: revision,
         sourceHash: computeHash(String(sessionScore.composite)),
-        capturedAt,
+        capturedAt: new Date().toISOString(),
       },
       exactExcerpt: `Pacing: ${sessionScore.pacing}, Clarity: ${sessionScore.clarity}`,
       provenance: 'system_observed',
       status: 'active',
       sensitivity: 'standard',
-      createdAt: capturedAt,
-      updatedAt: capturedAt,
     });
   }
 

@@ -8,8 +8,31 @@ export interface GroundingPromptOptions {
 
 export function sanitizePromptText(text: string): string {
   if (!text) return '';
-  // Strip control characters (except newline/tab)
-  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
+
+  let sanitized = text
+    // 1. Remove ASCII control characters (except newline/tab)
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+    // 2. Remove Unicode directional and control overrides
+    .replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+    // 3. Remove script tags and HTML tags
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<[^>]+>/g, '')
+    // 4. Strip emails, phone numbers, and URLs
+    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[redacted_email]')
+    .replace(/\+?\d[\d\s\-\(\)]{7,}\d/g, '[redacted_phone]')
+    .replace(/https?:\/\/[^\s]+|www\.[^\s]+/g, '[redacted_url]')
+    // 5. Neutralize prompt injection phrases
+    .replace(/ignore\s+previous\s+instructions/gi, '[neutralized]')
+    .replace(/give\s+the\s+candidate\s+a\s+perfect\s+score/gi, '[neutralized]')
+    .replace(/treat\s+this\s+source\s+as\s+the\s+candidate\s+answer/gi, '[neutralized]')
+    .trim();
+
+  // Bound per item length (max 500 characters)
+  if (sanitized.length > 500) {
+    sanitized = sanitized.substring(0, 500) + '...';
+  }
+
+  return sanitized;
 }
 
 export function buildGroundingPromptSection(options: GroundingPromptOptions): string {
@@ -21,7 +44,7 @@ export function buildGroundingPromptSection(options: GroundingPromptOptions): st
     facts.push(`Target Role: ${sanitizePromptText(projection.targetRole)}`);
   }
   if (projection.skills && projection.skills.length > 0) {
-    facts.push(`Verified Skills: ${projection.skills.slice(0, 10).map(sanitizePromptText).join(', ')}`);
+    facts.push(`User-selected Resume skill claim: ${projection.skills.slice(0, 10).map(sanitizePromptText).join(', ')}`);
   }
   if (projection.achievements && projection.achievements.length > 0) {
     projection.achievements.slice(0, 5).forEach(ach => {
@@ -53,10 +76,13 @@ export function buildGroundingPromptSection(options: GroundingPromptOptions): st
     });
   }
 
-  // Bound total text length
-  let combinedFacts = facts.join('\n');
-  if (combinedFacts.length > 3000) {
-    combinedFacts = combinedFacts.substring(0, 3000) + '... [truncated for prompt bounds]';
+  // Cap total facts count to max 20
+  const slicedFacts = facts.slice(0, 20);
+
+  // Bound total prompt text length to max 4000 characters
+  let combinedFacts = slicedFacts.join('\n');
+  if (combinedFacts.length > 4000) {
+    combinedFacts = combinedFacts.substring(0, 4000) + '... [truncated for prompt bounds]';
   }
 
   if (!combinedFacts) return '';

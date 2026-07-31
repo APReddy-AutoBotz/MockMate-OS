@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS public.career_context_items (
     user_confirmed_at TIMESTAMPTZ,
     superseded_by UUID REFERENCES public.career_context_items(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT unique_user_source_identity UNIQUE (user_id, source_module, source_record_id, source_path, source_revision, source_hash)
 );
 
 CREATE INDEX IF NOT EXISTS idx_career_context_items_user_status ON public.career_context_items (user_id, item_status);
@@ -64,15 +65,19 @@ CREATE TABLE IF NOT EXISTS public.career_context_snapshots (
     conflicts JSONB NOT NULL DEFAULT '[]'::jsonb,
     consent JSONB NOT NULL,
     source_modules TEXT[] NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    client_request_id TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT unique_user_snapshot_client_req UNIQUE (user_id, client_request_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_career_context_snapshots_user_purpose ON public.career_context_snapshots (user_id, purpose);
+CREATE INDEX IF NOT EXISTS idx_career_context_snapshots_client_req ON public.career_context_snapshots (user_id, client_request_id);
 
 -- 4. career_context_snapshot_items
 CREATE TABLE IF NOT EXISTS public.career_context_snapshot_items (
     snapshot_id UUID NOT NULL REFERENCES public.career_context_snapshots(id) ON DELETE CASCADE,
-    item_id UUID NOT NULL REFERENCES public.career_context_items(id) ON DELETE CASCADE,
+    item_id UUID NOT NULL REFERENCES public.career_context_items(id) ON DELETE RESTRICT,
     position INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (snapshot_id, item_id)
 );
@@ -92,11 +97,12 @@ CREATE TABLE IF NOT EXISTS public.career_context_bridges (
     ),
     snapshot_id UUID NOT NULL REFERENCES public.career_context_snapshots(id) ON DELETE CASCADE,
     source_record_id TEXT,
-    target_session_id TEXT,
+    target_session_id UUID REFERENCES public.interview_sessions(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'drafted' CHECK (
         status IN ('drafted', 'confirmed', 'consumed', 'cancelled', 'expired')
     ),
     client_request_id TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
     confirmed_at TIMESTAMPTZ,
     consumed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -105,6 +111,54 @@ CREATE TABLE IF NOT EXISTS public.career_context_bridges (
 );
 
 CREATE INDEX IF NOT EXISTS idx_career_context_bridges_user_client_req ON public.career_context_bridges (user_id, client_request_id);
+
+-- OWNER CONSISTENCY TRIGGERS
+CREATE OR REPLACE FUNCTION public.check_snapshot_item_owner_consistency()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_snapshot_user UUID;
+    v_item_user UUID;
+BEGIN
+    SELECT user_id INTO v_snapshot_user FROM public.career_context_snapshots WHERE id = NEW.snapshot_id;
+    SELECT user_id INTO v_item_user FROM public.career_context_items WHERE id = NEW.item_id;
+
+    IF v_snapshot_user IS NULL OR v_item_user IS NULL OR v_snapshot_user <> v_item_user THEN
+        RAISE EXCEPTION 'Cross-user context item assignment denied.';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_snapshot_item_owner_check
+    BEFORE INSERT ON public.career_context_snapshot_items
+    FOR EACH ROW
+    EXECUTE FUNCTION public.check_snapshot_item_owner_consistency();
+
+CREATE OR REPLACE FUNCTION public.check_bridge_owner_consistency()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_snapshot_user UUID;
+    v_session_user UUID;
+BEGIN
+    SELECT user_id INTO v_snapshot_user FROM public.career_context_snapshots WHERE id = NEW.snapshot_id;
+    IF v_snapshot_user IS NULL OR v_snapshot_user <> NEW.user_id THEN
+        RAISE EXCEPTION 'Cross-user snapshot bridge assignment denied.';
+    END IF;
+
+    IF NEW.target_session_id IS NOT NULL THEN
+        SELECT user_id INTO v_session_user FROM public.interview_sessions WHERE id = NEW.target_session_id;
+        IF v_session_user IS NOT NULL AND v_session_user <> NEW.user_id THEN
+            RAISE EXCEPTION 'Cross-user target session consumption denied.';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_bridge_owner_check
+    BEFORE INSERT OR UPDATE ON public.career_context_bridges
+    FOR EACH ROW
+    EXECUTE FUNCTION public.check_bridge_owner_consistency();
 
 -- RLS POLICIES
 
@@ -178,27 +232,34 @@ GRANT ALL ON public.career_context_snapshots TO service_role;
 GRANT ALL ON public.career_context_snapshot_items TO service_role;
 GRANT ALL ON public.career_context_bridges TO service_role;
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_context_state TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_context_items TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_context_snapshots TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_context_snapshot_items TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_context_bridges TO authenticated;
+GRANT SELECT ON public.career_context_state TO authenticated;
+GRANT SELECT ON public.career_context_items TO authenticated;
+GRANT SELECT ON public.career_context_snapshots TO authenticated;
+GRANT SELECT ON public.career_context_snapshot_items TO authenticated;
+GRANT SELECT ON public.career_context_bridges TO authenticated;
 
--- IMMUTABILITY TRIGGERS
+-- IMMUTABILITY TRIGGERS AND PROTECTED ACCOUNT DELETION
 CREATE OR REPLACE FUNCTION public.prevent_snapshot_mutation()
 RETURNS TRIGGER AS $$
 BEGIN
+    IF (current_setting('app.allow_protected_deletion', true) = 'true') THEN
+        IF (TG_OP = 'DELETE') THEN
+            RETURN OLD;
+        END IF;
+    END IF;
     IF (TG_OP = 'UPDATE') THEN
         RAISE EXCEPTION 'Career Context Snapshots and Snapshot Items are immutable and cannot be updated.';
     ELSIF (TG_OP = 'DELETE' AND TG_TABLE_NAME = 'career_context_snapshot_items') THEN
         RAISE EXCEPTION 'Career Context Snapshot Items membership is immutable and cannot be deleted.';
+    ELSIF (TG_OP = 'DELETE' AND TG_TABLE_NAME = 'career_context_snapshots') THEN
+        RAISE EXCEPTION 'Career Context Snapshots are immutable and cannot be deleted.';
     END IF;
     RETURN OLD;
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE TRIGGER prevent_snapshot_update
-    BEFORE UPDATE ON public.career_context_snapshots
+    BEFORE UPDATE OR DELETE ON public.career_context_snapshots
     FOR EACH ROW
     EXECUTE FUNCTION public.prevent_snapshot_mutation();
 
@@ -207,3 +268,22 @@ CREATE OR REPLACE TRIGGER prevent_snapshot_item_mutation
     FOR EACH ROW
     EXECUTE FUNCTION public.prevent_snapshot_mutation();
 
+-- Service Role Transactional Account Deletion RPC
+CREATE OR REPLACE FUNCTION public.delete_user_career_context(target_user_id UUID)
+RETURNS VOID AS $$
+BEGIN
+    PERFORM set_config('app.allow_protected_deletion', 'true', true);
+
+    DELETE FROM public.career_context_snapshot_items
+    WHERE snapshot_id IN (SELECT id FROM public.career_context_snapshots WHERE user_id = target_user_id)
+       OR item_id IN (SELECT id FROM public.career_context_items WHERE user_id = target_user_id);
+
+    DELETE FROM public.career_context_bridges WHERE user_id = target_user_id;
+    DELETE FROM public.career_context_snapshots WHERE user_id = target_user_id;
+    DELETE FROM public.career_context_items WHERE user_id = target_user_id;
+    DELETE FROM public.career_context_state WHERE user_id = target_user_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+REVOKE EXECUTE ON FUNCTION public.delete_user_career_context(UUID) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.delete_user_career_context(UUID) TO service_role;

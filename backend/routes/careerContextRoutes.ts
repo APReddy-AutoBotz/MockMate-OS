@@ -5,7 +5,7 @@ import {
   getUserCareerContextItems,
   handleItemDecision,
   setPersonalizationPreference,
-  upsertCareerContextItems
+  saveCareerContextItemDrafts
 } from '../services/careerContextService';
 import { createGroundingSnapshot, getSnapshotById } from '../services/groundingSnapshotService';
 import { createModuleBridgeSession, consumeModuleBridgeSession } from '../services/moduleBridgeService';
@@ -14,6 +14,14 @@ import { buildResumeContextItems } from '../services/careerContextAdapters/resum
 import { buildClearSpeakContextItems } from '../services/careerContextAdapters/clearSpeakContextAdapter';
 import { buildInterviewContextItems } from '../services/careerContextAdapters/interviewContextAdapter';
 import { supabaseAdmin } from '../supabaseAdmin';
+import {
+  CareerContextItemDraft,
+  CareerContextItemDecisionRequestSchema,
+  GroundingSnapshotCreateRequestSchema,
+  ModuleBridgeCreateRequestSchema,
+  ModuleBridgeConsumeRequestSchema,
+  CareerContextPreferenceRequestSchema
+} from 'mockmate-shared';
 
 const router = Router();
 
@@ -33,6 +41,7 @@ router.get('/', async (req, res) => {
     const { projection, conflicts } = projectCareerContext(allItems);
 
     return res.json({
+      success: true,
       state,
       activeItems,
       pendingItems,
@@ -41,7 +50,8 @@ router.get('/', async (req, res) => {
     });
   } catch (err: any) {
     console.error('[CareerContextRoutes] GET / error:', err);
-    return res.status(500).json({ error: 'Could not load career context' });
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.message || 'Could not load career context' });
   }
 });
 
@@ -52,10 +62,10 @@ router.post('/rebuild', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
     if (!supabaseAdmin) {
-      return res.status(503).json({ error: 'Supabase admin service unavailable' });
+      return res.status(503).json({ error: 'Authoritative persistence unavailable' });
     }
 
-    const newItems: any[] = [];
+    const drafts: CareerContextItemDraft[] = [];
 
     // 1. Rebuild from resume_reviews
     const { data: resumes } = await supabaseAdmin
@@ -74,7 +84,7 @@ router.post('/rebuild', async (req, res) => {
             targetRole: r.target_role,
             jdMissingSkills: r.missing_skills || [],
           });
-          newItems.push(...items);
+          drafts.push(...items);
         }
       });
     }
@@ -101,7 +111,7 @@ router.post('/rebuild', async (req, res) => {
             updatedAt: p.updated_at,
           },
         });
-        newItems.push(...items);
+        drafts.push(...items);
       });
     }
 
@@ -113,14 +123,15 @@ router.post('/rebuild', async (req, res) => {
 
     if (csSessions && csSessions.length > 0) {
       csSessions.forEach(s => {
-        if (s.score) {
+        const practicedWords = Array.isArray(s.practiced_words) ? s.practiced_words : (Array.isArray(s.key_vocab) ? s.key_vocab : []);
+        if (s.score || practicedWords.length > 0) {
           const items = buildClearSpeakContextItems({
             sessionRecordId: s.id,
-            sessionScore: s.score,
-            practicedWords: s.key_vocab || [],
+            sessionScore: s.score || null,
+            practicedWords,
             topicTag: s.topic_tag,
           });
-          newItems.push(...items);
+          drafts.push(...items);
         }
       });
     }
@@ -139,22 +150,25 @@ router.post('/rebuild', async (req, res) => {
             sessionId: s.id,
             report: s.final_report,
           });
-          newItems.push(...items);
+          drafts.push(...items);
         }
       });
     }
 
-    await upsertCareerContextItems(userId, newItems);
+    const result = await saveCareerContextItemDrafts(userId, drafts);
     const updatedState = await getCareerContextState(userId);
 
     return res.json({
       success: true,
-      rebuiltItemsCount: newItems.length,
       state: updatedState,
+      addedCount: result.addedCount,
+      supersededCount: result.supersededCount,
+      unchangedCount: result.unchangedCount,
     });
   } catch (err: any) {
     console.error('[CareerContextRoutes] POST /rebuild error:', err);
-    return res.status(500).json({ error: 'Failed to rebuild career context' });
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.message || 'Failed to rebuild career context' });
   }
 });
 
@@ -164,16 +178,21 @@ router.post('/preference', async (req, res) => {
     const userId = (req as any).user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { personalizationEnabled } = req.body;
-    if (typeof personalizationEnabled !== 'boolean') {
-      return res.status(400).json({ error: 'personalizationEnabled must be a boolean' });
+    const parseResult = CareerContextPreferenceRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(422).json({ error: 'Invalid preference payload', details: parseResult.error.issues });
     }
 
-    const state = await setPersonalizationPreference(userId, personalizationEnabled);
+    const state = await setPersonalizationPreference(
+      userId,
+      parseResult.data.personalizationEnabled,
+      parseResult.data.expectedContextVersion
+    );
     return res.json({ success: true, state });
   } catch (err: any) {
     console.error('[CareerContextRoutes] POST /preference error:', err);
-    return res.status(500).json({ error: 'Failed to update preference' });
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.message || 'Failed to update preference' });
   }
 });
 
@@ -184,19 +203,27 @@ router.post('/items/:itemId/decision', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
     const { itemId } = req.params;
-    const { decision, newValue } = req.body;
-
-    if (!['confirm', 'reject', 'revoke', 'dispute', 'edit'].includes(decision)) {
-      return res.status(400).json({ error: 'Invalid decision type' });
+    const parseResult = CareerContextItemDecisionRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(422).json({ error: 'Invalid decision payload', details: parseResult.error.issues });
     }
 
-    const item = await handleItemDecision(userId, itemId, decision, newValue);
+    const { decision, replacementValue, expectedContextVersion } = parseResult.data;
+
+    const item = await handleItemDecision(
+      userId,
+      itemId,
+      decision,
+      replacementValue,
+      expectedContextVersion
+    );
     const state = await getCareerContextState(userId);
 
     return res.json({ success: true, item, state });
   } catch (err: any) {
     console.error('[CareerContextRoutes] POST /items/decision error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to apply decision' });
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.message || 'Failed to apply decision' });
   }
 });
 
@@ -206,20 +233,23 @@ router.post('/snapshots', async (req, res) => {
     const userId = (req as any).user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { purpose, includedItemIds, excludedItemIds, scope, sourceModules, expectedContextVersion } = req.body;
-
-    if (!purpose || !Array.isArray(includedItemIds) || !scope || !Array.isArray(sourceModules)) {
-      return res.status(400).json({ error: 'Invalid snapshot request parameters' });
+    const parseResult = GroundingSnapshotCreateRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(422).json({ error: 'Invalid snapshot creation payload', details: parseResult.error.issues });
     }
+
+    const { purpose, includedItemIds, excludedItemIds, conflictSelections, consent, expectedContextVersion, clientRequestId } = parseResult.data;
 
     const snapshot = await createGroundingSnapshot({
       userId,
       purpose,
       includedItemIds,
       excludedItemIds: excludedItemIds || [],
-      scope,
-      sourceModules,
+      conflictSelections,
+      scope: consent.scope,
+      sourceModules: consent.sourceModules,
       expectedContextVersion,
+      clientRequestId,
     });
 
     return res.json({ success: true, snapshot });
@@ -239,7 +269,7 @@ router.get('/snapshots/:snapshotId', async (req, res) => {
     const snapshot = await getSnapshotById(userId, req.params.snapshotId);
     if (!snapshot) return res.status(404).json({ error: 'Snapshot not found' });
 
-    return res.json({ snapshot });
+    return res.json({ success: true, snapshot });
   } catch (err: any) {
     console.error('[CareerContextRoutes] GET /snapshots/:snapshotId error:', err);
     const status = err.status || 500;
@@ -253,11 +283,12 @@ router.post('/bridges', async (req, res) => {
     const userId = (req as any).user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { sourceModule, targetModule, purpose, snapshotId, sourceRecordId, clientRequestId } = req.body;
-
-    if (!sourceModule || !targetModule || !purpose || !snapshotId || !clientRequestId) {
-      return res.status(400).json({ error: 'Missing required bridge parameters' });
+    const parseResult = ModuleBridgeCreateRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(422).json({ error: 'Invalid bridge creation payload', details: parseResult.error.issues });
     }
+
+    const { sourceModule, targetModule, purpose, snapshotId, sourceRecordId, clientRequestId } = parseResult.data;
 
     const bridge = await createModuleBridgeSession({
       userId,
@@ -284,11 +315,12 @@ router.post('/bridges/:bridgeId/consume', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
     const { bridgeId } = req.params;
-    const { targetSessionId } = req.body;
-
-    if (!targetSessionId) {
-      return res.status(400).json({ error: 'targetSessionId is required' });
+    const parseResult = ModuleBridgeConsumeRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(422).json({ error: 'Invalid bridge consume payload', details: parseResult.error.issues });
     }
+
+    const { targetSessionId } = parseResult.data;
 
     const bridge = await consumeModuleBridgeSession(userId, bridgeId, targetSessionId);
     return res.json({ success: true, bridge });

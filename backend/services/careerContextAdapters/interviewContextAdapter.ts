@@ -1,4 +1,4 @@
-import { FinalReport, CareerContextItem } from 'mockmate-shared';
+import { FinalReport, CareerContextItemDraft } from 'mockmate-shared';
 import crypto from 'crypto';
 
 export interface InterviewAdapterInput {
@@ -11,21 +11,25 @@ function computeHash(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex').substring(0, 16);
 }
 
-export function buildInterviewContextItems(input: InterviewAdapterInput): CareerContextItem[] {
+export function buildInterviewContextItems(input: InterviewAdapterInput): CareerContextItemDraft[] {
   const { sessionId, report, revision = 'v1' } = input;
-  const items: CareerContextItem[] = [];
-  const capturedAt = new Date().toISOString();
+  const items: CareerContextItemDraft[] = [];
 
   // 1. Quantitative dimension signals (practice evidence)
   const dimensionScores = report.quantitativeAnalysis?.dimension_scores || [];
   dimensionScores.forEach((dimScore) => {
     if (dimScore.score_status !== 'scored') return;
     const evidenceIds = (dimScore.evidenceReferences || []).map(r => r.turnId).filter(Boolean);
-    const summary = `${dimScore.dimension}: score ${dimScore.normalized_score ?? dimScore.anchor_score}/100. ${dimScore.reason}`;
-    const isStrength = (dimScore.normalized_score ?? dimScore.anchor_score ?? 0) >= 75;
+    
+    // Label using exact scale: normalized 0-100 or anchor 0-4
+    const scoreStr = dimScore.normalized_score !== undefined && dimScore.normalized_score !== null
+      ? `${dimScore.normalized_score}/100`
+      : `${dimScore.anchor_score}/4`;
+    
+    const summary = `${dimScore.dimension}: score ${scoreStr}. ${dimScore.reason}`;
+    const isStrength = (dimScore.normalized_score ?? (dimScore.anchor_score * 25)) >= 75;
 
     items.push({
-      id: `ctx_int_${sessionId}_dim_${dimScore.dimension.toLowerCase()}`,
       kind: isStrength ? 'interview_practice_signal' : 'development_priority',
       canonicalKey: `interview.practice_signal.${dimScore.dimension.toLowerCase()}`,
       label: `Interview Signal: ${dimScore.dimension}`,
@@ -40,14 +44,12 @@ export function buildInterviewContextItems(input: InterviewAdapterInput): Career
         fieldPath: `quantitativeAnalysis.dimension_scores.${dimScore.dimension}`,
         sourceRevision: revision,
         sourceHash: computeHash(summary),
-        capturedAt,
+        capturedAt: new Date().toISOString(),
       },
       exactExcerpt: dimScore.reason,
       provenance: 'system_observed',
       status: 'active',
       sensitivity: 'standard',
-      createdAt: capturedAt,
-      updatedAt: capturedAt,
     });
   });
 
@@ -55,7 +57,6 @@ export function buildInterviewContextItems(input: InterviewAdapterInput): Career
   if (report.biggestRiskArea?.observation) {
     const riskSummary = `Risk: ${report.biggestRiskArea.title} - ${report.biggestRiskArea.observation}`;
     items.push({
-      id: `ctx_int_${sessionId}_risk_area`,
       kind: 'development_priority',
       canonicalKey: 'interview.development_priority.biggest_risk',
       label: `Development Priority: ${report.biggestRiskArea.title}`,
@@ -69,14 +70,12 @@ export function buildInterviewContextItems(input: InterviewAdapterInput): Career
         fieldPath: 'biggestRiskArea',
         sourceRevision: revision,
         sourceHash: computeHash(riskSummary),
-        capturedAt,
+        capturedAt: new Date().toISOString(),
       },
       exactExcerpt: report.biggestRiskArea.observation,
       provenance: 'system_observed',
       status: 'active',
       sensitivity: 'standard',
-      createdAt: capturedAt,
-      updatedAt: capturedAt,
     });
   }
 
@@ -85,7 +84,6 @@ export function buildInterviewContextItems(input: InterviewAdapterInput): Career
     const actions = report.prioritizedActions.map(a => `${a.action} (${a.impact} impact)`).filter(Boolean);
     if (actions.length > 0) {
       items.push({
-        id: `ctx_int_${sessionId}_prioritized_actions`,
         kind: 'development_priority',
         canonicalKey: 'interview.prioritized_actions',
         label: 'Interview Practice Prioritized Actions',
@@ -99,14 +97,12 @@ export function buildInterviewContextItems(input: InterviewAdapterInput): Career
           fieldPath: 'prioritizedActions',
           sourceRevision: revision,
           sourceHash: computeHash(actions.join(';')),
-          capturedAt,
+          capturedAt: new Date().toISOString(),
         },
         exactExcerpt: actions.join(', '),
         provenance: 'system_observed',
         status: 'active',
         sensitivity: 'standard',
-        createdAt: capturedAt,
-        updatedAt: capturedAt,
       });
     }
   }

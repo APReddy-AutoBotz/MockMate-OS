@@ -88,7 +88,19 @@ jobs:
       - name: 11e. Adaptive Browser UI Journey
         run: npm run test:adaptive-ui-journey
 
-      - name: 11g. Career Context Cross-Module Grounding Journeys
+      - name: 11g1. Career Context API integration journey
+        run: npm run test:career-context-api-journey
+
+      - name: 11g2. Resume to Interview grounding journey
+        run: npm run test:resume-interview-journey
+
+      - name: 11g3. ClearSpeak to Interview grounding journey
+        run: npm run test:clearspeak-interview-journey
+
+      - name: 11g4. Resume to ClearSpeak grounding journey
+        run: npm run test:resume-clearspeak-journey
+
+      - name: 11g5. Career Context overall grounding suite
         run: npm run test:career-context-journeys
 
       - name: 12. Backend tests

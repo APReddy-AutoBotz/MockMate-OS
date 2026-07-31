@@ -238,7 +238,9 @@ const App: React.FC = () => {
         };
 
         const role = ROLE_MAP[payload.role] ?? 'Business Professional';
-        const draft = createClearSpeakGroundedInterviewDraft('snap_clearspeak', 'br_clearspeak', role, payload.bridgeQuestion);
+        const snapshotId = crypto.randomUUID();
+        const bridgeId = crypto.randomUUID();
+        const draft = createClearSpeakGroundedInterviewDraft(snapshotId, bridgeId, role, payload.bridgeQuestion);
         setSetupDraft(draft);
         setAppState('CONTEXT_UPLOAD');
     };
@@ -252,7 +254,9 @@ const App: React.FC = () => {
         audioService.playStart();
         const targetRole = userProfile?.targetRole || 'Software Professional';
         const intentText = jdText || 'General interview based on my resume.';
-        const draft = createResumeGroundedInterviewDraft('snap_resume', 'br_resume', targetRole, intentText);
+        const snapshotId = crypto.randomUUID();
+        const bridgeId = crypto.randomUUID();
+        const draft = createResumeGroundedInterviewDraft(snapshotId, bridgeId, targetRole, intentText);
         if (jdText) draft.jdText = jdText;
         setSetupDraft(draft);
         setAppState('CONTEXT_UPLOAD');

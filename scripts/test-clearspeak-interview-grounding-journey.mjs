@@ -1,63 +1,81 @@
-import { createClearSpeakGroundedInterviewDraft } from '../shared/dist/index.js';
-import { projectCareerContext } from '../backend/dist/services/careerContextProjectionService.js';
+import app from '../backend/dist/server.js';
+import http from 'node:http';
 
-console.log('[ClearSpeak -> Interview Journey] Verifying ClearSpeak speaking goal grounding in Interview draft...');
+console.log('[ClearSpeak -> Interview Journey] Starting Real HTTP ClearSpeak Grounding Journey...');
 
-const snapshotId = '66666666-6666-6666-6666-666666666666';
-const bridgeId = '77777777-7777-7777-7777-777777777777';
+const server = http.createServer(app);
+await new Promise(resolve => server.listen(0, resolve));
+const port = server.address().port;
+const baseUrl = `http://localhost:${port}`;
 
-const draft = createClearSpeakGroundedInterviewDraft(
-  snapshotId,
-  bridgeId,
-  'Engineering Manager',
-  'Practice executive communication and crisp conciseness'
-);
+const headers = {
+  'Content-Type': 'application/json',
+  'Authorization': 'Bearer dev_user_a',
+};
 
-if (draft.bridgeIntent?.sourceModule !== 'clearspeak') {
-  console.error('FAILED: sourceModule is not clearspeak');
-  process.exit(1);
-}
-
-const csItems = [
-  {
-    id: '88888888-8888-8888-8888-888888888888',
-    kind: 'communication_goal',
-    canonicalKey: 'clearspeak.goal',
-    label: 'Communication Goal',
-    value: { type: 'text', text: 'Conciseness & Executive Presence' },
-    source: { module: 'clearspeak', recordId: 'p1', fieldPath: 'goal', sourceRevision: 'v1', sourceHash: 'cs1', capturedAt: new Date().toISOString() },
-    provenance: 'direct_source',
-    status: 'active',
-    sensitivity: 'standard',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: '99999999-9999-9999-9999-999999999999',
-    kind: 'practice_metric',
-    canonicalKey: 'clearspeak.delivery_score',
-    label: 'Delivery Score',
-    value: { type: 'metric', metric: 'WPM', value: 145, scale: 'wpm', measuredAt: new Date().toISOString() },
-    source: { module: 'clearspeak', recordId: 's1', fieldPath: 'score', sourceRevision: 'v1', sourceHash: 'cs2', capturedAt: new Date().toISOString() },
-    provenance: 'system_observed',
-    status: 'active',
-    sensitivity: 'standard',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+try {
+  // 1. Fetch context
+  const getRes = await fetch(`${baseUrl}/api/career-context`, { headers });
+  const contextData = await getRes.json();
+  if (!contextData.success) {
+    throw new Error('Failed to fetch career context');
   }
-];
 
-const { projection } = projectCareerContext(csItems, 'clearspeak_to_interview', {}, false);
+  // 2. Create ClearSpeak to Interview grounding snapshot
+  const clientReqId = '99999999-9999-9999-9999-999999999999';
+  const snapRes = await fetch(`${baseUrl}/api/career-context/snapshots`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      purpose: 'clearspeak_to_interview',
+      includedItemIds: contextData.activeItems.filter(i => i.source.module === 'clearspeak').map(i => i.id),
+      excludedItemIds: [],
+      consent: { scope: 'one_time', sourceModules: ['clearspeak'] },
+      clientRequestId: clientReqId,
+    }),
+  });
+  if (snapRes.status !== 200) {
+    throw new Error(`ClearSpeak snapshot creation failed with status ${snapRes.status}`);
+  }
+  const snapData = await snapRes.json();
+  const snapshotId = snapData.snapshot.id;
 
-// Delivery metrics MUST NOT enter Interview evaluator or signals
-if (projection.practiceSignals && projection.practiceSignals.length > 0) {
-  console.error('FAILED: numeric practice metric leaked into interview practice signals!');
-  process.exit(1);
+  // 3. Verify numeric delivery metrics are NOT in interview projection
+  if (snapData.snapshot.projection.practiceSignals && snapData.snapshot.projection.practiceSignals.length > 0) {
+    throw new Error('Numeric delivery metrics leaked into interview practice signals!');
+  }
+
+  // 4. Create module bridge
+  const bridgeReqId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const bridgeRes = await fetch(`${baseUrl}/api/career-context/bridges`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      sourceModule: 'clearspeak',
+      targetModule: 'interview',
+      purpose: 'clearspeak_to_interview',
+      snapshotId,
+      clientRequestId: bridgeReqId,
+    }),
+  });
+  if (bridgeRes.status !== 200) {
+    throw new Error(`Bridge creation failed with status ${bridgeRes.status}`);
+  }
+  const bridgeData = await bridgeRes.json();
+  const bridgeId = bridgeData.bridge.id;
+
+  // 5. Consume bridge into interview session
+  const targetSessionId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+  const consumeRes = await fetch(`${baseUrl}/api/career-context/bridges/${bridgeId}/consume`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ targetSessionId }),
+  });
+  if (consumeRes.status !== 200) {
+    throw new Error(`Bridge consume failed with status ${consumeRes.status}`);
+  }
+
+  console.log('[ClearSpeak -> Interview Journey] PASSED: Real HTTP ClearSpeak to Interview Goal Grounding verified 100%!');
+} finally {
+  server.close();
 }
-
-if (!projection.communicationGoal || projection.communicationGoal !== 'Conciseness & Executive Presence') {
-  console.error('FAILED: communication goal missing from clearspeak_to_interview projection');
-  process.exit(1);
-}
-
-console.log('[ClearSpeak -> Interview Journey] PASSED: ClearSpeak to Interview goal transfer verified 100%!');

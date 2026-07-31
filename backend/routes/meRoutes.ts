@@ -39,7 +39,40 @@ router.delete('/data', async (req, res) => {
     const deletedTables: string[] = [];
     const failedTables: string[] = [];
 
-    // Delete turns first for sessions
+    // 1. Transactional deletion of P0-3 Career Context records via protected RPC
+    const { error: rpcErr } = await supabaseAdmin.rpc('delete_user_career_context', {
+      target_user_id: userId,
+    });
+
+    if (rpcErr) {
+      console.warn('[Me] RPC delete_user_career_context failed, falling back to direct delete:', rpcErr.message);
+      const p03Tables = [
+        'career_context_snapshot_items',
+        'career_context_bridges',
+        'career_context_snapshots',
+        'career_context_items',
+        'career_context_state',
+      ];
+      for (const table of p03Tables) {
+        const { error } = await supabaseAdmin.from(table).delete().eq('user_id', userId);
+        if (error) {
+          console.error(`[Me] Error deleting table ${table}:`, error.message);
+          failedTables.push(table);
+        } else {
+          deletedTables.push(table);
+        }
+      }
+    } else {
+      deletedTables.push(
+        'career_context_snapshot_items',
+        'career_context_bridges',
+        'career_context_snapshots',
+        'career_context_items',
+        'career_context_state'
+      );
+    }
+
+    // 2. Delete turns for user sessions
     const { data: sessions, error: sessionErr } = await supabaseAdmin
       .from('interview_sessions')
       .select('id')
@@ -59,11 +92,8 @@ router.delete('/data', async (req, res) => {
       deletedTables.push('interview_turns');
     }
 
-    const userOwnedTables = [
-      'career_context_bridges',
-      'career_context_snapshots',
-      'career_context_items',
-      'career_context_state',
+    // 3. Delete remaining application data tables
+    const applicationTables = [
       'resume_reviews',
       'interview_sessions',
       'clearspeak_sessions',
@@ -75,7 +105,7 @@ router.delete('/data', async (req, res) => {
       'profiles',
     ];
 
-    for (const table of userOwnedTables) {
+    for (const table of applicationTables) {
       const { error } = await supabaseAdmin.from(table).delete().eq('user_id', userId);
       if (error) {
         console.error(`[Me] Error deleting table ${table}:`, error.message);
