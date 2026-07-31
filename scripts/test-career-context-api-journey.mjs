@@ -1,5 +1,9 @@
-import app from '../backend/dist/server.js';
 import http from 'node:http';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const serverModule = require('../backend/dist/server.js');
+const app = serverModule.default || serverModule.app || serverModule;
 
 console.log('[API Journey] Starting Real HTTP Server for Career Context API tests...');
 
@@ -45,7 +49,7 @@ try {
     throw new Error(`Expected 200 for preference update, got ${resPref.status}`);
   }
 
-  // 4. POST /api/career-context/snapshots -> 200 OK or 422 if empty
+  // 4. POST /api/career-context/snapshots -> 200 OK
   const clientReqId = '33333333-3333-3333-3333-333333333333';
   const resSnap = await fetch(`${baseUrl}/api/career-context/snapshots`, {
     method: 'POST',

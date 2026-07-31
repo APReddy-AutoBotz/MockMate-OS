@@ -1,5 +1,9 @@
-import app from '../backend/dist/server.js';
 import http from 'node:http';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const serverModule = require('../backend/dist/server.js');
+const app = serverModule.default || serverModule.app || serverModule;
 
 console.log('[Resume -> ClearSpeak Journey] Starting Real HTTP Resume to ClearSpeak Grounding Journey...');
 
