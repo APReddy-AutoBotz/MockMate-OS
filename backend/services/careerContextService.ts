@@ -20,7 +20,7 @@ export async function getCareerContextState(userId: string): Promise<CareerConte
         userId: data.user_id,
         contextVersion: Number(data.context_version),
         personalizationEnabled: Boolean(data.personalization_enabled),
-        updatedAt: data.updated_at,
+        updatedAt: data.updated_at || now,
       });
     }
 

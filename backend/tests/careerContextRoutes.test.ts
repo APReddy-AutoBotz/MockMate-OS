@@ -21,8 +21,8 @@ const mockSupabaseClient: any = {
       return {
         select: () => ({
           eq: () => ({
-            single: async () => ({ data: { user_id: 'test_user_p03', context_version: 1, personalization_enabled: true } }),
-            maybeSingle: async () => ({ data: { user_id: 'test_user_p03', context_version: 1, personalization_enabled: true } }),
+            single: async () => ({ data: { user_id: 'test_user_p03', context_version: 1, personalization_enabled: true, updated_at: new Date().toISOString() } }),
+            maybeSingle: async () => ({ data: { user_id: 'test_user_p03', context_version: 1, personalization_enabled: true, updated_at: new Date().toISOString() } }),
           }),
         }),
         upsert: async (row: any) => ({ data: row, error: null }),
@@ -30,20 +30,20 @@ const mockSupabaseClient: any = {
       };
     }
     if (table === 'career_context_items') {
-      return {
-        select: () => ({
-          eq: (_col: string, val: string) => ({
-            order: () => ({ data: mockItems }),
-            single: async () => {
-              const found = mockItems.find(i => i.id === val || i.user_id === val);
-              return { data: found || null, error: found ? null : new Error('Not found') };
-            },
-            in: (_col2: string, vals: string[]) => ({
-              data: mockItems.filter(i => vals.includes(i.id)),
-              error: null,
-            }),
-          }),
+      const getItemQuery = (targetVal?: string) => ({
+        eq: (_col: string, val: string) => getItemQuery(val || targetVal),
+        order: () => ({ data: mockItems }),
+        single: async () => {
+          const found = mockItems.find(i => i.id === targetVal || i.user_id === targetVal);
+          return { data: found || null, error: found ? null : new Error('Not found') };
+        },
+        in: (_col2: string, vals: string[]) => ({
+          data: mockItems.filter(i => vals.includes(i.id)),
+          error: null,
         }),
+      });
+      return {
+        select: () => getItemQuery(),
         upsert: async (rows: any) => {
           const arr = Array.isArray(rows) ? rows : [rows];
           arr.forEach(r => {
