@@ -116,19 +116,26 @@ const mockSupabaseClient: any = {
             },
           }),
         }),
-        update: (fields: any) => ({
-          eq: (col1: string, val1: string) => ({
-            eq: (_col2: string, _val2: string) => ({
-              select: () => ({
-                single: async () => {
-                  const b = mockBridges.find(x => x[col1] === val1);
-                  if (b) Object.assign(b, fields);
-                  return { data: b || null, error: b ? null : new Error('Not found') };
-                },
-              }),
+        update: (fields: any) => {
+          const makeUpdateRes = (targetId: string) => ({
+            select: () => ({
+              single: async () => {
+                const b = mockBridges.find(x => x.id === targetId);
+                if (b) Object.assign(b, fields);
+                return { data: b || null, error: b ? null : new Error('Not found') };
+              },
             }),
-          }),
-        }),
+          });
+          return {
+            eq: (col1: string, val1: string) => {
+              const res = makeUpdateRes(val1);
+              return {
+                ...res,
+                eq: (_col2: string, _val2: string) => res,
+              };
+            },
+          };
+        },
       };
     }
     return {
