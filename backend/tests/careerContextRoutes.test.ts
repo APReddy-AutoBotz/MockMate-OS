@@ -316,7 +316,7 @@ describe('Career Context API Routes (P0-3)', () => {
       .post('/api/career-context/bridges/br_test_consume/consume')
       .send({ targetSessionId: 'int_sess_1000' });
 
-    expect(res2.status).toBe(500);
+    expect(res2.status).toBe(409);
     expect(res2.body.error).toContain('already been consumed');
   });
 });
