@@ -2,7 +2,6 @@ import {
   InterviewSetupDraftSchema,
   InterviewSessionContextSchema,
   CareerContextItemSchema,
-  CareerContextItemKindSchema,
   CareerContextSnapshotSchema,
   ModuleBridgeSessionSchema,
   GroundingConsentSchema,
@@ -40,9 +39,9 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
         personaFocus: 'lead',
         groundingReferences: [
           {
-            contextItemId: 'ctx_item_1',
+            contextItemId: '11111111-1111-1111-1111-111111111111',
             sourceModule: 'resume',
-            sourceRecordId: 'res_rec_1',
+            sourceRecordId: '22222222-2222-2222-2222-222222222222',
             sourcePath: 'experience[0].bullets[0]',
             label: 'Led team of 5 engineers',
             exactExcerpt: 'Led a cross-functional team of 5 engineers to deliver project X',
@@ -80,14 +79,14 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
 
   it('3. CareerContextItem enforces strict schema validation and rejects invalid kinds', () => {
     const validItem = {
-      id: 'item_1',
+      id: '11111111-1111-1111-1111-111111111111',
       kind: 'target_role',
       canonicalKey: 'profile.target_role',
       label: 'Target Role',
       value: { type: 'text', text: 'Senior Software Engineer' },
       source: {
         module: 'resume',
-        recordId: 'res_123',
+        recordId: '22222222-2222-2222-2222-222222222222',
         fieldPath: 'targetRole',
         sourceRevision: 'rev_1',
         sourceHash: 'hash_abc',
@@ -119,8 +118,8 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
     const validConsent = {
       scope: 'one_time',
       purpose: 'resume_to_interview',
-      includedItemIds: ['item_1', 'item_2'],
-      excludedItemIds: ['item_contact'],
+      includedItemIds: ['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222'],
+      excludedItemIds: ['33333333-3333-3333-3333-333333333333'],
       sourceModules: ['resume'],
       acknowledgedAt: '2026-07-30T10:00:00Z'
     };
@@ -135,10 +134,10 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
 
   it('5. CareerContextSnapshotSchema enforces immutability structure', () => {
     const snapshot = {
-      id: 'snap_123',
+      id: '44444444-4444-4444-4444-444444444444',
       purpose: 'resume_to_interview',
       contextVersion: 1,
-      itemIds: ['item_1'],
+      itemIds: ['11111111-1111-1111-1111-111111111111'],
       projection: {
         targetRole: 'Product Manager',
         skills: ['Roadmapping', 'Agile']
@@ -147,7 +146,7 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
       consent: {
         scope: 'one_time',
         purpose: 'resume_to_interview',
-        includedItemIds: ['item_1'],
+        includedItemIds: ['11111111-1111-1111-1111-111111111111'],
         excludedItemIds: [],
         sourceModules: ['resume'],
         acknowledgedAt: '2026-07-30T10:00:00Z'
@@ -160,13 +159,13 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
 
   it('6. ModuleBridgeSessionSchema enforces status lifecycle', () => {
     const bridge = {
-      id: 'br_123',
+      id: '55555555-5555-5555-5555-555555555555',
       sourceModule: 'clearspeak',
       targetModule: 'interview',
       purpose: 'clearspeak_to_interview',
-      snapshotId: 'snap_123',
+      snapshotId: '44444444-4444-4444-4444-444444444444',
       status: 'confirmed',
-      clientRequestId: 'req_xyz_123',
+      clientRequestId: '66666666-6666-6666-6666-666666666666',
       createdAt: '2026-07-30T10:00:00Z',
       updatedAt: '2026-07-30T10:00:00Z'
     };
@@ -181,9 +180,9 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
 
   it('7. GroundingReferenceSchema differs from candidate answer evidence', () => {
     const reference = {
-      contextItemId: 'item_1',
+      contextItemId: '11111111-1111-1111-1111-111111111111',
       sourceModule: 'resume',
-      sourceRecordId: 'res_123',
+      sourceRecordId: '22222222-2222-2222-2222-222222222222',
       sourcePath: 'experience[0].bullets[1]',
       label: 'Optimized SQL queries by 40%',
       exactExcerpt: 'Optimized Postgres SQL queries reducing latency by 40%',
@@ -193,11 +192,13 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
   });
 
   it('8. Resume and ClearSpeak grounded draft builders produce valid strict draft schemas', () => {
-    const resumeDraft = createResumeGroundedInterviewDraft('snap_1', 'bridge_1', 'Backend Architect', 'Interview based on my resume');
+    const snapId = '44444444-4444-4444-4444-444444444444';
+    const bridgeId = '55555555-5555-5555-5555-555555555555';
+    const resumeDraft = createResumeGroundedInterviewDraft(snapId, bridgeId, 'Backend Architect', 'Interview based on my resume');
     expect(InterviewSetupDraftSchema.safeParse(resumeDraft).success).toBe(true);
-    expect(resumeDraft.groundingRequest?.snapshotId).toBe('snap_1');
+    expect(resumeDraft.groundingRequest?.snapshotId).toBe(snapId);
 
-    const speakDraft = createClearSpeakGroundedInterviewDraft('snap_2', 'bridge_2', 'Tech Lead', 'How do you handle scope creep?');
+    const speakDraft = createClearSpeakGroundedInterviewDraft(snapId, bridgeId, 'Tech Lead', 'How do you handle scope creep?');
     expect(InterviewSetupDraftSchema.safeParse(speakDraft).success).toBe(true);
     expect(speakDraft.bridgeIntent?.bridgeQuestion).toBe('How do you handle scope creep?');
   });
