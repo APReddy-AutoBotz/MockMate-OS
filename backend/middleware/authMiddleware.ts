@@ -1,4 +1,3 @@
-
 import { Request, Response, NextFunction } from 'express';
 import { isSupabaseConfigured, supabaseAdmin } from '../supabaseAdmin';
 
@@ -21,8 +20,10 @@ export const verifyAuthToken = async (req: Request, res: Response, next: NextFun
         return next();
     }
 
-    if (process.env.NODE_ENV === 'test' && token.startsWith('test-token')) {
-        const userId = token.includes('other') ? 'other-user-id' : 'test-user-id';
+    if (process.env.NODE_ENV === 'test' && (token.startsWith('test-token') || token.startsWith('dev_user'))) {
+        const userId = (token.includes('other') || token.includes('user_b') || token.includes('userB'))
+            ? '22222222-2222-2222-2222-222222222222'
+            : '11111111-1111-1111-1111-111111111111';
         (req as any).user = { uid: userId, id: userId, email: `${userId}@example.com`, name: 'Test User' };
         return next();
     }

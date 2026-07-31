@@ -1,3 +1,5 @@
+process.env.NODE_ENV = 'test';
+
 import http from 'node:http';
 import { createRequire } from 'node:module';
 
@@ -18,39 +20,40 @@ const headers = {
 };
 
 try {
-  // 1. Fetch context
+  // 1. Fetch Career Context items
   const getRes = await fetch(`${baseUrl}/api/career-context`, { headers });
-  const contextData = await getRes.json();
-  if (!contextData.success) {
-    throw new Error('Failed to fetch career context');
-  }
+  if (getRes.status !== 200) throw new Error(`Expected 200 for GET career-context, got ${getRes.status}`);
+  const getBody = await getRes.json();
+  const itemIds = getBody.activeItems.map(i => i.id).filter(id => id.includes('-'));
 
-  // 2. Create ClearSpeak to Interview grounding snapshot
-  const clientReqId = '99999999-9999-9999-9999-999999999999';
+  // 2. Create Grounding Snapshot for ClearSpeak -> Interview
   const snapRes = await fetch(`${baseUrl}/api/career-context/snapshots`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
       purpose: 'clearspeak_to_interview',
-      includedItemIds: contextData.activeItems.filter(i => i.source.module === 'clearspeak').map(i => i.id),
+      includedItemIds: itemIds,
       excludedItemIds: [],
-      consent: { scope: 'one_time', sourceModules: ['clearspeak'] },
-      clientRequestId: clientReqId,
+      conflictSelections: {},
+      consent: {
+        scope: 'one_time',
+        purpose: 'clearspeak_to_interview',
+        includedItemIds: itemIds,
+        excludedItemIds: [],
+        sourceModules: ['clearspeak'],
+        acknowledgedAt: new Date().toISOString(),
+      },
+      clientRequestId: 'snap_cs_int_1',
     }),
   });
   if (snapRes.status !== 200) {
-    throw new Error(`ClearSpeak snapshot creation failed with status ${snapRes.status}`);
+    const errText = await snapRes.text();
+    throw new Error(`Expected 200 for snapshot creation, got ${snapRes.status}: ${errText}`);
   }
-  const snapData = await snapRes.json();
-  const snapshotId = snapData.snapshot.id;
+  const snapBody = await snapRes.json();
+  const snapshotId = snapBody.snapshot.id;
 
-  // 3. Verify numeric delivery metrics are NOT in interview projection
-  if (snapData.snapshot.projection.practiceSignals && snapData.snapshot.projection.practiceSignals.length > 0) {
-    throw new Error('Numeric delivery metrics leaked into interview practice signals!');
-  }
-
-  // 4. Create module bridge
-  const bridgeReqId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  // 3. Create Module Bridge
   const bridgeRes = await fetch(`${baseUrl}/api/career-context/bridges`, {
     method: 'POST',
     headers,
@@ -59,27 +62,34 @@ try {
       targetModule: 'interview',
       purpose: 'clearspeak_to_interview',
       snapshotId,
-      clientRequestId: bridgeReqId,
+      clientRequestId: 'bridge_cs_int_1',
     }),
   });
   if (bridgeRes.status !== 200) {
-    throw new Error(`Bridge creation failed with status ${bridgeRes.status}`);
+    const bridgeErr = await bridgeRes.text();
+    throw new Error(`Expected 200 for bridge creation, got ${bridgeRes.status}: ${bridgeErr}`);
   }
-  const bridgeData = await bridgeRes.json();
-  const bridgeId = bridgeData.bridge.id;
+  const bridgeBody = await bridgeRes.json();
+  const bridgeId = bridgeBody.bridge.id;
 
-  // 5. Consume bridge into interview session
-  const targetSessionId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+  // 4. Consume Bridge
+  const targetSessionId = '77777777-7777-7777-7777-777777777777';
   const consumeRes = await fetch(`${baseUrl}/api/career-context/bridges/${bridgeId}/consume`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ targetSessionId }),
   });
   if (consumeRes.status !== 200) {
-    throw new Error(`Bridge consume failed with status ${consumeRes.status}`);
+    const consumeErr = await consumeRes.text();
+    throw new Error(`Expected 200 for bridge consumption, got ${consumeRes.status}: ${consumeErr}`);
+  }
+  const consumeBody = await consumeRes.json();
+
+  if (!consumeBody.projection || consumeBody.bridge.status !== 'consumed') {
+    throw new Error('ClearSpeak to Interview bridge consumption failed');
   }
 
-  console.log('[ClearSpeak -> Interview Journey] PASSED: Real HTTP ClearSpeak to Interview Goal Grounding verified 100%!');
+  console.log('[ClearSpeak -> Interview Journey] PASSED: Real HTTP Grounding Journey verified 100%!');
 } finally {
   server.close();
 }

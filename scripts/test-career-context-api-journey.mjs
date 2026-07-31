@@ -1,3 +1,5 @@
+process.env.NODE_ENV = 'test';
+
 import http from 'node:http';
 import { createRequire } from 'node:module';
 
@@ -50,20 +52,30 @@ try {
   }
 
   // 4. POST /api/career-context/snapshots -> 200 OK
+  const validUuid = '55555555-5555-5555-5555-555555555555';
   const clientReqId = '33333333-3333-3333-3333-333333333333';
   const resSnap = await fetch(`${baseUrl}/api/career-context/snapshots`, {
     method: 'POST',
     headers: headersUserA,
     body: JSON.stringify({
       purpose: 'resume_to_interview',
-      includedItemIds: [],
+      includedItemIds: [validUuid],
       excludedItemIds: [],
-      consent: { scope: 'one_time', sourceModules: ['resume'] },
+      conflictSelections: {},
+      consent: {
+        scope: 'one_time',
+        purpose: 'resume_to_interview',
+        includedItemIds: [validUuid],
+        excludedItemIds: [],
+        sourceModules: ['resume'],
+        acknowledgedAt: new Date().toISOString(),
+      },
       clientRequestId: clientReqId,
     }),
   });
   if (resSnap.status !== 200) {
-    throw new Error(`Expected 200 for snapshot creation, got ${resSnap.status}`);
+    const snapErr = await resSnap.text();
+    throw new Error(`Expected 200 for snapshot creation, got ${resSnap.status}: ${snapErr}`);
   }
   const snapBody = await resSnap.json();
   const snapshotId = snapBody.snapshot.id;
@@ -82,7 +94,8 @@ try {
     }),
   });
   if (resBridge.status !== 200) {
-    throw new Error(`Expected 200 for bridge creation, got ${resBridge.status}`);
+    const bridgeErr = await resBridge.text();
+    throw new Error(`Expected 200 for bridge creation, got ${resBridge.status}: ${bridgeErr}`);
   }
   const bridgeBody = await resBridge.json();
   const bridgeId = bridgeBody.bridge.id;
@@ -105,7 +118,8 @@ try {
     body: JSON.stringify({ targetSessionId }),
   });
   if (resConsumeA.status !== 200) {
-    throw new Error(`Expected 200 for User A bridge consume, got ${resConsumeA.status}`);
+    const consumeErr = await resConsumeA.text();
+    throw new Error(`Expected 200 for User A bridge consume, got ${resConsumeA.status}: ${consumeErr}`);
   }
 
   console.log('[API Journey] PASSED: Real HTTP API Career Context end-to-end suite verified 100%!');

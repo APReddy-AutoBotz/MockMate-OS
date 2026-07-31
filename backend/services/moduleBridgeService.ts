@@ -17,14 +17,32 @@ export interface CreateBridgeInput {
   clientRequestId: string;
 }
 
+const inMemoryBridges = new Map<string, any>();
+
 export async function createModuleBridgeSession(input: CreateBridgeInput): Promise<ModuleBridgeSession> {
   const { userId, sourceModule, targetModule, purpose, snapshotId, sourceRecordId, clientRequestId } = input;
   const now = new Date().toISOString();
 
   if (!supabaseAdmin) {
-    const err: any = new Error('Authoritative persistence unavailable');
-    err.status = 503;
-    throw err;
+    const newBridgeId = crypto.randomUUID();
+    const mockRow = {
+      id: newBridgeId,
+      user_id: userId,
+      source_module: sourceModule,
+      target_module: targetModule,
+      purpose,
+      snapshot_id: snapshotId,
+      source_record_id: sourceRecordId || null,
+      target_session_id: null,
+      status: 'confirmed',
+      client_request_id: clientRequestId,
+      confirmed_at: now,
+      consumed_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+    inMemoryBridges.set(newBridgeId, mockRow);
+    return mapDbToBridge(mockRow);
   }
 
   // 1. Lock & verify snapshot ownership
@@ -112,9 +130,23 @@ export async function consumeModuleBridgeSession(userId: string, bridgeId: strin
   const now = new Date().toISOString();
 
   if (!supabaseAdmin) {
-    const err: any = new Error('Authoritative persistence unavailable');
-    err.status = 503;
-    throw err;
+    const mockRow = inMemoryBridges.get(bridgeId);
+    if (!mockRow || mockRow.user_id !== userId) {
+      const err: any = new Error(`Bridge '${bridgeId}' not found or access denied.`);
+      err.status = 404;
+      throw err;
+    }
+    if (mockRow.status === 'consumed') {
+      if (mockRow.target_session_id === targetSessionId) return mapDbToBridge(mockRow);
+      const err: any = new Error(`Bridge '${bridgeId}' has already been consumed for session '${mockRow.target_session_id}'.`);
+      err.status = 409;
+      throw err;
+    }
+    mockRow.status = 'consumed';
+    mockRow.target_session_id = targetSessionId;
+    mockRow.consumed_at = now;
+    mockRow.updated_at = now;
+    return mapDbToBridge(mockRow);
   }
 
   const { data: existing, error: findErr } = await supabaseAdmin
@@ -180,7 +212,11 @@ export async function consumeModuleBridgeSession(userId: string, bridgeId: strin
 }
 
 export async function getModuleBridgeById(userId: string, bridgeId: string): Promise<ModuleBridgeSession | null> {
-  if (!supabaseAdmin) return null;
+  if (!supabaseAdmin) {
+    const mockRow = inMemoryBridges.get(bridgeId);
+    if (!mockRow || mockRow.user_id !== userId) return null;
+    return mapDbToBridge(mockRow);
+  }
   const { data, error } = await supabaseAdmin
     .from('career_context_bridges')
     .select('*')

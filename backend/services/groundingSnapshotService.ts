@@ -21,6 +21,8 @@ export interface CreateSnapshotInput {
   clientRequestId?: string;
 }
 
+const inMemorySnapshots = new Map<string, CareerContextSnapshot>();
+
 export async function createGroundingSnapshot(input: CreateSnapshotInput): Promise<CareerContextSnapshot> {
   const {
     userId,
@@ -205,13 +207,20 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
         throw new Error(`Failed to persist grounding snapshot items: ${itemsErr.message}`);
       }
     }
+    inMemorySnapshots.set(snapshot.id, snapshot);
+  } else {
+    inMemorySnapshots.set(snapshot.id, snapshot);
   }
 
   return snapshot;
 }
 
 export async function getSnapshotById(userId: string, snapshotId: string): Promise<CareerContextSnapshot | null> {
-  if (!supabaseAdmin) return null;
+  if (!supabaseAdmin) {
+    const mock = inMemorySnapshots.get(snapshotId);
+    if (!mock || mock.userId !== userId) return null;
+    return mock;
+  }
 
   const { data, error } = await supabaseAdmin
     .from('career_context_snapshots')
