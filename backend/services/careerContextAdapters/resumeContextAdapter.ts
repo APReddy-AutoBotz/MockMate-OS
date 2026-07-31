@@ -88,8 +88,9 @@ export function buildResumeContextItems(input: ResumeAdapterInput): CareerContex
   // 5. Experience bullets & claims
   if (resumeData.experience && resumeData.experience.length > 0) {
     resumeData.experience.forEach((exp, expIdx) => {
-      if (exp.bullets && exp.bullets.length > 0) {
-        exp.bullets.forEach((bullet, bulletIdx) => {
+      const expBullets: string[] = Array.isArray(exp.bullets) ? exp.bullets : (Array.isArray((exp as any).highlights) ? (exp as any).highlights : []);
+      if (expBullets.length > 0) {
+        expBullets.forEach((bullet, bulletIdx) => {
           if (!bullet.trim()) return;
           // Filter out metric placeholders like [_] or blank template strings
           const cleanBullet = bullet.trim();

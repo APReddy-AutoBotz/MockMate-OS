@@ -12,7 +12,7 @@ const resumeInput = {
       { company: 'Acme Corp', position: 'Tech Lead', bullets: ['Led migration of 50 microservices to Kubernetes, reducing latency by 40%.'] }
     ]
   },
-  recordId: '55555555-5555-5555-5555-555555555555',
+  recordId: 'a1b2c3d4-e5f6-4a5b-8c7d-9e8f7a6b5c4d',
   targetRole: 'Staff Infrastructure Engineer'
 };
 
@@ -26,14 +26,14 @@ if (contactItems.length > 0) {
 }
 
 // Verify experience bullet extracted
-const experienceClaim = items.find(i => i.kind === 'experience_claim' || i.kind === 'achievement');
-if (!experienceClaim || !getItemText(experienceClaim).includes('reducing latency by 40%')) {
+const experienceClaim = items.find(i => (i.kind === 'experience_claim' || i.kind === 'achievement') && getItemText(i).includes('reducing latency by 40%'));
+if (!experienceClaim) {
   console.error('FAILED: experience bullet not extracted properly');
   process.exit(1);
 }
 
 function getItemText(item) {
-  return item.value.type === 'text' ? item.value.text : item.label;
+  return item.exactExcerpt || (item.value.type === 'text' ? item.value.text : item.label);
 }
 
 console.log('[Resume -> ClearSpeak Journey] PASSED: Resume to ClearSpeak material extraction verified 100%!');
