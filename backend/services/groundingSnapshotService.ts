@@ -18,19 +18,43 @@ export interface CreateSnapshotInput {
   expectedContextVersion?: number;
 }
 
+import crypto from 'crypto';
+
+export interface CreateSnapshotInput {
+  userId: string;
+  purpose: GroundingPurpose;
+  includedItemIds: string[];
+  excludedItemIds: string[];
+  conflictSelections?: Record<string, string>;
+  scope: 'one_time' | 'future_sessions';
+  sourceModules: CareerContextModule[];
+  expectedContextVersion?: number;
+  clientRequestId?: string;
+}
+
 export async function createGroundingSnapshot(input: CreateSnapshotInput): Promise<CareerContextSnapshot> {
-  const { userId, purpose, includedItemIds, excludedItemIds, scope, sourceModules } = input;
+  const { userId, purpose, includedItemIds, excludedItemIds, conflictSelections = {}, scope, sourceModules, expectedContextVersion } = input;
   const acknowledgedAt = new Date().toISOString();
 
   // 1. Load active state version for user
   let contextVersion = 1;
+  let personalizationEnabled = false;
   if (supabaseAdmin) {
     const { data: stateData } = await supabaseAdmin
       .from('career_context_state')
-      .select('context_version')
+      .select('context_version, personalization_enabled')
       .eq('user_id', userId)
       .single();
-    if (stateData) contextVersion = Number(stateData.context_version);
+    if (stateData) {
+      contextVersion = Number(stateData.context_version);
+      personalizationEnabled = Boolean(stateData.personalization_enabled);
+    }
+  }
+
+  if (expectedContextVersion !== undefined && expectedContextVersion !== contextVersion) {
+    const err: any = new Error(`Stale or mismatched context version: expected ${expectedContextVersion}, current is ${contextVersion}`);
+    err.status = 409;
+    throw err;
   }
 
   // 2. Load specified items (verifying ownership, active status, and non-contact sensitivity)
@@ -42,18 +66,43 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
       .eq('user_id', userId)
       .in('id', includedItemIds);
 
-    if (!error && rawItems) {
+    if (error) {
+      throw new Error(`Failed to load requested career context items: ${error.message}`);
+    }
+
+    if (rawItems) {
+      // Reject any requested item that is absent, ineligible, or contact
+      if (rawItems.length !== includedItemIds.length) {
+        const err: any = new Error('One or more requested career context items were missing or not owned by user.');
+        err.status = 422;
+        throw err;
+      }
+
+      for (const r of rawItems) {
+        if (r.item_status !== 'active') {
+          const err: any = new Error(`Item ${r.id} is not active (status: ${r.item_status}).`);
+          err.status = 422;
+          throw err;
+        }
+        if (r.provenance === 'inferred_pending') {
+          const err: any = new Error(`Item ${r.id} is inferred_pending and cannot be grounded until user confirmed.`);
+          err.status = 422;
+          throw err;
+        }
+      }
+
       items = rawItems
-        .filter(r => r.item_status === 'active' && r.sensitivity !== 'personal_contact' && r.provenance !== 'inferred_pending')
+        .filter(r => r.sensitivity !== 'personal_contact')
         .map(mapDbToCareerContextItem);
     }
   }
 
   // 3. Project context & compute conflicts
-  const { projection, conflicts } = projectCareerContext(items);
+  const { projection, conflicts } = projectCareerContext(items, purpose, conflictSelections, personalizationEnabled);
 
+  const snapshotId = crypto.randomUUID();
   const snapshotPayload = {
-    id: `snap_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    id: snapshotId,
     userId,
     purpose,
     contextVersion,
@@ -91,14 +140,23 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
       });
 
     if (snapErr) {
-      console.error('[SnapshotService] Failed to insert snapshot:', snapErr.message);
-    } else if (items.length > 0) {
+      throw new Error(`Failed to persist grounding snapshot: ${snapErr.message}`);
+    }
+
+    if (items.length > 0) {
       const itemRows = items.map((item, idx) => ({
         snapshot_id: snapshot.id,
         item_id: item.id,
         position: idx,
       }));
-      await supabaseAdmin.from('career_context_snapshot_items').insert(itemRows);
+
+      const { error: itemsErr } = await supabaseAdmin
+        .from('career_context_snapshot_items')
+        .insert(itemRows);
+
+      if (itemsErr) {
+        throw new Error(`Failed to persist grounding snapshot items: ${itemsErr.message}`);
+      }
     }
   }
 

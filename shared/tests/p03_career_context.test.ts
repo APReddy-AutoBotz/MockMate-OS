@@ -167,7 +167,8 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
       snapshotId: 'snap_123',
       status: 'confirmed',
       clientRequestId: 'req_xyz_123',
-      createdAt: '2026-07-30T10:00:00Z'
+      createdAt: '2026-07-30T10:00:00Z',
+      updatedAt: '2026-07-30T10:00:00Z'
     };
     expect(ModuleBridgeSessionSchema.safeParse(bridge).success).toBe(true);
 

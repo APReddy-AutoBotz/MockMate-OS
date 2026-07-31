@@ -32,21 +32,31 @@ export const calibrateIntent = async (
   return apiClient.post('interview/calibrate', CalibrateResponseSchema, { role, jobDescription });
 };
 
+import { SessionControls } from 'mockmate-shared';
+
+export interface PlanGenerationRequest {
+  role: string;
+  intentText: string;
+  controls: SessionControls;
+  jdText?: string;
+  resumeText?: string;
+  selectedPanelIDs?: string[];
+  snapshotId?: string;
+  bridgeId?: string;
+}
+
 export const generateInterviewPlan = async (
-  role: string,
-  intentText: string,
-  sessionControls: any,
-  jdText?: string,
-  resumeText?: string,
-  selectedPanelIDs?: string[]
+  request: PlanGenerationRequest
 ): Promise<InterviewPlan> => {
   return apiClient.post('interview/plan', InterviewPlanSchema, { 
-    role, 
-    intent: intentText, 
-    controls: sessionControls, 
-    jdText, 
-    resumeText,
-    selectedPanelIDs
+    role: request.role, 
+    intent: request.intentText, 
+    controls: request.controls, 
+    jdText: request.jdText, 
+    resumeText: request.resumeText,
+    selectedPanelIDs: request.selectedPanelIDs,
+    snapshotId: request.snapshotId,
+    bridgeId: request.bridgeId,
   });
 };
 

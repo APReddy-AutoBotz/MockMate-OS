@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CareerContextItem, CareerContextState } from 'mockmate-shared';
 import { Shield, Check, Trash2, AlertCircle, RefreshCw, ChevronLeft } from 'lucide-react';
-import { apiClient } from '../services/apiClient';
+import { fetchCareerContext, applyItemDecision, setPersonalizationPreference } from '../services/careerContextService';
 
 interface CareerContextPanelProps {
   onBack: () => void;
@@ -16,9 +16,9 @@ export const CareerContextPanel: React.FC<CareerContextPanelProps> = ({ onBack }
   const fetchContext = async () => {
     setIsLoading(true);
     try {
-      const res = await apiClient.get<any>('career-context');
+      const res = await fetchCareerContext();
       if (res) {
-        setItems(res.activeItems ? [...res.activeItems, ...(res.pendingItems || [])] : []);
+        setItems([...(res.activeItems || []), ...(res.pendingItems || [])]);
         setState(res.state || null);
       }
     } catch (e) {
@@ -35,7 +35,6 @@ export const CareerContextPanel: React.FC<CareerContextPanelProps> = ({ onBack }
   const handleRebuild = async () => {
     setIsRebuilding(true);
     try {
-      await apiClient.post<any>('career-context/rebuild', {});
       await fetchContext();
     } catch (e) {
       console.error('Failed to rebuild career context', e);
@@ -46,7 +45,7 @@ export const CareerContextPanel: React.FC<CareerContextPanelProps> = ({ onBack }
 
   const handleDecision = async (itemId: string, decision: 'confirm' | 'revoke') => {
     try {
-      await apiClient.post<any>(`career-context/items/${itemId}/decision`, { decision });
+      await applyItemDecision(itemId, decision, state?.contextVersion);
       await fetchContext();
     } catch (e) {
       console.error('Failed to apply item decision', e);
@@ -56,9 +55,7 @@ export const CareerContextPanel: React.FC<CareerContextPanelProps> = ({ onBack }
   const handleTogglePersonalization = async () => {
     if (!state) return;
     try {
-      const res = await apiClient.post<any>('career-context/preference', {
-        personalizationEnabled: !state.personalizationEnabled,
-      });
+      const res = await setPersonalizationPreference(!state.personalizationEnabled, state.contextVersion);
       if (res?.state) setState(res.state);
     } catch (e) {
       console.error('Failed to toggle preference', e);

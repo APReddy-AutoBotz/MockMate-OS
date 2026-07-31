@@ -9,6 +9,7 @@ interface HubProps {
     betaEnabled: boolean;
     onNavigate: (module: 'RESUME' | 'SPEAK' | 'INTERVIEW') => void;
     onViewHistory: () => void;
+    onOpenCareerContext: () => void;
     onDeleteData: () => Promise<void>;
 }
 

@@ -154,15 +154,15 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, draft, onGoBa
     setIsLoading(true);
     audioService.playStart();
     try {
-      const interviewPlan = await mockGeminiService.generateInterviewPlan(
-        currentDraft.candidateRole || draft.intentText,
-        draft.intentText,
-        sessionControls,
-        jdText || undefined,
-        undefined,
+      const interviewPlan = await mockGeminiService.generateInterviewPlan({
+        role: currentDraft.candidateRole || draft.intentText,
+        intentText: draft.intentText,
+        controls: sessionControls,
+        jdText: jdText || undefined,
         selectedPanelIDs,
-        currentDraft.groundingRequest?.snapshotId
-      );
+        snapshotId: currentDraft.groundingRequest?.snapshotId,
+        bridgeId: currentDraft.groundingRequest?.bridgeId,
+      });
       setPlan(interviewPlan);
       setIsPlanReady(true);
     } catch (err) {

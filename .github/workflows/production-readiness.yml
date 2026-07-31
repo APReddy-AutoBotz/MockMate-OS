@@ -88,6 +88,9 @@ jobs:
       - name: 11e. Adaptive Browser UI Journey
         run: npm run test:adaptive-ui-journey
 
+      - name: 11g. Career Context Cross-Module Grounding Journeys
+        run: npm run test:career-context-journeys
+
       - name: 12. Backend tests
         working-directory: backend
         run: npm test

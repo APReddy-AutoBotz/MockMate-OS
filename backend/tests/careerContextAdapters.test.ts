@@ -45,11 +45,11 @@ describe('Career Context Pure Adapters', () => {
       expect(targetRoleItem).toBeDefined();
       expect(targetRoleItem?.value).toEqual({ type: 'text', text: 'Staff Software Engineer' });
 
-      // Contact PII is marked personal_contact
+      // Contact PII is strictly excluded from Resume Career Context items
       const emailItem = items.find(i => i.canonicalKey === 'resume.contact.email');
-      expect(emailItem?.sensitivity).toBe('personal_contact');
+      expect(emailItem).toBeUndefined();
       const phoneItem = items.find(i => i.canonicalKey === 'resume.contact.phone');
-      expect(phoneItem?.sensitivity).toBe('personal_contact');
+      expect(phoneItem).toBeUndefined();
 
       // Placeholder bullet [_] is filtered out
       const bullets = items.filter(i => i.kind === 'achievement' || i.kind === 'experience_claim');

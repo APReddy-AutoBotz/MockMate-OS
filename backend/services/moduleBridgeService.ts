@@ -16,6 +16,8 @@ export interface CreateBridgeInput {
   clientRequestId: string;
 }
 
+import crypto from 'crypto';
+
 export async function createModuleBridgeSession(input: CreateBridgeInput): Promise<ModuleBridgeSession> {
   const { userId, sourceModule, targetModule, purpose, snapshotId, sourceRecordId, clientRequestId } = input;
   const now = new Date().toISOString();
@@ -38,11 +40,13 @@ export async function createModuleBridgeSession(input: CreateBridgeInput): Promi
       ) {
         return mapDbToBridge(existing);
       }
-      throw new Error(`Client request ID '${clientRequestId}' already used for a different bridge payload.`);
+      const err: any = new Error(`Client request ID '${clientRequestId}' already used for a different bridge payload.`);
+      err.status = 409;
+      throw err;
     }
 
-    // 2. Insert New Bridge
-    const newBridgeId = `br_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    // 2. Insert New Bridge with real UUID
+    const newBridgeId = crypto.randomUUID();
     const bridgeRow = {
       id: newBridgeId,
       user_id: userId,
@@ -75,16 +79,17 @@ export async function createModuleBridgeSession(input: CreateBridgeInput): Promi
 
   // Fallback in-memory object if Supabase is unconfigured (for local unit testing)
   const mockBridge: ModuleBridgeSession = {
-    id: `br_mock_${Date.now()}`,
+    id: crypto.randomUUID(),
     userId,
     sourceModule,
     targetModule,
     purpose,
     snapshotId,
-    sourceRecordId,
+    sourceRecordId: sourceRecordId || null,
     status: 'confirmed',
     clientRequestId,
     createdAt: now,
+    updatedAt: now,
     confirmedAt: now,
   };
   return ModuleBridgeSessionSchema.parse(mockBridge);
@@ -99,20 +104,30 @@ export async function consumeModuleBridgeSession(userId: string, bridgeId: strin
       .select('*')
       .eq('id', bridgeId)
       .eq('user_id', userId)
-      .single();
+      .maybeSingle();
 
     if (findErr || !existing) {
-      throw new Error(`Bridge '${bridgeId}' not found or access denied.`);
+      const err: any = new Error(`Bridge '${bridgeId}' not found or access denied.`);
+      err.status = 404;
+      throw err;
     }
 
     if (existing.status === 'consumed') {
-      throw new Error(`Bridge '${bridgeId}' has already been consumed.`);
+      if (existing.target_session_id === targetSessionId) {
+        return mapDbToBridge(existing);
+      }
+      const err: any = new Error(`Bridge '${bridgeId}' has already been consumed for session '${existing.target_session_id}'.`);
+      err.status = 409;
+      throw err;
     }
 
     if (existing.status === 'cancelled' || existing.status === 'expired') {
-      throw new Error(`Bridge '${bridgeId}' is ${existing.status} and cannot be consumed.`);
+      const err: any = new Error(`Bridge '${bridgeId}' is ${existing.status} and cannot be consumed.`);
+      err.status = 409;
+      throw err;
     }
 
+    // Atomic update
     const { data: updated, error: updateErr } = await supabaseAdmin
       .from('career_context_bridges')
       .update({
@@ -122,7 +137,6 @@ export async function consumeModuleBridgeSession(userId: string, bridgeId: strin
         updated_at: now,
       })
       .eq('id', bridgeId)
-      .eq('user_id', userId)
       .select('*')
       .single();
 
@@ -145,6 +159,7 @@ export async function consumeModuleBridgeSession(userId: string, bridgeId: strin
     status: 'consumed',
     clientRequestId: 'mock_req',
     createdAt: now,
+    updatedAt: now,
     consumedAt: now,
   });
 }
@@ -155,7 +170,6 @@ export async function getModuleBridgeById(userId: string, bridgeId: string): Pro
     .from('career_context_bridges')
     .select('*')
     .eq('id', bridgeId)
-    .eq('user_id', userId)
     .single();
 
   if (error || !data) return null;
@@ -175,6 +189,7 @@ function mapDbToBridge(row: any): ModuleBridgeSession {
     status: row.status,
     clientRequestId: row.client_request_id,
     createdAt: row.created_at,
+    updatedAt: row.updated_at || row.created_at || new Date().toISOString(),
     confirmedAt: row.confirmed_at || undefined,
     consumedAt: row.consumed_at || undefined,
   });

@@ -225,7 +225,8 @@ router.post('/snapshots', async (req, res) => {
     return res.json({ success: true, snapshot });
   } catch (err: any) {
     console.error('[CareerContextRoutes] POST /snapshots error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to create snapshot' });
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.message || 'Failed to create snapshot' });
   }
 });
 
@@ -241,7 +242,8 @@ router.get('/snapshots/:snapshotId', async (req, res) => {
     return res.json({ snapshot });
   } catch (err: any) {
     console.error('[CareerContextRoutes] GET /snapshots/:snapshotId error:', err);
-    return res.status(500).json({ error: 'Failed to fetch snapshot' });
+    const status = err.status || 500;
+    return res.status(status).json({ error: 'Failed to fetch snapshot' });
   }
 });
 
@@ -270,7 +272,8 @@ router.post('/bridges', async (req, res) => {
     return res.json({ success: true, bridge });
   } catch (err: any) {
     console.error('[CareerContextRoutes] POST /bridges error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to create bridge' });
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.message || 'Failed to create bridge' });
   }
 });
 
@@ -291,7 +294,8 @@ router.post('/bridges/:bridgeId/consume', async (req, res) => {
     return res.json({ success: true, bridge });
   } catch (err: any) {
     console.error('[CareerContextRoutes] POST /bridges/consume error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to consume bridge' });
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.message || 'Failed to consume bridge' });
   }
 });
 

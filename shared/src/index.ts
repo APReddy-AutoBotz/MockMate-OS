@@ -426,9 +426,16 @@ export const GroundingProjectionSchema = z.object({
   achievements: z.array(z.string()).optional(),
   experienceClaims: z.array(z.string()).optional(),
   projects: z.array(z.string()).optional(),
+  jdMissingSkills: z.array(z.string()).optional(),
+  personalizationEnabled: z.boolean().optional(),
+  practiceSignals: z.array(z.string()).optional(),
+  developmentPriorities: z.array(z.string()).optional(),
   audienceContext: z.string().nullable().optional(),
+  communicationGoal: z.string().nullable().optional(),
   communicationGoals: z.array(z.string()).optional(),
+  speakingChallenge: z.string().nullable().optional(),
   speakingSupport: z.array(z.string()).optional(),
+  roleVocabulary: z.array(z.string()).optional(),
   practicedVocabulary: z.array(z.string()).optional(),
   interviewPracticeSignals: z.array(z.string()).optional(),
   conflicts: z.array(GroundingConflictSchema).optional(),
@@ -460,14 +467,14 @@ export const GroundingReferenceSchema = z.object({
 }).strict();
 export type GroundingReference = z.infer<typeof GroundingReferenceSchema>;
 
-export const ModuleBridgeSessionStatusSchema = z.enum([
+export const ModuleBridgeStatusSchema = z.enum([
   'drafted',
   'confirmed',
   'consumed',
   'cancelled',
   'expired',
 ]);
-export type ModuleBridgeSessionStatus = z.infer<typeof ModuleBridgeSessionStatusSchema>;
+export type ModuleBridgeStatus = z.infer<typeof ModuleBridgeStatusSchema>;
 
 export const ModuleBridgeSessionSchema = z.object({
   id: z.string(),
@@ -476,15 +483,129 @@ export const ModuleBridgeSessionSchema = z.object({
   targetModule: CareerContextModuleSchema,
   purpose: GroundingPurposeSchema,
   snapshotId: z.string(),
-  sourceRecordId: z.string().optional(),
+  sourceRecordId: z.string().nullable().optional(),
   targetSessionId: z.string().nullable().optional(),
-  status: ModuleBridgeSessionStatusSchema,
+  status: ModuleBridgeStatusSchema,
   clientRequestId: z.string(),
-  createdAt: z.string(),
   confirmedAt: z.string().nullable().optional(),
   consumedAt: z.string().nullable().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 }).strict();
 export type ModuleBridgeSession = z.infer<typeof ModuleBridgeSessionSchema>;
+
+export const CareerContextItemDraftSchema = z.object({
+  kind: CareerContextItemKindSchema,
+  canonicalKey: z.string().min(1),
+  label: z.string(),
+  value: CareerContextValueSchema,
+  source: CareerContextSourceSchema,
+  exactExcerpt: z.string().nullable().optional(),
+  provenance: CareerContextProvenanceSchema,
+  status: CareerContextItemStatusSchema,
+  sensitivity: CareerContextSensitivitySchema,
+}).strict();
+export type CareerContextItemDraft = z.infer<typeof CareerContextItemDraftSchema>;
+
+export const CareerContextGetResponseSchema = z.object({
+  success: z.boolean(),
+  state: CareerContextStateSchema,
+  activeItems: z.array(CareerContextItemSchema),
+  pendingItems: z.array(CareerContextItemSchema),
+}).strict();
+export type CareerContextGetResponse = z.infer<typeof CareerContextGetResponseSchema>;
+
+export const CareerContextRebuildRequestSchema = z.object({
+  expectedContextVersion: z.number().int().optional(),
+  clientRequestId: z.string().optional(),
+}).strict();
+export type CareerContextRebuildRequest = z.infer<typeof CareerContextRebuildRequestSchema>;
+
+export const CareerContextRebuildResponseSchema = z.object({
+  success: z.boolean(),
+  state: CareerContextStateSchema,
+  addedCount: z.number().int(),
+}).strict();
+export type CareerContextRebuildResponse = z.infer<typeof CareerContextRebuildResponseSchema>;
+
+export const CareerContextPreferenceRequestSchema = z.object({
+  personalizationEnabled: z.boolean(),
+  expectedContextVersion: z.number().int().optional(),
+}).strict();
+export type CareerContextPreferenceRequest = z.infer<typeof CareerContextPreferenceRequestSchema>;
+
+export const CareerContextPreferenceResponseSchema = z.object({
+  success: z.boolean(),
+  state: CareerContextStateSchema,
+}).strict();
+export type CareerContextPreferenceResponse = z.infer<typeof CareerContextPreferenceResponseSchema>;
+
+export const CareerContextItemDecisionRequestSchema = z.object({
+  decision: z.enum(['confirm', 'reject', 'revoke', 'dispute', 'replace', 'edit']),
+  expectedContextVersion: z.number().int().optional(),
+  replacementValue: z.string().optional(),
+  clientRequestId: z.string().optional(),
+}).strict();
+export type CareerContextItemDecisionRequest = z.infer<typeof CareerContextItemDecisionRequestSchema>;
+
+export const CareerContextItemDecisionResponseSchema = z.object({
+  success: z.boolean(),
+  item: CareerContextItemSchema.nullable().optional(),
+  state: CareerContextStateSchema,
+}).strict();
+export type CareerContextItemDecisionResponse = z.infer<typeof CareerContextItemDecisionResponseSchema>;
+
+export const GroundingSnapshotCreateRequestSchema = z.object({
+  purpose: GroundingPurposeSchema,
+  includedItemIds: z.array(z.string()),
+  excludedItemIds: z.array(z.string()).default([]),
+  conflictSelections: z.record(z.string(), z.string()).default({}),
+  consent: GroundingConsentSchema,
+  expectedContextVersion: z.number().int().optional(),
+  clientRequestId: z.string().min(1),
+}).strict();
+export type GroundingSnapshotCreateRequest = z.infer<typeof GroundingSnapshotCreateRequestSchema>;
+
+export const GroundingSnapshotCreateResponseSchema = z.object({
+  success: z.boolean(),
+  snapshot: CareerContextSnapshotSchema,
+}).strict();
+export type GroundingSnapshotCreateResponse = z.infer<typeof GroundingSnapshotCreateResponseSchema>;
+
+export const GroundingSnapshotGetResponseSchema = z.object({
+  success: z.boolean(),
+  snapshot: CareerContextSnapshotSchema,
+}).strict();
+export type GroundingSnapshotGetResponse = z.infer<typeof GroundingSnapshotGetResponseSchema>;
+
+export const ModuleBridgeCreateRequestSchema = z.object({
+  sourceModule: CareerContextModuleSchema,
+  targetModule: CareerContextModuleSchema,
+  purpose: GroundingPurposeSchema,
+  snapshotId: z.string(),
+  sourceRecordId: z.string().optional(),
+  clientRequestId: z.string().min(1),
+}).strict();
+export type ModuleBridgeCreateRequest = z.infer<typeof ModuleBridgeCreateRequestSchema>;
+
+export const ModuleBridgeCreateResponseSchema = z.object({
+  success: z.boolean(),
+  bridge: ModuleBridgeSessionSchema,
+}).strict();
+export type ModuleBridgeCreateResponse = z.infer<typeof ModuleBridgeCreateResponseSchema>;
+
+export const ModuleBridgeConsumeRequestSchema = z.object({
+  targetSessionId: z.string(),
+  expectedStatus: z.enum(['drafted', 'confirmed']).optional(),
+  clientRequestId: z.string().optional(),
+}).strict();
+export type ModuleBridgeConsumeRequest = z.infer<typeof ModuleBridgeConsumeRequestSchema>;
+
+export const ModuleBridgeConsumeResponseSchema = z.object({
+  success: z.boolean(),
+  bridge: ModuleBridgeSessionSchema,
+}).strict();
+export type ModuleBridgeConsumeResponse = z.infer<typeof ModuleBridgeConsumeResponseSchema>;
 
 // ============================================================================
 // QUESTION BLUEPRINT & JD INSIGHTS

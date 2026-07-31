@@ -1,8 +1,16 @@
-# P0-3 Local Recovery and Publication Record
+## Workflow 30615442134 Failure Record
 
-**Repository**: `APReddy-AutoBotz/MockMate-OS`  
-**Branch**: `antigravity/p0-3-career-context-cross-module-grounding`  
-**Baseline**: `f426892985e17b7d39b0aca4ab480c955e439ca7`  
+- **Workflow Run**: [30615442134](https://github.com/APReddy-AutoBotz/MockMate-OS/actions/runs/30615442134)
+- **Exact Head**: `3c986011b88a44adae8613ac956b6228b4e5799f`
+- **Status**: `completed`
+- **Conclusion**: `FAILURE`
+- **Failed Step**: Step 7 `Backend typecheck` (and skipped frontend typecheck step in CI)
+- **Exact Diagnostics**:
+  1. `services/aiService.ts`: `personalizationEnabled` and `practiceSignals` missing from `GroundingProjection` schema.
+  2. `Hub.tsx` & `App.tsx`: `onOpenCareerContext` missing from `HubProps`.
+  3. `CareerContextPanel.tsx`: `apiClient` invoked without required schemas and with positional parameter mismatch.
+  4. `SessionPrep.tsx`: `generateInterviewPlan` invoked with 7 parameters instead of single `PlanGenerationRequest` contract.
+- **Skipped Gates**: Tests, Frontend Build, Backend Build, Integration Journeys.
 
 ---
 
