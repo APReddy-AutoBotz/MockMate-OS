@@ -171,6 +171,19 @@ CREATE POLICY "Service Role full access on career_context_bridges"
     TO service_role
     USING (true) WITH CHECK (true);
 
+-- GRANTS FOR SERVICE_ROLE AND AUTHENTICATED
+GRANT ALL ON public.career_context_state TO service_role;
+GRANT ALL ON public.career_context_items TO service_role;
+GRANT ALL ON public.career_context_snapshots TO service_role;
+GRANT ALL ON public.career_context_snapshot_items TO service_role;
+GRANT ALL ON public.career_context_bridges TO service_role;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_context_state TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_context_items TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_context_snapshots TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_context_snapshot_items TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_context_bridges TO authenticated;
+
 -- IMMUTABILITY TRIGGERS
 CREATE OR REPLACE FUNCTION public.prevent_snapshot_mutation()
 RETURNS TRIGGER AS $$
