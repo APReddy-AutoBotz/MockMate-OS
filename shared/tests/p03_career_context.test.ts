@@ -80,6 +80,7 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
   it('3. CareerContextItem enforces strict schema validation and rejects invalid kinds', () => {
     const validItem = {
       id: '11111111-1111-1111-1111-111111111111',
+      userId: '00000000-0000-0000-0000-000000000000',
       kind: 'target_role',
       canonicalKey: 'profile.target_role',
       label: 'Target Role',
@@ -135,6 +136,7 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
   it('5. CareerContextSnapshotSchema enforces immutability structure', () => {
     const snapshot = {
       id: '44444444-4444-4444-4444-444444444444',
+      userId: '00000000-0000-0000-0000-000000000000',
       purpose: 'resume_to_interview',
       contextVersion: 1,
       itemIds: ['11111111-1111-1111-1111-111111111111'],
@@ -160,6 +162,7 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
   it('6. ModuleBridgeSessionSchema enforces status lifecycle', () => {
     const bridge = {
       id: '55555555-5555-5555-5555-555555555555',
+      userId: '00000000-0000-0000-0000-000000000000',
       sourceModule: 'clearspeak',
       targetModule: 'interview',
       purpose: 'clearspeak_to_interview',
