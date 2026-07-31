@@ -14,7 +14,7 @@ import AppContainer from './components/AppContainer';
 import SplashScreen from './components/SplashScreen';
 import SimplifiedReport from './components/SimplifiedReport';
 import InterviewOrbit from './components/InterviewOrbit';
-import { FinalReport, InterviewSessionContext as SessionContext, SessionControls, InterviewSetupDraft, createBlankInterviewSetupDraft, createResumeGroundedInterviewDraft, createClearSpeakGroundedInterviewDraft } from "mockmate-shared";
+import { FinalReport, InterviewSessionContext as SessionContext, SessionControls, InterviewSetupDraft, ResumeData, createBlankInterviewSetupDraft, createResumeGroundedInterviewDraft, createClearSpeakGroundedInterviewDraft } from "mockmate-shared";
 import { Logo } from './components/icons/Logo';
 import LandingPage from './components/LandingPage';
 import Login from './components/Login';
@@ -248,7 +248,7 @@ const App: React.FC = () => {
         setAppState('CLEARSPEAK');
     };
 
-    const handleResumeInterviewBridge = (jdText: string, resumeData: any) => {
+    const handleResumeInterviewBridge = (jdText: string, resumeData: ResumeData) => {
         audioService.playStart();
         const targetRole = userProfile?.targetRole || 'Software Professional';
         const intentText = jdText || 'General interview based on my resume.';

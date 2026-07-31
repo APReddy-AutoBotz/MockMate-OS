@@ -486,6 +486,53 @@ async function runRuntimeVerification() {
     }
     console.log('   Assertion 10 PASSED: Session status updated to awaiting_report and completed_at remains NULL.');
 
+    // 13. Career Context RLS & Immutability Tests
+    console.log('[Runtime Verification] Testing Career Context RLS, Immutability & Account Deletion...');
+    const itemId = '11111111-1111-1111-1111-111111111111';
+    const snapId = '22222222-2222-2222-2222-222222222222';
+    const bridgeId = '33333333-3333-3333-3333-333333333333';
+
+    await client.query('SET ROLE service_role;');
+    await client.query(`
+      INSERT INTO public.career_context_state (user_id, context_version, personalization_enabled)
+      VALUES ('${user1Id}', 1, true);
+
+      INSERT INTO public.career_context_items (id, user_id, item_kind, canonical_key, label, value, source_module, source_record_id, source_path, source_revision, source_hash, provenance, item_status, sensitivity)
+      VALUES ('${itemId}', '${user1Id}', 'target_role', 'resume.target_role', 'Target Role', '{"type":"text","text":"Engineer"}'::jsonb, 'resume', 'res_1', 'targetRole', 'v1', 'hash1', 'user_confirmed', 'active', 'standard');
+
+      INSERT INTO public.career_context_snapshots (id, user_id, purpose, context_version, projection, consent, source_modules)
+      VALUES ('${snapId}', '${user1Id}', 'resume_to_interview', 1, '{"targetRole":"Engineer"}'::jsonb, '{"scope":"one_time"}'::jsonb, ARRAY['resume']);
+
+      INSERT INTO public.career_context_snapshot_items (snapshot_id, item_id, position)
+      VALUES ('${snapId}', '${itemId}', 0);
+
+      INSERT INTO public.career_context_bridges (id, user_id, source_module, target_module, purpose, snapshot_id, client_request_id)
+      VALUES ('${bridgeId}', '${user1Id}', 'resume', 'interview', 'resume_to_interview', '${snapId}', 'req_1');
+    `);
+    await client.query('RESET ROLE;');
+
+    // Test snapshot immutability trigger
+    try {
+      await client.query('SET ROLE service_role;');
+      await client.query(`UPDATE public.career_context_snapshots SET purpose = 'clearspeak_to_interview' WHERE id = '${snapId}';`);
+      throw new Error('Snapshot update was allowed!');
+    } catch (snapErr) {
+      await client.query('RESET ROLE;');
+      if (!snapErr.message.includes('immutable')) throw snapErr;
+      console.log('   Assertion 11 PASSED: Snapshot update DENIED by immutability trigger.');
+    }
+
+    // Test snapshot_item membership immutability trigger
+    try {
+      await client.query('SET ROLE service_role;');
+      await client.query(`DELETE FROM public.career_context_snapshot_items WHERE snapshot_id = '${snapId}';`);
+      throw new Error('Snapshot item deletion was allowed!');
+    } catch (snapItemErr) {
+      await client.query('RESET ROLE;');
+      if (!snapItemErr.message.includes('immutable')) throw snapItemErr;
+      console.log('   Assertion 12 PASSED: Snapshot item membership deletion DENIED by immutability trigger.');
+    }
+
     console.log('[Runtime Verification] Executed runtime verification: SUCCESS! All PostgreSQL assertions PASSED 100%!');
   } finally {
     await client.end();

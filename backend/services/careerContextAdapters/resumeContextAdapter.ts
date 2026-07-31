@@ -45,41 +45,6 @@ export function buildResumeContextItems(input: ResumeAdapterInput): CareerContex
     });
   }
 
-  // 2. Personal contact fields -> marked personal_contact (strictly ineligible for grounding snapshots)
-  if (resumeData.basics.email) {
-    items.push({
-      id: `ctx_res_${recordId}_contact_email`,
-      kind: 'career_goal',
-      canonicalKey: 'resume.contact.email',
-      label: 'Email',
-      value: { type: 'text', text: resumeData.basics.email },
-      source: { module: 'resume', recordId, fieldPath: 'basics.email', sourceRevision: revision, sourceHash: computeHash(resumeData.basics.email), capturedAt },
-      exactExcerpt: resumeData.basics.email,
-      provenance: 'direct_source',
-      status: 'active',
-      sensitivity: 'personal_contact',
-      createdAt: capturedAt,
-      updatedAt: capturedAt,
-    });
-  }
-
-  if (resumeData.basics.phone) {
-    items.push({
-      id: `ctx_res_${recordId}_contact_phone`,
-      kind: 'career_goal',
-      canonicalKey: 'resume.contact.phone',
-      label: 'Phone',
-      value: { type: 'text', text: resumeData.basics.phone },
-      source: { module: 'resume', recordId, fieldPath: 'basics.phone', sourceRevision: revision, sourceHash: computeHash(resumeData.basics.phone), capturedAt },
-      exactExcerpt: resumeData.basics.phone,
-      provenance: 'direct_source',
-      status: 'active',
-      sensitivity: 'personal_contact',
-      createdAt: capturedAt,
-      updatedAt: capturedAt,
-    });
-  }
-
   // 3. Summary
   if (resumeData.summary && resumeData.summary.trim()) {
     const summaryText = resumeData.summary.trim();

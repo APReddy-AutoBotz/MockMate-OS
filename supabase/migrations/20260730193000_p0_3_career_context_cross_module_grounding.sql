@@ -170,3 +170,27 @@ CREATE POLICY "Service Role full access on career_context_bridges"
     ON public.career_context_bridges FOR ALL
     TO service_role
     USING (true) WITH CHECK (true);
+
+-- IMMUTABILITY TRIGGERS
+CREATE OR REPLACE FUNCTION public.prevent_snapshot_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'UPDATE') THEN
+        RAISE EXCEPTION 'Career Context Snapshots and Snapshot Items are immutable and cannot be updated.';
+    ELSIF (TG_OP = 'DELETE' AND TG_TABLE_NAME = 'career_context_snapshot_items') THEN
+        RAISE EXCEPTION 'Career Context Snapshot Items membership is immutable and cannot be deleted.';
+    END IF;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER prevent_snapshot_update
+    BEFORE UPDATE ON public.career_context_snapshots
+    FOR EACH ROW
+    EXECUTE FUNCTION public.prevent_snapshot_mutation();
+
+CREATE OR REPLACE TRIGGER prevent_snapshot_item_mutation
+    BEFORE UPDATE OR DELETE ON public.career_context_snapshot_items
+    FOR EACH ROW
+    EXECUTE FUNCTION public.prevent_snapshot_mutation();
+
