@@ -40,12 +40,25 @@ router.delete('/data', async (req, res) => {
     const failedTables: string[] = [];
 
     // 1. Transactional deletion of P0-3 Career Context records via protected RPC
-    const { error: rpcErr } = await supabaseAdmin.rpc('delete_user_career_context', {
-      target_user_id: userId,
-    });
+    let rpcErr: any = null;
+    let rpcExecuted = false;
 
-    if (rpcErr) {
-      console.warn('[Me] RPC delete_user_career_context failed, falling back to direct delete:', rpcErr.message);
+    if (typeof (supabaseAdmin as any).rpc === 'function') {
+      try {
+        const res = await supabaseAdmin.rpc('delete_user_career_context', {
+          target_user_id: userId,
+        });
+        rpcErr = res.error;
+        rpcExecuted = true;
+      } catch (err: any) {
+        rpcErr = err;
+      }
+    }
+
+    if (!rpcExecuted || rpcErr) {
+      if (rpcErr) {
+        console.warn('[Me] RPC delete_user_career_context failed, falling back to direct delete:', rpcErr.message || rpcErr);
+      }
       const p03Tables = [
         'career_context_snapshot_items',
         'career_context_bridges',
