@@ -62,11 +62,7 @@ router.post('/rebuild', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
     if (!supabaseAdmin) {
-      return res.json({
-        success: true,
-        summary: { addedCount: (req.body.items || []).length, updatedCount: 0, unchangedCount: 0 },
-        state: { userId, contextVersion: 1, personalizationEnabled: true, updatedAt: new Date().toISOString() }
-      });
+      return res.status(503).json({ error: 'Authoritative persistence unavailable' });
     }
 
     const drafts: CareerContextItemDraft[] = [];
@@ -166,7 +162,7 @@ router.post('/rebuild', async (req, res) => {
       success: true,
       state: updatedState,
       addedCount: result.addedCount,
-      supersededCount: result.supersededCount,
+      supersededCount: result.updatedCount,
       unchangedCount: result.unchangedCount,
     });
   } catch (err: any) {

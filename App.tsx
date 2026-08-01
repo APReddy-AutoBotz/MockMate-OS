@@ -24,6 +24,9 @@ import ClearSpeakDashboard from './components/clearspeak/ClearSpeakDashboard';
 import ResumeBuilderFlow from './components/resume/ResumeBuilderFlow';
 import CareerContextPanel from './components/CareerContextPanel';
 import LegalPage from './components/LegalPage';
+import GroundingPreviewModal from './components/GroundingPreviewModal';
+import { fetchCareerContext, createGroundingSnapshot, createModuleBridge } from './services/careerContextService';
+import { CareerContextItem, GroundingPurpose, CareerContextModule, CareerContextSnapshot, ModuleBridgeSession, GroundingConflict } from 'mockmate-shared';
 import SystemStatus from './components/SystemStatus';
 import type { ClearSpeakBridgePayload } from './components/clearspeak/types';
 import { checkBetaAccess } from './services/clearSpeakService';
@@ -55,8 +58,16 @@ const App: React.FC = () => {
     const [sessionContext, setSessionContext] = useState<SessionContext | null>(null);
     const [finalReport, setFinalReport] = useState<FinalReport | null>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-    // ClearSpeak access is fail-closed until the backend confirms beta access.
     const [betaEnabled, setBetaEnabled] = useState(false);
+    const [pendingGroundingLaunch, setPendingGroundingLaunch] = useState<{
+        purpose: GroundingPurpose;
+        sourceModules: CareerContextModule[];
+        targetModule: CareerContextModule;
+        items: CareerContextItem[];
+        conflicts: GroundingConflict[];
+        onSuccess: (snapshot: CareerContextSnapshot, bridge?: ModuleBridgeSession) => void;
+        onSkip: () => void;
+    } | null>(null);
 
     useEffect(() => {
         // Use the auth listener to determine starting state
@@ -229,37 +240,141 @@ const App: React.FC = () => {
         if (module === 'INTERVIEW') setAppState('ROLE_SELECTION');
     };
 
+    const triggerGroundedLaunch = async (
+        purpose: GroundingPurpose,
+        sourceModules: CareerContextModule[],
+        targetModule: CareerContextModule,
+        onSuccess: (snapshot: CareerContextSnapshot, bridge?: ModuleBridgeSession) => void,
+        onSkip: () => void
+    ) => {
+        try {
+            const contextData = await fetchCareerContext();
+            const activeItems = (contextData.activeItems || []).filter(i => i.status === 'active' && i.sensitivity !== 'personal_contact');
+            if (activeItems.length === 0) {
+                onSkip();
+                return;
+            }
+            setPendingGroundingLaunch({
+                purpose,
+                sourceModules,
+                targetModule,
+                items: contextData.activeItems || [],
+                conflicts: [],
+                onSuccess,
+                onSkip,
+            });
+        } catch (err) {
+            console.warn('[Grounding Launch] Could not fetch career context, running ungrounded:', err);
+            onSkip();
+        }
+    };
+
+    const handleModalConfirm = async (selectedItemIds: string[], scope: 'one_time' | 'future_sessions') => {
+        if (!pendingGroundingLaunch) return;
+        const { purpose, sourceModules, targetModule, items, onSuccess, onSkip } = pendingGroundingLaunch;
+        const excludedItemIds = items.filter(i => !selectedItemIds.includes(i.id)).map(i => i.id);
+
+        try {
+            const clientRequestId = `req_snap_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+            const snapshotRes = await createGroundingSnapshot({
+                purpose,
+                includedItemIds: selectedItemIds,
+                excludedItemIds,
+                conflictSelections: {},
+                consent: {
+                    scope,
+                    purpose,
+                    includedItemIds: selectedItemIds,
+                    excludedItemIds,
+                    sourceModules,
+                    acknowledgedAt: new Date().toISOString(),
+                },
+                clientRequestId,
+            });
+
+            const bridgeRes = await createModuleBridge({
+                sourceModule: sourceModules[0],
+                targetModule,
+                purpose,
+                snapshotId: snapshotRes.snapshot.id,
+                clientRequestId: `req_br_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+            });
+
+            setPendingGroundingLaunch(null);
+            onSuccess(snapshotRes.snapshot, bridgeRes.bridge);
+        } catch (err: any) {
+            console.error('[Grounding Launch] Failed to create grounding snapshot/bridge:', err);
+            setPendingGroundingLaunch(null);
+            onSkip();
+        }
+    };
+
     const handleInterviewBridge = (payload: ClearSpeakBridgePayload) => {
-        audioService.playStart();
         const ROLE_MAP: Record<ClearSpeakBridgePayload['role'], string> = {
             business_analyst:  'Business Analyst',
             project_manager:   'Project Manager',
             general_corporate: 'Corporate Professional',
         };
-
         const role = ROLE_MAP[payload.role] ?? 'Business Professional';
-        const snapshotId = crypto.randomUUID();
-        const bridgeId = crypto.randomUUID();
-        const draft = createClearSpeakGroundedInterviewDraft(snapshotId, bridgeId, role, payload.bridgeQuestion);
-        setSetupDraft(draft);
-        setAppState('CONTEXT_UPLOAD');
+
+        triggerGroundedLaunch(
+            'clearspeak_to_interview',
+            ['clearspeak'],
+            'interview',
+            (snapshot, bridge) => {
+                audioService.playStart();
+                const draft = createClearSpeakGroundedInterviewDraft(snapshot.id, bridge?.id || snapshot.id, role, payload.bridgeQuestion);
+                setSetupDraft(draft);
+                setAppState('CONTEXT_UPLOAD');
+            },
+            () => {
+                audioService.playStart();
+                const draft = createBlankInterviewSetupDraft(role, 'General corporate speaking practice.');
+                setSetupDraft(draft);
+                setAppState('CONTEXT_UPLOAD');
+            }
+        );
     };
 
     const handleResumeSpeakBridge = (summary: string) => {
-        audioService.playStart();
-        setAppState('CLEARSPEAK');
+        triggerGroundedLaunch(
+            'resume_to_clearspeak',
+            ['resume'],
+            'clearspeak',
+            (snapshot, bridge) => {
+                audioService.playStart();
+                setAppState('CLEARSPEAK');
+            },
+            () => {
+                audioService.playStart();
+                setAppState('CLEARSPEAK');
+            }
+        );
     };
 
     const handleResumeInterviewBridge = (jdText: string, resumeData: ResumeData) => {
-        audioService.playStart();
         const targetRole = userProfile?.targetRole || 'Software Professional';
         const intentText = jdText || 'General interview based on my resume.';
-        const snapshotId = crypto.randomUUID();
-        const bridgeId = crypto.randomUUID();
-        const draft = createResumeGroundedInterviewDraft(snapshotId, bridgeId, targetRole, intentText);
-        if (jdText) draft.jdText = jdText;
-        setSetupDraft(draft);
-        setAppState('CONTEXT_UPLOAD');
+
+        triggerGroundedLaunch(
+            'resume_to_interview',
+            ['resume'],
+            'interview',
+            (snapshot, bridge) => {
+                audioService.playStart();
+                const draft = createResumeGroundedInterviewDraft(snapshot.id, bridge?.id || snapshot.id, targetRole, intentText);
+                if (jdText) draft.jdText = jdText;
+                setSetupDraft(draft);
+                setAppState('CONTEXT_UPLOAD');
+            },
+            () => {
+                audioService.playStart();
+                const draft = createResumeGroundedInterviewDraft('', '', targetRole, intentText);
+                if (jdText) draft.jdText = jdText;
+                setSetupDraft(draft);
+                setAppState('CONTEXT_UPLOAD');
+            }
+        );
     };
 
     const pageAnimation = {
@@ -442,7 +557,7 @@ const App: React.FC = () => {
                                         report={finalReport}
                                         onRestart={handleRestart}
                                         userProfile={userProfile}
-                                        sessionId={sessionContext?.bridgeSessionId}
+                                        sessionId={(sessionContext as any)?.sessionId || undefined}
                                     />
                                 )}
                             </ErrorBoundary>
@@ -588,6 +703,20 @@ const App: React.FC = () => {
                                         })}
                                     </div>
                                 </nav>
+                            )}
+                            {pendingGroundingLaunch && (
+                                <GroundingPreviewModal
+                                    purpose={pendingGroundingLaunch.purpose}
+                                    items={pendingGroundingLaunch.items}
+                                    conflicts={pendingGroundingLaunch.conflicts}
+                                    onConfirm={handleModalConfirm}
+                                    onSkip={() => {
+                                        const skipFn = pendingGroundingLaunch.onSkip;
+                                        setPendingGroundingLaunch(null);
+                                        skipFn();
+                                    }}
+                                    onClose={() => setPendingGroundingLaunch(null)}
+                                />
                             )}
                             <SystemStatus />
                         </>

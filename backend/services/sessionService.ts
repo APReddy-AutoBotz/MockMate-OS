@@ -100,6 +100,14 @@ export const toSession = async (row: any): Promise<any> => {
   };
 };
 
+export const deleteSession = async (userId: string, sessionId: string): Promise<void> => {
+  if (supabaseAdmin) {
+    await supabaseAdmin.from('interview_turns').delete().eq('session_id', sessionId);
+    await supabaseAdmin.from('interview_sessions').delete().eq('id', sessionId).eq('user_id', userId);
+  }
+  fallbackSessions.delete(sessionId);
+};
+
 export const createSession = async (
   userId: string,
   context: InterviewSessionContext

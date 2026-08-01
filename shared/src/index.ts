@@ -1093,6 +1093,17 @@ export const FinalReportSchema = z.object({
   prioritizedActions: z.array(PrioritizedActionSchema),
   challengeRecoveryTimeline: z.array(ChallengeRecoveryRecordSchema).optional(),
   providerMetadata: ProviderMetadataSchema.optional(),
+  contextAudit: z.object({
+    snapshotId: z.string().uuid(),
+    bridgeId: z.string().uuid().optional(),
+    purpose: GroundingPurposeSchema,
+    sourceModules: z.array(z.string()),
+    groundedQuestions: z.array(z.object({
+      questionId: z.string(),
+      questionText: z.string(),
+      groundingReferences: z.array(GroundingReferenceSchema),
+    })),
+  }).optional(),
 }).strict();
 export type FinalReport = z.infer<typeof FinalReportSchema>;
 

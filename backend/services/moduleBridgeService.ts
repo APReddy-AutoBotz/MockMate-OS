@@ -17,55 +17,16 @@ export interface CreateBridgeInput {
   clientRequestId: string;
 }
 
-const inMemoryBridges = new Map<string, any>();
-
 export async function createModuleBridgeSession(input: CreateBridgeInput): Promise<ModuleBridgeSession> {
-  const { userId, sourceModule, targetModule, purpose, snapshotId, sourceRecordId, clientRequestId } = input;
-  const now = new Date().toISOString();
-
   if (!supabaseAdmin) {
-    const newBridgeId = crypto.randomUUID();
-    const mockRow = {
-      id: newBridgeId,
-      user_id: userId,
-      source_module: sourceModule,
-      target_module: targetModule,
-      purpose,
-      snapshot_id: snapshotId,
-      source_record_id: sourceRecordId || null,
-      target_session_id: null,
-      status: 'confirmed',
-      client_request_id: clientRequestId,
-      confirmed_at: now,
-      consumed_at: null,
-      created_at: now,
-      updated_at: now,
-    };
-    inMemoryBridges.set(newBridgeId, mockRow);
-    return mapDbToBridge(mockRow);
-  }
-
-  // 1. Lock & verify snapshot ownership
-  const { data: snapshot, error: snapErr } = await supabaseAdmin
-    .from('career_context_snapshots')
-    .select('id, user_id, purpose')
-    .eq('id', snapshotId)
-    .eq('user_id', userId)
-    .single();
-
-  if (snapErr || !snapshot) {
-    const err: any = new Error(`Grounding snapshot '${snapshotId}' not found or access denied.`);
-    err.status = 404;
+    const err: any = new Error('Authoritative persistence unavailable');
+    err.status = 503;
     throw err;
   }
 
-  if (snapshot.purpose !== purpose) {
-    const err: any = new Error(`Snapshot purpose '${snapshot.purpose}' does not match bridge purpose '${purpose}'.`);
-    err.status = 422;
-    throw err;
-  }
+  const { userId, sourceModule, targetModule, purpose, snapshotId, sourceRecordId, clientRequestId } = input;
 
-  // 2. Canonical request hash
+  // 1. Canonical request hash for exact replay
   const rawHashPayload = JSON.stringify({
     userId,
     sourceModule,
@@ -76,147 +37,74 @@ export async function createModuleBridgeSession(input: CreateBridgeInput): Promi
   });
   const requestHash = crypto.createHash('sha256').update(rawHashPayload).digest('hex');
 
-  // 3. Idempotency Check
-  const { data: existing } = await supabaseAdmin
-    .from('career_context_bridges')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('client_request_id', clientRequestId)
-    .maybeSingle();
+  // 2. Invoke transactional RPC create_module_bridge_tx
+  const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('create_module_bridge_tx', {
+    p_user_id: userId,
+    p_source_module: sourceModule,
+    p_target_module: targetModule,
+    p_purpose: purpose,
+    p_snapshot_id: snapshotId,
+    p_source_record_id: sourceRecordId || null,
+    p_client_request_id: clientRequestId,
+    p_request_hash: requestHash,
+  });
 
-  if (existing) {
-    if (existing.request_hash === requestHash || existing.snapshot_id === snapshotId) {
-      return mapDbToBridge(existing);
-    }
-    const err: any = new Error(`Client request ID '${clientRequestId}' already used for a different bridge payload.`);
-    err.status = 409;
+  if (rpcErr) {
+    const err: any = new Error(rpcErr.message);
+    if (rpcErr.message.includes('Bridge snapshot ownership mismatch')) err.status = 404;
+    else if (rpcErr.message.includes('unique_user_bridge_client_req')) err.status = 409;
+    else err.status = 400;
     throw err;
   }
 
-  // 4. Insert New Bridge with real UUID
-  const newBridgeId = crypto.randomUUID();
-  const bridgeRow = {
-    id: newBridgeId,
-    user_id: userId,
-    source_module: sourceModule,
-    target_module: targetModule,
-    purpose,
-    snapshot_id: snapshotId,
-    source_record_id: sourceRecordId || null,
-    target_session_id: null,
-    status: 'confirmed',
-    client_request_id: clientRequestId,
-    request_hash: requestHash,
-    confirmed_at: now,
-    consumed_at: null,
-    created_at: now,
-    updated_at: now,
-  };
-
-  const { data: inserted, error } = await supabaseAdmin
-    .from('career_context_bridges')
-    .insert(bridgeRow)
-    .select('*')
-    .single();
-
-  if (error || !inserted) {
-    throw new Error(`Failed to create module bridge: ${error?.message || 'Database insert error'}`);
+  const createdBridgeId = (rpcRes as any)?.bridgeId;
+  if (!createdBridgeId) {
+    throw new Error('RPC create_module_bridge_tx failed to return bridgeId');
   }
 
-  return mapDbToBridge(inserted);
+  const bridge = await getModuleBridgeById(userId, createdBridgeId);
+  if (!bridge) {
+    throw new Error(`Failed to load created bridge session ${createdBridgeId}`);
+  }
+
+  return bridge;
 }
 
 export async function consumeModuleBridgeSession(userId: string, bridgeId: string, targetSessionId: string): Promise<ModuleBridgeSession> {
-  const now = new Date().toISOString();
-
   if (!supabaseAdmin) {
-    const mockRow = inMemoryBridges.get(bridgeId);
-    if (!mockRow || mockRow.user_id !== userId) {
-      const err: any = new Error(`Bridge '${bridgeId}' not found or access denied.`);
-      err.status = 404;
-      throw err;
-    }
-    if (mockRow.status === 'consumed') {
-      if (mockRow.target_session_id === targetSessionId) return mapDbToBridge(mockRow);
-      const err: any = new Error(`Bridge '${bridgeId}' has already been consumed for session '${mockRow.target_session_id}'.`);
-      err.status = 409;
-      throw err;
-    }
-    mockRow.status = 'consumed';
-    mockRow.target_session_id = targetSessionId;
-    mockRow.consumed_at = now;
-    mockRow.updated_at = now;
-    return mapDbToBridge(mockRow);
-  }
-
-  const { data: existing, error: findErr } = await supabaseAdmin
-    .from('career_context_bridges')
-    .select('*')
-    .eq('id', bridgeId)
-    .eq('user_id', userId)
-    .maybeSingle();
-
-  if (findErr || !existing) {
-    const err: any = new Error(`Bridge '${bridgeId}' not found or access denied.`);
-    err.status = 404;
+    const err: any = new Error('Authoritative persistence unavailable');
+    err.status = 503;
     throw err;
   }
 
-  if (existing.status === 'consumed') {
-    if (existing.target_session_id === targetSessionId) {
-      return mapDbToBridge(existing);
-    }
-    const err: any = new Error(`Bridge '${bridgeId}' has already been consumed for session '${existing.target_session_id}'.`);
-    err.status = 409;
+  const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('consume_module_bridge_tx', {
+    p_user_id: userId,
+    p_bridge_id: bridgeId,
+    p_target_session_id: targetSessionId,
+  });
+
+  if (rpcErr) {
+    const err: any = new Error(rpcErr.message);
+    if (rpcErr.message.includes('not found')) err.status = 404;
+    else if (rpcErr.message.includes('not owned') || rpcErr.message.includes('access denied')) err.status = 403;
+    else if (rpcErr.message.includes('already been consumed') || rpcErr.message.includes('cancelled') || rpcErr.message.includes('expired')) err.status = 409;
+    else err.status = 400;
     throw err;
   }
 
-  if (existing.status === 'cancelled' || existing.status === 'expired') {
-    const err: any = new Error(`Bridge '${bridgeId}' is ${existing.status} and cannot be consumed.`);
-    err.status = 409;
-    throw err;
+  const bridge = await getModuleBridgeById(userId, bridgeId);
+  if (!bridge) {
+    throw new Error(`Failed to load consumed bridge ${bridgeId}`);
   }
 
-  // Verify target session ownership if target session exists in DB
-  const { data: sessionData } = await supabaseAdmin
-    .from('interview_sessions')
-    .select('user_id')
-    .eq('id', targetSessionId)
-    .maybeSingle();
-
-  if (sessionData && sessionData.user_id !== userId) {
-    const err: any = new Error(`Target Interview session '${targetSessionId}' is not owned by user.`);
-    err.status = 403;
-    throw err;
-  }
-
-  // Atomic conditional update
-  const { data: updated, error: updateErr } = await supabaseAdmin
-    .from('career_context_bridges')
-    .update({
-      status: 'consumed',
-      target_session_id: targetSessionId,
-      consumed_at: now,
-      updated_at: now,
-    })
-    .eq('id', bridgeId)
-    .eq('user_id', userId)
-    .select('*')
-    .single();
-
-  if (updateErr || !updated) {
-    throw new Error(`Failed to consume bridge '${bridgeId}': ${updateErr?.message || 'Update error'}`);
-  }
-
-  return mapDbToBridge(updated);
+  return bridge;
 }
 
 export async function getModuleBridgeById(userId: string, bridgeId: string): Promise<ModuleBridgeSession | null> {
   if (!supabaseAdmin) {
-    const mockRow = inMemoryBridges.get(bridgeId);
-    if (!mockRow || mockRow.user_id !== userId) return null;
-    return mapDbToBridge(mockRow);
+    return null;
   }
+
   const { data, error } = await supabaseAdmin
     .from('career_context_bridges')
     .select('*')

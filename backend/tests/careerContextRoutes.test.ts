@@ -177,6 +177,99 @@ const mockSupabaseClient: any = {
       delete: () => ({ eq: async () => ({ error: null }) }),
     };
   },
+  rpc: async (fnName: string, args: any) => {
+    if (fnName === 'mutate_career_context_item') {
+      const item = mockItems.find(i => i.id === args.p_item_id && i.user_id === args.p_user_id);
+      if (!item) return { data: null, error: new Error('Career Context item not found.') };
+      if (args.p_decision === 'confirm') {
+        item.item_status = 'active';
+        item.provenance = 'user_confirmed';
+        item.user_confirmed_at = new Date().toISOString();
+        return { data: { item }, error: null };
+      }
+      if (args.p_decision === 'reject' || args.p_decision === 'revoke') {
+        item.item_status = 'revoked';
+        return { data: { item }, error: null };
+      }
+      if (args.p_decision === 'dispute') {
+        item.item_status = 'disputed';
+        return { data: { item }, error: null };
+      }
+      if (args.p_decision === 'edit' || args.p_decision === 'replace') {
+        const newId = '90000000-0000-0000-0000-000000000001';
+        item.item_status = 'superseded';
+        item.superseded_by = newId;
+        const newItem = {
+          ...item,
+          id: newId,
+          exact_excerpt: args.p_new_value,
+          value: { type: 'text', text: args.p_new_value },
+          provenance: 'user_edited',
+          item_status: 'active',
+          user_confirmed_at: new Date().toISOString(),
+        };
+        mockItems.push(newItem);
+        return { data: { item: newItem }, error: null };
+      }
+    }
+    if (fnName === 'create_grounding_snapshot_tx') {
+      const snapId = SNAPSHOT_ID;
+      const snapshotRow = {
+        id: snapId,
+        user_id: args.p_user_id,
+        purpose: args.p_purpose,
+        context_version: 1,
+        projection: args.p_projection,
+        conflicts: args.p_conflicts || [],
+        consent: args.p_consent,
+        source_modules: args.p_source_modules,
+        client_request_id: args.p_client_request_id,
+        request_hash: args.p_request_hash,
+        created_at: new Date().toISOString(),
+      };
+      mockSnapshots.push(snapshotRow);
+      return { data: { snapshotId: snapId }, error: null };
+    }
+    if (fnName === 'create_module_bridge_tx') {
+      const existing = mockBridges.find(b => b.client_request_id === args.p_client_request_id);
+      if (existing) {
+        return { data: { bridgeId: existing.id }, error: null };
+      }
+      const bridgeId = BRIDGE_ID;
+      const bridgeRow = {
+        id: bridgeId,
+        user_id: args.p_user_id,
+        source_module: args.p_source_module,
+        target_module: args.p_target_module,
+        purpose: args.p_purpose,
+        snapshot_id: args.p_snapshot_id,
+        source_record_id: args.p_source_record_id || null,
+        target_session_id: null,
+        status: 'confirmed',
+        client_request_id: args.p_client_request_id,
+        request_hash: args.p_request_hash,
+        confirmed_at: new Date().toISOString(),
+        consumed_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      mockBridges.push(bridgeRow);
+      return { data: { bridgeId }, error: null };
+    }
+    if (fnName === 'consume_module_bridge_tx') {
+      const bridge = mockBridges.find(b => b.id === args.p_bridge_id && b.user_id === args.p_user_id);
+      if (!bridge) return { data: null, error: new Error('Bridge not found') };
+      if (bridge.status === 'consumed') {
+        if (bridge.target_session_id === args.p_target_session_id) return { data: { success: true }, error: null };
+        return { data: null, error: new Error(`Bridge '${args.p_bridge_id}' has already been consumed for session '${bridge.target_session_id}'.`) };
+      }
+      bridge.status = 'consumed';
+      bridge.target_session_id = args.p_target_session_id;
+      bridge.consumed_at = new Date().toISOString();
+      return { data: { success: true }, error: null };
+    }
+    return { data: null, error: null };
+  },
 };
 
 const app = express();

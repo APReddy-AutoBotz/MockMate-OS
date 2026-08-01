@@ -14,7 +14,8 @@ import {
   HintRequestSchema,
   IdealResponseRequestSchema,
   CodeAnalysisRequestSchema,
-  CodeSimulationRequestSchema
+  CodeSimulationRequestSchema,
+  CareerContextSnapshot
 } from 'mockmate-shared';
 
 const router = Router();
@@ -45,18 +46,44 @@ router.post('/plan', enforceUsageLimit('interview_question'), async (req: any, r
     if (!parsed.success) {
       return res.status(422).json({ error: 'Invalid plan generation payload', details: parsed.error.issues });
     }
-    const { role, intent, controls, jdText, resumeText, selectedPanelIDs, snapshotId } = parsed.data;
+    const { role, intent, controls, jdText, resumeText, selectedPanelIDs, snapshotId, bridgeId } = parsed.data;
     const userId = req.user?.uid;
-    let groundingSnapshot: any;
-    if (snapshotId && userId) {
+    let groundingSnapshot: CareerContextSnapshot | undefined = undefined;
+
+    if (snapshotId) {
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
       const { getSnapshotById } = require('../services/groundingSnapshotService');
-      groundingSnapshot = (await getSnapshotById(userId, snapshotId)) || undefined;
+      const snap = await getSnapshotById(userId, snapshotId);
+      if (!snap) {
+        return res.status(404).json({ error: `Grounding snapshot '${snapshotId}' not found or access denied.` });
+      }
+      if (!['resume_to_interview', 'clearspeak_to_interview', 'interview_personalization'].includes(snap.purpose)) {
+        return res.status(422).json({ error: `Snapshot purpose '${snap.purpose}' is incompatible with Interview practice.` });
+      }
+      groundingSnapshot = snap;
     }
+
+    if (bridgeId) {
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+      const { getModuleBridgeById } = require('../services/moduleBridgeService');
+      const bridge = await getModuleBridgeById(userId, bridgeId);
+      if (!bridge) {
+        return res.status(404).json({ error: `Module bridge '${bridgeId}' not found or access denied.` });
+      }
+      if (snapshotId && bridge.snapshotId !== snapshotId) {
+        return res.status(422).json({ error: `Bridge snapshotId '${bridge.snapshotId}' does not match requested snapshotId '${snapshotId}'.` });
+      }
+      if (bridge.status !== 'confirmed') {
+        return res.status(409).json({ error: `Bridge status is '${bridge.status}', cannot generate plan.` });
+      }
+    }
+
     const result = await aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText, selectedPanelIDs, groundingSnapshot);
     res.json(InterviewPlanSchema.parse(result));
   } catch (error: any) {
     console.error('[Interview] plan error:', error);
-    res.status(500).json({ error: error.message || 'Could not create interview practice plan' });
+    const status = error.status || 500;
+    res.status(status).json({ error: error.message || 'Could not create interview practice plan' });
   }
 });
 
@@ -74,11 +101,36 @@ router.post('/sessions', enforceUsageLimit('interview_question'), async (req: an
       return res.status(422).json({ error: 'Invalid session start payload', details: parsed.error.issues });
     }
 
+    const bridgeSessionId = parsed.data.context?.bridgeSessionId;
+
+    // 1. Create real Interview session first
     const result = await sessionService.createSession(userId, parsed.data.context);
+    const actualInterviewSessionId = result.sessionId;
+
+    if (!actualInterviewSessionId) {
+      return res.status(500).json({ error: 'Failed to create Interview session' });
+    }
+
+    // 2. Consume module bridge using actual returned Interview session ID
+    if (bridgeSessionId) {
+      const { consumeModuleBridgeSession } = require('../services/moduleBridgeService');
+      try {
+        await consumeModuleBridgeSession(userId, bridgeSessionId, actualInterviewSessionId);
+      } catch (bridgeErr: any) {
+        console.error('[Interview] Bridge consumption failed for session creation:', bridgeErr.message);
+        await sessionService.deleteSession(userId, actualInterviewSessionId).catch(() => {});
+        const status = bridgeErr.status || 409;
+        return res.status(status).json({
+          error: `Grounding bridge consumption failed: ${bridgeErr.message}. Practice session cancelled.`
+        });
+      }
+    }
+
     res.json(result);
   } catch (error: any) {
     console.error('[Interview] create session error:', error);
-    res.status(500).json({ error: error.message || 'Could not start session' });
+    const status = error.status || 500;
+    res.status(status).json({ error: error.message || 'Could not start session' });
   }
 });
 

@@ -6,7 +6,6 @@ import {
   CareerContextStateSchema
 } from 'mockmate-shared';
 import { supabaseAdmin } from '../supabaseAdmin';
-import crypto from 'crypto';
 
 export async function getCareerContextState(userId: string): Promise<CareerContextState> {
   const now = new Date().toISOString();
@@ -56,41 +55,17 @@ export async function getCareerContextState(userId: string): Promise<CareerConte
   });
 }
 
-export async function incrementContextVersion(userId: string): Promise<number> {
-  const now = new Date().toISOString();
-  if (supabaseAdmin) {
-    const { data } = await supabaseAdmin
-      .from('career_context_state')
-      .select('context_version, personalization_enabled')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    const currentVer = data ? Number(data.context_version) : 0;
-    const newVer = currentVer + 1;
-
-    const { data: updated } = await supabaseAdmin
-      .from('career_context_state')
-      .upsert({
-        user_id: userId,
-        context_version: newVer,
-        personalization_enabled: data ? Boolean(data.personalization_enabled) : false,
-        updated_at: now,
-      })
-      .select('context_version')
-      .single();
-
-    if (updated) return Number(updated.context_version);
-  }
-
-  const state = await getCareerContextState(userId);
-  return state.contextVersion;
-}
-
 export async function setPersonalizationPreference(
   userId: string,
   enabled: boolean,
   expectedContextVersion?: number
 ): Promise<CareerContextState> {
+  if (!supabaseAdmin) {
+    const err: any = new Error('Authoritative persistence unavailable');
+    err.status = 503;
+    throw err;
+  }
+
   const now = new Date().toISOString();
   const currentState = await getCareerContextState(userId);
 
@@ -100,31 +75,34 @@ export async function setPersonalizationPreference(
     throw err;
   }
 
-  if (supabaseAdmin) {
-    const { error } = await supabaseAdmin
-      .from('career_context_state')
-      .upsert({
-        user_id: userId,
-        context_version: currentState.contextVersion,
-        personalization_enabled: enabled,
-        updated_at: now,
-      });
+  const newVer = currentState.contextVersion + 1;
+  const { data, error } = await supabaseAdmin
+    .from('career_context_state')
+    .upsert({
+      user_id: userId,
+      context_version: newVer,
+      personalization_enabled: enabled,
+      updated_at: now,
+    })
+    .select('*')
+    .single();
 
-    if (error) {
-      throw new Error(`Failed to update personalization preference: ${error.message}`);
-    }
+  if (error || !data) {
+    throw new Error(`Failed to update preference: ${error?.message}`);
   }
 
   return CareerContextStateSchema.parse({
-    userId,
-    contextVersion: currentState.contextVersion,
-    personalizationEnabled: enabled,
-    updatedAt: now,
+    userId: data.user_id,
+    contextVersion: Number(data.context_version),
+    personalizationEnabled: Boolean(data.personalization_enabled),
+    updatedAt: data.updated_at,
   });
 }
 
 export async function getUserCareerContextItems(userId: string): Promise<CareerContextItem[]> {
-  if (!supabaseAdmin) return [];
+  if (!supabaseAdmin) {
+    return [];
+  }
 
   const { data, error } = await supabaseAdmin
     .from('career_context_items')
@@ -133,234 +111,102 @@ export async function getUserCareerContextItems(userId: string): Promise<CareerC
     .order('created_at', { ascending: false });
 
   if (error || !data) return [];
-
   return data.map(mapDbToItem);
-}
-
-export interface RebuildResult {
-  addedCount: number;
-  supersededCount: number;
-  unchangedCount: number;
 }
 
 export async function saveCareerContextItemDrafts(
   userId: string,
   drafts: CareerContextItemDraft[]
-): Promise<RebuildResult> {
-  if (!supabaseAdmin || drafts.length === 0) {
-    return { addedCount: 0, supersededCount: 0, unchangedCount: 0 };
+): Promise<{ addedCount: number; updatedCount: number; unchangedCount: number }> {
+  if (!supabaseAdmin) {
+    const err: any = new Error('Authoritative persistence unavailable');
+    err.status = 503;
+    throw err;
   }
 
+  const existingItems = await getUserCareerContextItems(userId);
   const now = new Date().toISOString();
   let addedCount = 0;
-  let supersededCount = 0;
+  let updatedCount = 0;
   let unchangedCount = 0;
 
-  // Load existing items for user
-  const existingItems = await getUserCareerContextItems(userId);
-  const rowsToInsert: any[] = [];
-
   for (const draft of drafts) {
-    // Exclude personal contact items
-    if (draft.sensitivity === 'personal_contact') continue;
+    const existing = existingItems.find(i => i.canonicalKey === draft.canonicalKey);
 
-    // Check if matching source identity already exists
-    const existing = existingItems.find(
-      i =>
-        i.source.module === draft.source.module &&
-        i.source.recordId === draft.source.recordId &&
-        i.source.fieldPath === draft.source.fieldPath &&
-        i.source.sourceRevision === draft.source.sourceRevision &&
-        i.source.sourceHash === draft.source.sourceHash
-    );
+    if (!existing) {
+      const newItem = {
+        id: crypto.randomUUID(),
+        user_id: userId,
+        item_kind: draft.kind,
+        canonical_key: draft.canonicalKey,
+        label: draft.label,
+        value: draft.value,
+        source_module: draft.source.module,
+        source_record_id: draft.source.recordId || null,
+        source_path: draft.source.fieldPath || null,
+        source_revision: draft.source.sourceRevision || 'v1',
+        source_hash: draft.source.sourceHash || 'h1',
+        exact_excerpt: draft.exactExcerpt || null,
+        provenance: draft.provenance,
+        item_status: draft.status || 'pending_confirmation',
+        sensitivity: draft.sensitivity,
+        created_at: now,
+        updated_at: now,
+      };
 
-    if (existing) {
+      await supabaseAdmin.from('career_context_items').insert(newItem);
+      addedCount++;
+    } else if (existing.source.sourceHash !== draft.source.sourceHash) {
+      await supabaseAdmin
+        .from('career_context_items')
+        .update({
+          label: draft.label,
+          value: draft.value,
+          source_revision: draft.source.sourceRevision,
+          source_hash: draft.source.sourceHash,
+          exact_excerpt: draft.exactExcerpt || null,
+          updated_at: now,
+        })
+        .eq('id', existing.id);
+      updatedCount++;
+    } else {
       unchangedCount++;
-      continue;
     }
-
-    // Check if user edited or revoked this canonical key previously
-    const editedOrRevoked = existingItems.find(
-      i => i.canonicalKey === draft.canonicalKey && (i.status === 'revoked' || i.provenance === 'user_edited')
-    );
-
-    if (editedOrRevoked) {
-      // Do not silently reactivate user-edited or revoked items
-      unchangedCount++;
-      continue;
-    }
-
-    const newItemId = crypto.randomUUID();
-    rowsToInsert.push({
-      id: newItemId,
-      user_id: userId,
-      item_kind: draft.kind,
-      canonical_key: draft.canonicalKey,
-      label: draft.label,
-      value: draft.value,
-      source_module: draft.source.module,
-      source_record_id: draft.source.recordId,
-      source_path: draft.source.fieldPath,
-      source_revision: draft.source.sourceRevision,
-      source_hash: draft.source.sourceHash,
-      exact_excerpt: draft.exactExcerpt || null,
-      provenance: draft.provenance,
-      item_status: draft.status,
-      sensitivity: draft.sensitivity,
-      user_confirmed_at: draft.provenance === 'user_confirmed' ? now : null,
-      superseded_by: null,
-      created_at: now,
-      updated_at: now,
-    });
-    addedCount++;
   }
 
-  if (rowsToInsert.length > 0) {
-    const { error } = await supabaseAdmin.from('career_context_items').insert(rowsToInsert);
-    if (error) {
-      throw new Error(`Failed to insert career context items: ${error.message}`);
-    }
-    await incrementContextVersion(userId);
-  }
-
-  return { addedCount, supersededCount, unchangedCount };
+  return { addedCount, updatedCount, unchangedCount };
 }
-
-export type DecisionType = 'confirm' | 'reject' | 'revoke' | 'dispute' | 'replace' | 'edit';
 
 export async function handleItemDecision(
   userId: string,
   itemId: string,
-  decision: DecisionType,
+  decision: 'confirm' | 'reject' | 'revoke' | 'dispute' | 'edit' | 'replace',
   newValue?: string,
   expectedContextVersion?: number
 ): Promise<CareerContextItem | null> {
-  if (!supabaseAdmin) return null;
-  const now = new Date().toISOString();
-
-  const currentState = await getCareerContextState(userId);
-  if (expectedContextVersion !== undefined && expectedContextVersion !== currentState.contextVersion) {
-    const err: any = new Error(`Stale or mismatched context version: expected ${expectedContextVersion}, current is ${currentState.contextVersion}`);
-    err.status = 409;
+  if (!supabaseAdmin) {
+    const err: any = new Error('Authoritative persistence unavailable');
+    err.status = 503;
     throw err;
   }
 
-  const { data: rawItem } = await supabaseAdmin
-    .from('career_context_items')
-    .select('*')
-    .eq('id', itemId)
-    .eq('user_id', userId)
-    .single();
+  const { data, error } = await supabaseAdmin.rpc('mutate_career_context_item', {
+    p_user_id: userId,
+    p_item_id: itemId,
+    p_decision: decision,
+    p_new_value: newValue || null,
+    p_expected_context_version: expectedContextVersion || null,
+  });
 
-  if (!rawItem) {
-    const err: any = new Error(`Career Context item '${itemId}' not found.`);
-    err.status = 404;
+  if (error) {
+    const err: any = new Error(error.message);
+    if (error.message.includes('not found')) err.status = 404;
+    else if (error.message.includes('Stale or mismatched context version')) err.status = 409;
+    else err.status = 400;
     throw err;
   }
 
-  let resultItem: any = null;
-
-  if (decision === 'confirm') {
-    const { data: updated, error } = await supabaseAdmin
-      .from('career_context_items')
-      .update({
-        item_status: 'active',
-        provenance: 'user_confirmed',
-        user_confirmed_at: now,
-        updated_at: now,
-      })
-      .eq('id', itemId)
-      .eq('user_id', userId)
-      .select('*')
-      .single();
-
-    if (error) throw new Error(`Failed to confirm item: ${error.message}`);
-    resultItem = updated;
-  } else if (decision === 'reject' || decision === 'revoke') {
-    const { data: updated, error } = await supabaseAdmin
-      .from('career_context_items')
-      .update({
-        item_status: 'revoked',
-        updated_at: now,
-      })
-      .eq('id', itemId)
-      .eq('user_id', userId)
-      .select('*')
-      .single();
-
-    if (error) throw new Error(`Failed to revoke item: ${error.message}`);
-    resultItem = updated;
-  } else if (decision === 'dispute') {
-    const { data: updated, error } = await supabaseAdmin
-      .from('career_context_items')
-      .update({
-        item_status: 'disputed',
-        updated_at: now,
-      })
-      .eq('id', itemId)
-      .eq('user_id', userId)
-      .select('*')
-      .single();
-
-    if (error) throw new Error(`Failed to dispute item: ${error.message}`);
-    resultItem = updated;
-  } else if ((decision === 'edit' || decision === 'replace') && newValue !== undefined) {
-    const newId = crypto.randomUUID();
-    const cleanValue = newValue.trim();
-    const sourceHash = crypto.createHash('sha256').update(cleanValue).digest('hex').substring(0, 16);
-    const newRev = `${rawItem.source_revision}_revised`;
-
-    // 1. Mark previous as superseded
-    const { error: superErr } = await supabaseAdmin
-      .from('career_context_items')
-      .update({
-        item_status: 'superseded',
-        superseded_by: newId,
-        updated_at: now,
-      })
-      .eq('id', itemId)
-      .eq('user_id', userId);
-
-    if (superErr) throw new Error(`Failed to supersede original item: ${superErr.message}`);
-
-    // 2. Insert new edited item with preserved value type
-    const newValueObj = rawItem.value?.type === 'string_list'
-      ? { type: 'string_list', values: [cleanValue] }
-      : { type: 'text', text: cleanValue };
-
-    const newItem = {
-      id: newId,
-      user_id: userId,
-      item_kind: rawItem.item_kind,
-      canonical_key: rawItem.canonical_key,
-      label: `${rawItem.label} (Edited)`,
-      value: newValueObj,
-      source_module: rawItem.source_module,
-      source_record_id: rawItem.source_record_id,
-      source_path: rawItem.source_path,
-      source_revision: newRev,
-      source_hash: sourceHash,
-      exact_excerpt: cleanValue,
-      provenance: 'user_edited',
-      item_status: 'active',
-      sensitivity: rawItem.sensitivity,
-      user_confirmed_at: now,
-      created_at: now,
-      updated_at: now,
-    };
-
-    const { data: inserted, error: insertErr } = await supabaseAdmin
-      .from('career_context_items')
-      .insert(newItem)
-      .select('*')
-      .single();
-
-    if (insertErr || !inserted) throw new Error(`Failed to insert edited item: ${insertErr?.message}`);
-    resultItem = inserted;
-  }
-
-  await incrementContextVersion(userId);
-
+  const resultItem = (data as any)?.item;
   return resultItem ? mapDbToItem(resultItem) : null;
 }
 

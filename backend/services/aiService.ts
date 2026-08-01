@@ -206,12 +206,15 @@ export const buildDeterministicInterviewPlan = (
   role: string,
   intentText: string,
   sessionControls: SessionControls,
-  selectedPanelIDs: string[] = ['p1', 'p3']
+  selectedPanelIDs: string[] = ['p1', 'p3'],
+  groundingSnapshot?: CareerContextSnapshot
 ): InterviewPlan => {
   const safePanelIDs = selectedPanelIDs.length ? selectedPanelIDs : ['p1', 'p3'];
   const total = Math.max(1, Math.min(sessionControls.totalQuestions || 5, 10));
   const candidateRole = role || intentText || 'Candidate';
   const isTechRole = /engineer|developer|software|coding|backend|frontend|fullstack|devops|data scientist|programmer/i.test(candidateRole);
+
+  const projItems = (groundingSnapshot?.projection as any)?.items || [];
 
   const bank = [
     {
@@ -246,6 +249,21 @@ export const buildDeterministicInterviewPlan = (
   const questionSet = Array.from({ length: total }, (_, i) => {
     const template = bank[i % bank.length];
     const personaFocus = safePanelIDs[i % safePanelIDs.length];
+
+    let groundingReferences: any[] | undefined = undefined;
+    if (projItems.length > 0) {
+      const item = projItems[i % projItems.length];
+      if (item) {
+        groundingReferences = [{
+          id: item.id,
+          label: item.label,
+          canonicalKey: item.canonicalKey,
+          exactExcerpt: item.exactExcerpt,
+          sourceModule: item.sourceModule,
+        }];
+      }
+    }
+
     return {
       id: createDeterministicQuestionId(candidateRole, sessionControls.reasoningMode || 'classic_behavioral', template.question, i + 1),
       phase: template.phase,
@@ -253,6 +271,7 @@ export const buildDeterministicInterviewPlan = (
       question: template.question,
       expectedSignals: template.expectedSignals,
       personaFocus,
+      groundingReferences,
     };
   });
 
@@ -755,6 +774,17 @@ REQUIRED OUTPUT SCHEMA (JSON):
     quickWins,
     prioritizedActions,
     challengeRecoveryTimeline: challengeRecoveryTimeline.length > 0 ? challengeRecoveryTimeline : undefined,
+    contextAudit: (context?.groundingSnapshot?.id || (context as any)?.groundingSnapshotId) ? {
+      snapshotId: context.groundingSnapshot?.id || (context as any).groundingSnapshotId,
+      bridgeId: context.bridgeSessionId || undefined,
+      purpose: context.groundingSnapshot?.purpose || (context as any).purpose || 'resume_to_interview',
+      sourceModules: context.groundingSnapshot?.sourceModules || (context as any).sourceModules || ['resume'],
+      groundedQuestions: (history || []).map((t: any, idx: number) => ({
+        questionId: t.id || `q_${idx}`,
+        questionText: t.question || '',
+        groundingReferences: t.questionBlueprint?.groundingReferences || (context?.interviewPlan?.questionSet?.[idx]?.groundingReferences) || [],
+      })).filter((g: any) => g.groundingReferences && g.groundingReferences.length > 0),
+    } : undefined,
   };
 
   return FinalReportSchema.parse(normalizedReport);

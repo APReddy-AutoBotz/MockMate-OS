@@ -3,6 +3,7 @@ import React, { memo, useCallback, useState } from 'react';
 import { FinalReport, QuestionPerformance, AdvisoryPanel, DimensionScore, ChallengeRecoveryRecord } from "mockmate-shared";
 import { generatePdf } from '../services/pdfGenerator';
 import { motion } from 'framer-motion';
+import { Shield } from 'lucide-react';
 import { PERSONAS_CONFIG } from '../personas.config';
 import PilotFeedbackCard from './PilotFeedbackCard';
 
@@ -342,6 +343,56 @@ export const InterviewReport: React.FC<InterviewReportProps> = ({ report, onRest
               <QuestionCard key={i} q={q} index={i} />
             ))}
           </div>
+        </section>
+      )}
+
+      {report.contextAudit && (
+        <section className="space-y-6 bg-white/[0.02] p-6 md:p-8 border border-white/[0.06] rounded-2xl shadow-xl">
+          <div className="flex items-center justify-between border-b border-white/10 pb-4">
+            <div>
+              <span className="text-[9px] font-bold text-brand-primary uppercase tracking-[0.2em] flex items-center gap-1.5">
+                <Shield className="w-3.5 h-3.5" /> User-Owned Grounding Audit
+              </span>
+              <h3 className="text-lg md:text-xl font-semibold text-white mt-1">Context used for this practice</h3>
+            </div>
+            <span className="text-[10px] font-mono px-3 py-1 rounded bg-white/5 text-white/60 border border-white/10 uppercase">
+              {report.contextAudit.purpose.replace(/_/g, ' ')}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-white/70">
+            <div className="bg-black/20 p-3.5 rounded-xl border border-white/5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-white/40 block mb-1">Source Modules</span>
+              <span className="font-mono text-white/90 font-medium">{report.contextAudit.sourceModules.join(', ')}</span>
+            </div>
+            <div className="bg-black/20 p-3.5 rounded-xl border border-white/5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-white/40 block mb-1">Grounded Practice Questions</span>
+              <span className="font-mono text-white/90 font-medium">{report.contextAudit.groundedQuestions.length} Questions Grounded</span>
+            </div>
+          </div>
+
+          {report.contextAudit.groundedQuestions.length > 0 && (
+            <div className="space-y-3 pt-2">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-white/40 block">
+                Verified Facts Grounded into Question Blueprints
+              </span>
+              <div className="space-y-2.5">
+                {report.contextAudit.groundedQuestions.map((gq, idx) => (
+                  <div key={idx} className="bg-black/30 p-4 rounded-xl border border-white/5 space-y-2">
+                    <p className="text-xs font-medium text-white/90">Q: {gq.questionText}</p>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {gq.groundingReferences.map((ref, rIdx) => (
+                        <span key={rIdx} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-brand-primary/10 border border-brand-primary/30 text-[10px] text-brand-primary font-mono">
+                          <span className="font-semibold">{ref.label}</span>
+                          {ref.exactExcerpt && <span className="text-white/60 italic">("{ref.exactExcerpt}")</span>}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       )}
 

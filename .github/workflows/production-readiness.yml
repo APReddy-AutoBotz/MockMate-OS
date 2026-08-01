@@ -88,6 +88,9 @@ jobs:
       - name: 11e. Adaptive Browser UI Journey
         run: npm run test:adaptive-ui-journey
 
+      - name: 11g0. Architectural rejection assertions
+        run: npm run test:rejection-checks
+
       - name: 11g1. Career Context API integration journey
         run: npm run test:career-context-api-journey
 
@@ -100,7 +103,10 @@ jobs:
       - name: 11g4. Resume to ClearSpeak grounding journey
         run: npm run test:resume-clearspeak-journey
 
-      - name: 11g5. Career Context overall grounding suite
+      - name: 11g5. Career Context account deletion CI journey
+        run: npm run test:career-context-account-deletion
+
+      - name: 11g6. Career Context overall grounding suite
         run: npm run test:career-context-journeys
 
       - name: 12. Backend tests

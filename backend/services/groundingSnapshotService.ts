@@ -21,9 +21,13 @@ export interface CreateSnapshotInput {
   clientRequestId?: string;
 }
 
-const inMemorySnapshots = new Map<string, CareerContextSnapshot>();
-
 export async function createGroundingSnapshot(input: CreateSnapshotInput): Promise<CareerContextSnapshot> {
+  if (!supabaseAdmin) {
+    const err: any = new Error('Authoritative persistence unavailable');
+    err.status = 503;
+    throw err;
+  }
+
   const {
     userId,
     purpose,
@@ -40,16 +44,15 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
   // 1. Load active state version for user
   let contextVersion = 1;
   let personalizationEnabled = false;
-  if (supabaseAdmin) {
-    const { data: stateData } = await supabaseAdmin
-      .from('career_context_state')
-      .select('context_version, personalization_enabled')
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (stateData) {
-      contextVersion = Number(stateData.context_version);
-      personalizationEnabled = Boolean(stateData.personalization_enabled);
-    }
+  const { data: stateData } = await supabaseAdmin
+    .from('career_context_state')
+    .select('context_version, personalization_enabled')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (stateData) {
+    contextVersion = Number(stateData.context_version);
+    personalizationEnabled = Boolean(stateData.personalization_enabled);
   }
 
   if (expectedContextVersion !== undefined && expectedContextVersion !== contextVersion) {
@@ -74,28 +77,9 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
   });
   const requestHash = crypto.createHash('sha256').update(rawHashPayload).digest('hex');
 
-  // Idempotency replay check
-  if (supabaseAdmin && clientRequestId) {
-    const { data: existing } = await supabaseAdmin
-      .from('career_context_snapshots')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('client_request_id', clientRequestId)
-      .maybeSingle();
-
-    if (existing) {
-      if (existing.request_hash === requestHash) {
-        return getSnapshotFromDbRow(existing);
-      }
-      const err: any = new Error(`Idempotency conflict: client_request_id '${clientRequestId}' already used with different payload.`);
-      err.status = 409;
-      throw err;
-    }
-  }
-
   // 3. Load specified items (verifying ownership, active status, and sensitivity)
   let items: CareerContextItem[] = [];
-  if (supabaseAdmin && includedItemIds.length > 0) {
+  if (includedItemIds.length > 0) {
     const { data: rawItems, error } = await supabaseAdmin
       .from('career_context_items')
       .select('*')
@@ -107,7 +91,6 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
     }
 
     if (rawItems) {
-      // Reject if any requested item is missing, cross-user, or non-active
       if (rawItems.length !== includedItemIds.length) {
         const err: any = new Error('One or more requested career context items were missing or not owned by user.');
         err.status = 422;
@@ -147,79 +130,51 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
     throw err;
   }
 
-  const snapshotId = crypto.randomUUID();
-  const snapshotPayload = {
-    id: snapshotId,
-    userId,
+  const consent = {
+    scope,
     purpose,
-    contextVersion,
-    itemIds: items.map(i => i.id),
-    projection,
-    conflicts,
-    consent: {
-      scope,
-      purpose,
-      includedItemIds: items.map(i => i.id),
-      excludedItemIds,
-      sourceModules,
-      acknowledgedAt,
-    },
-    createdAt: acknowledgedAt,
+    includedItemIds: items.map(i => i.id),
+    excludedItemIds,
     sourceModules,
+    acknowledgedAt,
   };
 
-  const snapshot = CareerContextSnapshotSchema.parse(snapshotPayload);
+  // 5. Invoke transactional RPC create_grounding_snapshot_tx
+  const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('create_grounding_snapshot_tx', {
+    p_user_id: userId,
+    p_purpose: purpose,
+    p_projection: projection,
+    p_conflicts: conflicts,
+    p_consent: consent,
+    p_source_modules: sourceModules,
+    p_item_ids: items.map(i => i.id),
+    p_client_request_id: clientRequestId,
+    p_request_hash: requestHash,
+  });
 
-  // 5. Transactional insert if Supabase available
-  if (supabaseAdmin) {
-    const { error: snapErr } = await supabaseAdmin
-      .from('career_context_snapshots')
-      .insert({
-        id: snapshot.id,
-        user_id: userId,
-        purpose: snapshot.purpose,
-        context_version: snapshot.contextVersion,
-        projection: snapshot.projection,
-        conflicts: snapshot.conflicts,
-        consent: snapshot.consent,
-        source_modules: snapshot.sourceModules,
-        client_request_id: clientRequestId,
-        request_hash: requestHash,
-        created_at: snapshot.createdAt,
-      });
-
-    if (snapErr) {
-      throw new Error(`Failed to persist grounding snapshot: ${snapErr.message}`);
-    }
-
-    if (items.length > 0) {
-      const itemRows = items.map((item, idx) => ({
-        snapshot_id: snapshot.id,
-        item_id: item.id,
-        position: idx,
-      }));
-
-      const { error: itemsErr } = await supabaseAdmin
-        .from('career_context_snapshot_items')
-        .insert(itemRows);
-
-      if (itemsErr) {
-        throw new Error(`Failed to persist grounding snapshot items: ${itemsErr.message}`);
-      }
-    }
-    inMemorySnapshots.set(snapshot.id, snapshot);
-  } else {
-    inMemorySnapshots.set(snapshot.id, snapshot);
+  if (rpcErr) {
+    const err: any = new Error(rpcErr.message);
+    if (rpcErr.message.includes('unique_user_snapshot_client_req')) err.status = 409;
+    else err.status = 400;
+    throw err;
   }
 
-  return snapshot;
+  const createdSnapshotId = (rpcRes as any)?.snapshotId;
+  if (!createdSnapshotId) {
+    throw new Error('RPC create_grounding_snapshot_tx failed to return snapshotId');
+  }
+
+  const created = await getSnapshotById(userId, createdSnapshotId);
+  if (!created) {
+    throw new Error(`Failed to load created snapshot ${createdSnapshotId}`);
+  }
+
+  return created;
 }
 
 export async function getSnapshotById(userId: string, snapshotId: string): Promise<CareerContextSnapshot | null> {
   if (!supabaseAdmin) {
-    const mock = inMemorySnapshots.get(snapshotId);
-    if (!mock || mock.userId !== userId) return null;
-    return mock;
+    return null;
   }
 
   const { data, error } = await supabaseAdmin
