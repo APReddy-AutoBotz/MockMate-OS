@@ -133,6 +133,8 @@ function createAuthoritativePersistenceDouble() {
       if (name === 'create_module_bridge_tx') {
         const snapshot = tables.career_context_snapshots.find(row => row.id === args.p_snapshot_id && row.user_id === args.p_user_id);
         if (!snapshot || snapshot.purpose !== args.p_purpose) return { data: null, error: { message: 'Bridge snapshot ownership mismatch' } };
+        const existing = tables.career_context_bridges.find(row => row.user_id === args.p_user_id && row.client_request_id === args.p_client_request_id);
+        if (existing) return { data: { bridgeId: existing.id, status: existing.status, replayed: true }, error: null };
         const bridgeId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
         tables.career_context_bridges.push({
           id: bridgeId, user_id: args.p_user_id, source_module: args.p_source_module,
@@ -283,6 +285,15 @@ try {
   }
   const bridgeBody = await resBridge.json();
   const bridgeId = bridgeBody.bridge.id;
+  const bridgeReplay = await fetch(`${baseUrl}/api/career-context/bridges`, {
+    method: 'POST', headers: headersUserA, body: JSON.stringify({
+      sourceModule: 'resume', targetModule: 'interview', purpose: 'resume_to_interview', snapshotId, clientRequestId: bridgeReqId,
+    }),
+  });
+  const bridgeReplayBody = await bridgeReplay.json();
+  if (bridgeReplay.status !== 200 || bridgeReplayBody.bridge.id !== bridgeId || authoritative.tables.career_context_bridges.length !== 1) {
+    throw new Error('Exact bridge-create response-loss replay did not reuse one canonical bridge row');
+  }
 
   // 7. Cross-user isolation rejects User B before any bridge mutation.
   const resConsumeB = await fetch(`${baseUrl}/api/career-context/bridges/${bridgeId}/consume`, {
@@ -314,10 +325,19 @@ try {
   } }) });
   if (tampered.status !== 422 || authoritative.tables.interview_sessions.length !== 0 || authoritative.tables.career_context_bridges[0].status !== 'confirmed') throw new Error('Tampered plan reached session creation or consumed bridge');
 
+  const effectsBeforeMissingBridge = authoritative.tables.interview_sessions.length;
+  const missingBridge = await fetch(`${baseUrl}/api/interview/sessions`, { method: 'POST', headers: headersUserA, body: JSON.stringify({ context: {
+    candidateRole: 'Fabricated Role', intentText: 'Practice grounded examples', selectedPanelIDs: ['p1'], sessionType: 'structured', controls,
+    interviewPlan: authoritativePlan, groundingSnapshot: snapBody.snapshot,
+  } }) });
+  if (missingBridge.status !== 422 || authoritative.tables.interview_sessions.length !== effectsBeforeMissingBridge || authoritative.tables.career_context_bridges[0].status !== 'confirmed') {
+    throw new Error('Grounding selectors without a bridge caused session or bridge effects');
+  }
+
   const resSession = await fetch(`${baseUrl}/api/interview/sessions`, {
     method: 'POST', headers: headersUserA, body: JSON.stringify({
       context: {
-        candidateRole: 'Backend Engineer', intentText: 'Practice grounded examples',
+        candidateRole: 'Browser Tampered Role', intentText: 'Practice grounded examples',
         selectedPanelIDs: ['p1'], sessionType: 'structured', controls,
         interviewPlan: authoritativePlan,
         groundingSnapshot: snapBody.snapshot,
@@ -330,6 +350,9 @@ try {
   }
   const session = await resSession.json();
   const persistedSession = authoritative.tables.interview_sessions.find(row => row.id === session.sessionId);
+  if (persistedSession?.role !== authoritativePlan.jdInsights.role || persistedSession?.setup?.candidateRole !== authoritativePlan.jdInsights.role) {
+    throw new Error('Browser role tampering altered the grounded session/report role authority');
+  }
   const persistedRef = persistedSession?.setup?.interviewPlan?.questionSet?.[0]?.groundingReferences?.[0];
   if (persistedRef?.contextItemId !== ITEM_ID || persistedRef?.exactExcerpt !== 'Built production TypeScript services') {
     throw new Error('Session did not persist authoritative snapshot grounding-reference lineage');

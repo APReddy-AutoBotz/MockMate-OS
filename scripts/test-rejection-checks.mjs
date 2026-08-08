@@ -72,4 +72,11 @@ assertMatch(/bind_interview_plan_session_tx/g, 'backend/services/interviewPlanSe
 assertMatch(/INSERT INTO public\.career_context_items[\s\S]*pending_confirmation/g, 'supabase/migrations/20260808010000_p0_3_plan_and_item_lineage_corrections.sql', 'immutable successor item creation');
 assertMatch(/career_context_snapshot_items/g, 'backend/services/groundingSnapshotService.ts', 'persisted snapshot membership lineage');
 
+
+assertMatch(/v_existing_found:=FOUND/, 'supabase/migrations/20260808040000_p0_3_grounded_session_replay_authority.sql', 'bridge replay FOUND capture');
+assertMatch(/usageCharged',false/, 'supabase/migrations/20260808040000_p0_3_grounded_session_replay_authority.sql', 'zero-charge canonical grounded replay');
+assertMatch(/item_status='superseded'/, 'supabase/migrations/20260808040000_p0_3_grounded_session_replay_authority.sql', 'atomic predecessor supersession');
+assertMatch(/Grounding snapshots and authoritative plan selectors require a valid bridgeSessionId/, 'backend/routes/interviewRoutes.ts', 'grounded bridge requirement');
+assertMatch(/candidateRole: authoritativePlan\.plan\.jdInsights\.role/, 'backend/routes/interviewRoutes.ts', 'authoritative grounded role');
+
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

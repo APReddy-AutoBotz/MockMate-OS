@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { verifyAuthToken } from '../middleware/authMiddleware';
-import { enforceUsageLimit } from '../services/usageService';
+import { consumeUsage, enforceUsageLimit } from '../services/usageService';
 import * as aiService from '../services/aiService';
 import * as sessionService from '../services/sessionService';
 import { bindAuthoritativePlan, getAuthoritativePlan, getAuthoritativePlanForBridge, hashInterviewPlan, persistAuthoritativePlan } from '../services/interviewPlanService';
@@ -110,7 +110,7 @@ router.post('/plan', enforceUsageLimit('interview_question'), async (req: any, r
 // SESSIONS
 // ==========================================
 
-router.post('/sessions', enforceUsageLimit('interview_question'), async (req: any, res) => {
+router.post('/sessions', async (req: any, res) => {
   try {
     const userId = req.user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -121,6 +121,11 @@ router.post('/sessions', enforceUsageLimit('interview_question'), async (req: an
     }
 
     const bridgeSessionId = parsed.data.context?.bridgeSessionId;
+    const groundingSnapshot = parsed.data.context?.groundingSnapshot;
+    const planAuthority = parsed.data.context?.interviewPlan.authority;
+    if (!bridgeSessionId && (groundingSnapshot || planAuthority)) {
+      return res.status(422).json({ error: 'Grounding snapshots and authoritative plan selectors require a valid bridgeSessionId.' });
+    }
     let authoritativeContext = parsed.data.context;
     let authoritativePlan: Awaited<ReturnType<typeof getAuthoritativePlan>> = null;
 
@@ -158,6 +163,7 @@ router.post('/sessions', enforceUsageLimit('interview_question'), async (req: an
         ...authoritativeContext,
         groundingSnapshot: snapshot,
         bridgeSessionId: bridge.id,
+        candidateRole: authoritativePlan.plan.jdInsights.role,
         controls: authoritativePlan.plan.meta.controls,
         jdInsights: authoritativePlan.plan.jdInsights,
         interviewPlan: {
@@ -165,6 +171,14 @@ router.post('/sessions', enforceUsageLimit('interview_question'), async (req: an
           authority: selector,
         },
       };
+    }
+
+    // Ungrounded sessions retain their explicit contract and ordinary usage charge.
+    // Grounded usage is charged atomically by bind_interview_plan_session_tx, after
+    // canonical replay detection, so response-loss recovery never spends twice.
+    if (!bridgeSessionId) {
+      const usage = await consumeUsage(userId, 'interview_question');
+      if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached', feature: 'interview_question', used: usage.used, limit: usage.limit });
     }
 
     // 1. Create real Interview session first
@@ -188,7 +202,7 @@ router.post('/sessions', enforceUsageLimit('interview_question'), async (req: an
           console.error('[Interview] Orphan session cleanup failed:', cleanupErr.message);
           return res.status(503).json({ error: `Grounding bridge consumption failed and session cleanup could not be verified: ${cleanupErr.message}` });
         }
-        const status = bridgeErr.status || 409;
+        const status = bridgeErr.message?.includes('daily_limit_reached') ? 429 : (bridgeErr.status || 409);
         return res.status(status).json({
           error: `Grounding bridge consumption failed: ${bridgeErr.message}. Practice session cancelled.`
         });

@@ -681,6 +681,38 @@ async function runRuntimeVerification() {
     passedCount++;
     console.log('  ✓ Assertion 40. preference_version_conflict_is_transactional passed');
 
+    // Additional adversarial state-machine evidence: nullable bridge replay,
+    // successor authority transfer, and final-quota canonical session replay.
+    await setRole(client, 'service_role');
+    const replayBridgeRequest = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${snapA}','resA','bridge-response-loss','bridge-response-loss-hash') AS result;`);
+    const replayBridgeAgain = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${snapA}','resA','bridge-response-loss','bridge-response-loss-hash') AS result;`);
+    const replayBridgeId = replayBridgeRequest.rows[0].result.bridgeId;
+    const replayBridgeRows = await client.query(`SELECT count(*) FROM public.career_context_bridges WHERE user_id='${userA}' AND client_request_id='bridge-response-loss';`);
+    if (!replayBridgeAgain.rows[0].result.replayed || replayBridgeAgain.rows[0].result.bridgeId !== replayBridgeId || Number(replayBridgeRows.rows[0].count) !== 1) throw new Error('Nullable bridge exact replay did not reuse one row');
+
+    const successor = await client.query(`SELECT id FROM public.career_context_items WHERE user_id='${userA}' AND source_record_id='resume-a' AND source_hash='changed-a';`);
+    const versionBeforeConfirmation = await client.query(`SELECT context_version FROM public.career_context_state WHERE user_id='${userA}';`);
+    await client.query(`SELECT public.mutate_career_context_item('${userA}','${successor.rows[0].id}','confirm',NULL,${Number(versionBeforeConfirmation.rows[0].context_version)});`);
+    const confirmationReplay = await client.query(`SELECT public.mutate_career_context_item('${userA}','${successor.rows[0].id}','confirm',NULL,${Number(versionBeforeConfirmation.rows[0].context_version)});`);
+    const lineageAuthority = await client.query(`SELECT source_hash,item_status FROM public.career_context_items WHERE id IN ('${originalAId}','${successor.rows[0].id}') ORDER BY source_hash;`);
+    const historicalMembership = await client.query(`SELECT count(*) FROM public.career_context_snapshot_items WHERE snapshot_id='${lineageSnapshot}' AND item_id='${originalAId}';`);
+    if (!confirmationReplay.rows[0].mutate_career_context_item.replayed || lineageAuthority.rows.find(r=>r.source_hash==='same-a')?.item_status !== 'superseded' || lineageAuthority.rows.find(r=>r.source_hash==='changed-a')?.item_status !== 'active' || Number(historicalMembership.rows[0].count)!==1) throw new Error('Successor confirmation did not transfer exact lineage authority idempotently');
+
+    const groundedSession = '12121212-1212-4212-8212-121212121212';
+    const groundedPlan = '13131313-1313-4313-8313-131313131313';
+    const groundedHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    await client.query(`
+      INSERT INTO public.interview_sessions(id,user_id,role,setup,status) VALUES('${groundedSession}','${userA}','Authoritative Role',jsonb_build_object('interviewPlan',jsonb_build_object('authority',jsonb_build_object('planId','${groundedPlan}','planHash','${groundedHash}'))),'active');
+      INSERT INTO public.interview_generated_plans(id,user_id,snapshot_id,bridge_id,plan_hash,plan_payload) VALUES('${groundedPlan}','${userA}','${snapA}','${replayBridgeId}','${groundedHash}','{"meta":{"intent":"test","controls":{"difficulty":"intermediate","totalQuestions":1,"includeBehavioral":true,"includeCoding":false,"timePerQuestion":"90s","deliveryMode":"exam","reasoningMode":"classic_behavioral","sourceMode":"job_description"}},"jdInsights":{"role":"Authoritative Role"},"questionSet":[{"id":"q","phase":"scenario","difficulty":"intermediate","question":"q","expectedSignals":[],"personaFocus":"p1"}]}'::jsonb);
+      INSERT INTO public.usage_ledger(user_id,usage_date,feature,used,limit_value) VALUES('${userA}',current_date,'interview_question',19,20) ON CONFLICT(user_id,usage_date,feature) DO UPDATE SET used=19,limit_value=20;
+    `);
+    const firstBind = await client.query(`SELECT public.bind_interview_plan_session_tx('${userA}','${groundedPlan}','${groundedHash}','${replayBridgeId}','${groundedSession}') AS result;`);
+    const lostResponseReplay = await client.query(`SELECT public.bind_interview_plan_session_tx('${userA}','${groundedPlan}','${groundedHash}','${replayBridgeId}','${groundedSession}') AS result;`);
+    const usageAfterReplay = await client.query(`SELECT used FROM public.usage_ledger WHERE user_id='${userA}' AND usage_date=current_date AND feature='interview_question';`);
+    const boundBridge = await client.query(`SELECT status,target_session_id FROM public.career_context_bridges WHERE id='${replayBridgeId}';`);
+    if (firstBind.rows[0].result.replayed || !lostResponseReplay.rows[0].result.replayed || lostResponseReplay.rows[0].result.usageCharged || Number(usageAfterReplay.rows[0].used)!==20 || boundBridge.rows[0].status!=='consumed' || boundBridge.rows[0].target_session_id!==groundedSession) throw new Error('Final-quota response-loss replay changed usage, bridge, or canonical session');
+    await resetRole(client);
+
     // 41. protected_account_deletion
     await setRole(client, 'service_role');
     await client.query(`SELECT public.delete_user_career_context('${userA}'::uuid);`);
