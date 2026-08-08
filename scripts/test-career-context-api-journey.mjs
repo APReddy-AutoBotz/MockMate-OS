@@ -43,9 +43,12 @@ function createAuthoritativePersistenceDouble() {
     career_context_snapshots: [],
     career_context_snapshot_items: [],
     career_context_bridges: [],
-    interview_sessions: [],
+    interview_sessions: [], interview_turns: [],
+    interview_generated_plans: [],
+    resume_reviews: [], clearspeak_profiles: [], clearspeak_sessions: [],
   };
   const calls = [];
+  const sourceErrors = {};
 
   class Query {
     constructor(table) { this.table = table; this.filters = []; this.operation = 'select'; this.payload = null; }
@@ -57,10 +60,12 @@ function createAuthoritativePersistenceDouble() {
     upsert(payload) { this.operation = 'upsert'; this.payload = payload; return this; }
     rows() { return (tables[this.table] || []).filter(row => this.filters.every(filter => filter(row))); }
     async execute(single = false, maybe = false) {
+      if (sourceErrors[this.table]) return { data: null, error: { message: sourceErrors[this.table] } };
       let writtenRows = null;
       if (this.operation === 'insert' || this.operation === 'upsert') {
         const rows = (Array.isArray(this.payload) ? this.payload : [this.payload]).map(row => ({
           ...(this.table === 'interview_sessions' && !row.id ? { id: '77777777-7777-4777-8777-777777777777' } : {}),
+          ...(this.table === 'interview_generated_plans' && !row.id ? { id: '66666666-6666-4666-8666-666666666666', plan_version: 1 } : {}),
           ...row,
         }));
         for (const row of rows) {
@@ -92,6 +97,11 @@ function createAuthoritativePersistenceDouble() {
     },
     async rpc(name, args) {
       calls.push({ name, args });
+      if (name === 'rebuild_career_context_tx') {
+        const state = tables.career_context_state.find(row => row.user_id === args.p_user_id);
+        state.context_version += 1; state.updated_at = now;
+        return { data: { addedCount: args.p_drafts.length, updatedCount: 0, unchangedCount: 0 }, error: null };
+      }
       if (name === 'create_grounding_snapshot_tx') {
         const state = tables.career_context_state.find(row => row.user_id === args.p_user_id);
         if (!state || state.context_version !== args.p_expected_context_version) return { data: null, error: { message: 'Stale or mismatched context version' } };
@@ -122,6 +132,17 @@ function createAuthoritativePersistenceDouble() {
         });
         return { data: { bridgeId }, error: null };
       }
+      if (name === 'bind_interview_plan_session_tx') {
+        const plan = tables.interview_generated_plans.find(row => row.id === args.p_plan_id && row.user_id === args.p_user_id);
+        const bridge = tables.career_context_bridges.find(row => row.id === args.p_bridge_id && row.user_id === args.p_user_id);
+        const session = tables.interview_sessions.find(row => row.id === args.p_session_id && row.user_id === args.p_user_id);
+        if (!plan || !bridge || !session || plan.plan_hash !== args.p_plan_hash || plan.bridge_id !== bridge.id || plan.snapshot_id !== bridge.snapshot_id) return { data: null, error: { message: 'Plan lineage mismatch' } };
+        if (plan.session_id) return plan.session_id === session.id ? { data: { sessionId: session.id, replayed: true }, error: null } : { data: null, error: { message: 'Plan already consumed' } };
+        if (bridge.status !== 'confirmed') return { data: null, error: { message: 'Bridge already consumed' } };
+        Object.assign(plan, { session_id: session.id, consumed_at: now });
+        Object.assign(bridge, { status: 'consumed', target_session_id: session.id, consumed_at: now, updated_at: now });
+        return { data: { sessionId: session.id, replayed: false }, error: null };
+      }
       if (name === 'consume_module_bridge_tx') {
         const bridge = tables.career_context_bridges.find(row => row.id === args.p_bridge_id);
         if (!bridge) return { data: null, error: { message: 'Bridge not found' } };
@@ -135,7 +156,7 @@ function createAuthoritativePersistenceDouble() {
       return { data: null, error: { message: `Unexpected authoritative RPC: ${name}` } };
     },
   };
-  return { client, calls, tables };
+  return { client, calls, tables, sourceErrors };
 }
 
 try {
@@ -156,7 +177,23 @@ try {
   const authoritative = createAuthoritativePersistenceDouble();
   installSupabaseAdminForTest(authoritative.client);
 
-  // 3. GET /api/career-context for User A -> governed state and active item.
+  // 3. Every authoritative rebuild source fails closed before the rebuild mutation.
+  for (const sourceTable of ['resume_reviews', 'clearspeak_profiles', 'clearspeak_sessions', 'interview_sessions']) {
+    authoritative.sourceErrors[sourceTable] = `${sourceTable} unavailable`;
+    const callsBefore = authoritative.calls.filter(call => call.name === 'rebuild_career_context_tx').length;
+    const versionBefore = authoritative.tables.career_context_state[0].context_version;
+    const failedRebuild = await fetch(`${baseUrl}/api/career-context/rebuild`, { method: 'POST', headers: headersUserA });
+    if (failedRebuild.status !== 503 || authoritative.calls.filter(call => call.name === 'rebuild_career_context_tx').length !== callsBefore || authoritative.tables.career_context_state[0].context_version !== versionBefore) {
+      throw new Error(`${sourceTable} failure did not abort rebuild with zero writes/version delta`);
+    }
+    delete authoritative.sourceErrors[sourceTable];
+  }
+  const successfulRebuild = await fetch(`${baseUrl}/api/career-context/rebuild`, { method: 'POST', headers: headersUserA });
+  if (successfulRebuild.status !== 200 || authoritative.calls.filter(call => call.name === 'rebuild_career_context_tx').length !== 1) {
+    throw new Error('All-source-success rebuild did not use exactly one authoritative atomic mutation');
+  }
+
+  // 4. GET /api/career-context for User A -> governed state and active item.
   const resGetA = await fetch(`${baseUrl}/api/career-context`, { headers: headersUserA });
   if (resGetA.status !== 200) {
     throw new Error(`Expected 200 for GET /api/career-context, got ${resGetA.status}`);
@@ -166,7 +203,7 @@ try {
     throw new Error('GET /api/career-context response missing success or state');
   }
 
-  if (getBodyA.state.contextVersion !== 7 || getBodyA.activeItems[0]?.id !== ITEM_ID) {
+  if (getBodyA.state.contextVersion !== 8 || getBodyA.activeItems[0]?.id !== ITEM_ID) {
     throw new Error('GET did not return authoritative versioned Career Context state');
   }
 
@@ -178,7 +215,7 @@ try {
   });
   if (resPref.status !== 200) throw new Error(`Expected 200 for authoritative preference update, got ${resPref.status}`);
   const prefBody = await resPref.json();
-  if (prefBody.state.contextVersion !== 8) throw new Error('Preference update did not advance context version');
+  if (prefBody.state.contextVersion !== 9) throw new Error('Preference update did not advance context version');
 
   // 5. Create a transactionally validated consent snapshot at the new version.
   const clientReqId = '33333333-3333-3333-3333-333333333333';
@@ -211,7 +248,7 @@ try {
   const snapBody = await resSnap.json();
   const snapshotId = snapBody.snapshot.id;
   const reference = snapBody.snapshot.groundingReferences?.[0];
-  if (snapBody.snapshot.contextVersion !== 8 || snapBody.snapshot.consent.includedItemIds[0] !== ITEM_ID ||
+  if (snapBody.snapshot.contextVersion !== 9 || snapBody.snapshot.consent.includedItemIds[0] !== ITEM_ID ||
       reference?.contextItemId !== ITEM_ID || reference?.exactExcerpt !== 'Built production TypeScript services') {
     throw new Error('Snapshot did not preserve authoritative version, consent, and grounding-reference lineage');
   }
@@ -253,20 +290,25 @@ try {
     includeCoding: false, timePerQuestion: '90s', deliveryMode: 'exam',
     reasoningMode: 'classic_behavioral', sourceMode: 'job_description',
   };
-  const browserQuestion = {
-    id: 'q1', phase: 'scenario', difficulty: 'intermediate',
-    question: 'Describe a production service you built.', expectedSignals: ['service ownership'],
-    personaFocus: 'p1',
-  };
+  const planResponse = await fetch(`${baseUrl}/api/interview/plan`, { method: 'POST', headers: headersUserA, body: JSON.stringify({
+    role: 'Backend Engineer', intent: 'Practice grounded examples', controls, selectedPanelIDs: ['p1'], snapshotId, bridgeId,
+  }) });
+  if (planResponse.status !== 200) throw new Error(`Expected authoritative plan, got ${planResponse.status}: ${await planResponse.text()}`);
+  const authoritativePlan = await planResponse.json();
+  const tamperedPlan = structuredClone(authoritativePlan);
+  tamperedPlan.questionSet[0].question = 'Browser fabricated question';
+  const tampered = await fetch(`${baseUrl}/api/interview/sessions`, { method: 'POST', headers: headersUserA, body: JSON.stringify({ context: {
+    candidateRole: 'Backend Engineer', intentText: 'Practice grounded examples', selectedPanelIDs: ['p1'], sessionType: 'structured', controls,
+    interviewPlan: tamperedPlan, groundingSnapshot: snapBody.snapshot, bridgeSessionId: bridgeId,
+  } }) });
+  if (tampered.status !== 422 || authoritative.tables.interview_sessions.length !== 0 || authoritative.tables.career_context_bridges[0].status !== 'confirmed') throw new Error('Tampered plan reached session creation or consumed bridge');
+
   const resSession = await fetch(`${baseUrl}/api/interview/sessions`, {
     method: 'POST', headers: headersUserA, body: JSON.stringify({
       context: {
         candidateRole: 'Backend Engineer', intentText: 'Practice grounded examples',
         selectedPanelIDs: ['p1'], sessionType: 'structured', controls,
-        interviewPlan: {
-          meta: { intent: 'Practice grounded examples', controls },
-          jdInsights: { role: 'Backend Engineer' }, questionSet: [browserQuestion],
-        },
+        interviewPlan: authoritativePlan,
         groundingSnapshot: snapBody.snapshot,
         bridgeSessionId: bridgeId,
       },
@@ -286,7 +328,17 @@ try {
     throw new Error('Grounded session did not atomically bind the consumed bridge to its real session ID');
   }
 
-  // 9. Response-loss replay cannot consume again or overwrite target_session_id.
+  // 9. Exact response-loss replay returns the one canonical session without another write or bridge consumption.
+  const exactReplay = await fetch(`${baseUrl}/api/interview/sessions`, { method: 'POST', headers: headersUserA, body: JSON.stringify({ context: {
+    candidateRole: 'Backend Engineer', intentText: 'Practice grounded examples', selectedPanelIDs: ['p1'], sessionType: 'structured', controls,
+    interviewPlan: authoritativePlan, groundingSnapshot: snapBody.snapshot, bridgeSessionId: bridgeId,
+  } }) });
+  const exactReplayBody = await exactReplay.json();
+  if (exactReplay.status !== 200 || exactReplayBody.sessionId !== session.sessionId || authoritative.tables.interview_sessions.length !== 1) {
+    throw new Error('Exact response-loss replay did not return one canonical session');
+  }
+
+  // Direct bridge replay remains rejected and cannot overwrite target_session_id.
   const replay = await fetch(`${baseUrl}/api/career-context/bridges/${bridgeId}/consume`, {
     method: 'POST', headers: headersUserA, body: JSON.stringify({ targetSessionId: session.sessionId }),
   });
@@ -296,7 +348,7 @@ try {
   }
 
   const rpcNames = authoritative.calls.map(call => call.name);
-  for (const required of ['create_grounding_snapshot_tx', 'create_module_bridge_tx', 'consume_module_bridge_tx']) {
+  for (const required of ['create_grounding_snapshot_tx', 'create_module_bridge_tx', 'bind_interview_plan_session_tx']) {
     if (!rpcNames.includes(required)) throw new Error(`Positive journey bypassed authoritative RPC ${required}`);
   }
 

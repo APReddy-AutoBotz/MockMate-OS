@@ -64,7 +64,9 @@ assertMatch(/item_status <> 'active'[\s\S]*inferred_pending[\s\S]*personal_conta
 assertMatch(/rebuild_career_context_tx/g, 'backend/services/careerContextService.ts', 'transactional rebuild RPC');
 assertNoMatch(/falling back to direct delete/g, 'backend/routes/meRoutes.ts', 'partial Career Context account deletion fallback');
 assertMatch(/cleanup could not be verified/g, 'backend/routes/interviewRoutes.ts', 'orphan session cleanup failure response');
-assertMatch(/groundingReferences: refs\.length/g, 'backend/routes/interviewRoutes.ts', 'authoritative session grounding reconstruction');
+assertMatch(/hashInterviewPlan\(browserPlanPayload\)/g, 'backend/routes/interviewRoutes.ts', 'browser plan tamper rejection');
+assertMatch(/bind_interview_plan_session_tx/g, 'backend/services/interviewPlanService.ts', 'atomic plan/session/bridge binding');
+assertMatch(/INSERT INTO public\.career_context_items[\s\S]*pending_confirmation/g, 'supabase/migrations/20260808010000_p0_3_plan_and_item_lineage_corrections.sql', 'immutable successor item creation');
 assertMatch(/career_context_snapshot_items/g, 'backend/services/groundingSnapshotService.ts', 'persisted snapshot membership lineage');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

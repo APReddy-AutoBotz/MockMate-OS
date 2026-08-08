@@ -790,6 +790,13 @@ export const InterviewPlanSchema = z.object({
   }).strict(),
   jdInsights: JDInsightsSchema,
   questionSet: z.array(QuestionBlueprintSchema).min(1),
+  authority: z.object({
+    planId: z.string().uuid(),
+    planHash: z.string().regex(/^[a-f0-9]{64}$/),
+    version: z.number().int().positive(),
+    snapshotId: z.string().uuid(),
+    bridgeId: z.string().uuid(),
+  }).strict().optional(),
 }).strict();
 export type InterviewPlan = z.infer<typeof InterviewPlanSchema>;
 

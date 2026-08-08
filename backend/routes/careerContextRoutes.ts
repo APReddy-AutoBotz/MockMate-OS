@@ -68,11 +68,13 @@ router.post('/rebuild', async (req, res) => {
     const drafts: CareerContextItemDraft[] = [];
 
     // 1. Rebuild from resume_reviews
-    const { data: resumes } = await supabaseAdmin
+    const { data: resumes, error: resumesError } = await supabaseAdmin
       .from('resume_reviews')
       .select('*')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
+
+    if (resumesError) throw Object.assign(new Error(`Failed to read Resume sources: ${resumesError.message}`), { status: 503 });
 
     if (resumes && resumes.length > 0) {
       resumes.forEach(r => {
@@ -90,10 +92,12 @@ router.post('/rebuild', async (req, res) => {
     }
 
     // 2. Rebuild from clearspeak_profiles & clearspeak_sessions
-    const { data: csProfiles } = await supabaseAdmin
+    const { data: csProfiles, error: csProfilesError } = await supabaseAdmin
       .from('clearspeak_profiles')
       .select('*')
       .eq('user_id', userId);
+
+    if (csProfilesError) throw Object.assign(new Error(`Failed to read ClearSpeak profiles: ${csProfilesError.message}`), { status: 503 });
 
     if (csProfiles && csProfiles.length > 0) {
       csProfiles.forEach(p => {
@@ -115,11 +119,13 @@ router.post('/rebuild', async (req, res) => {
       });
     }
 
-    const { data: csSessions } = await supabaseAdmin
+    const { data: csSessions, error: csSessionsError } = await supabaseAdmin
       .from('clearspeak_sessions')
       .select('*')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
+
+    if (csSessionsError) throw Object.assign(new Error(`Failed to read ClearSpeak sessions: ${csSessionsError.message}`), { status: 503 });
 
     if (csSessions && csSessions.length > 0) {
       csSessions.forEach(s => {
@@ -137,11 +143,13 @@ router.post('/rebuild', async (req, res) => {
     }
 
     // 3. Rebuild from interview_sessions & reports
-    const { data: intSessions } = await supabaseAdmin
+    const { data: intSessions, error: intSessionsError } = await supabaseAdmin
       .from('interview_sessions')
       .select('*')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
+
+    if (intSessionsError) throw Object.assign(new Error(`Failed to read Interview sources: ${intSessionsError.message}`), { status: 503 });
 
     if (intSessions && intSessions.length > 0) {
       intSessions.forEach(s => {
