@@ -624,11 +624,45 @@ async function runRuntimeVerification() {
       { kind: 'skill', canonicalKey: 'shared.skill', label: 'Shared skill A', value: { type: 'text', text: 'A' }, source: { module: 'resume', recordId: 'resume-a', fieldPath: 'skills.0', sourceRevision: 'v1', sourceHash: 'same-a' }, exactExcerpt: 'A', provenance: 'direct_source', status: 'pending_confirmation', sensitivity: 'standard' },
       { kind: 'skill', canonicalKey: 'shared.skill', label: 'Shared skill B', value: { type: 'text', text: 'B' }, source: { module: 'resume', recordId: 'resume-b', fieldPath: 'skills.0', sourceRevision: 'v1', sourceHash: 'same-b' }, exactExcerpt: 'B', provenance: 'direct_source', status: 'pending_confirmation', sensitivity: 'standard' },
     ]).replaceAll("'", "''");
-    await client.query(`SELECT public.rebuild_career_context_tx('${userA}'::uuid, '${sameKeyDrafts}'::jsonb);`);
+    const initialRebuild = await client.query(`SELECT public.rebuild_career_context_tx('${userA}'::uuid, '${sameKeyDrafts}'::jsonb) AS result;`);
     const repeated = await client.query(`SELECT public.rebuild_career_context_tx('${userA}'::uuid, '${sameKeyDrafts}'::jsonb) AS result;`);
+    const repeatedTwice = await client.query(`SELECT public.rebuild_career_context_tx('${userA}'::uuid, '${sameKeyDrafts}'::jsonb) AS result;`);
     const lineageRows = await client.query(`SELECT count(*) FROM public.career_context_items WHERE user_id='${userA}' AND canonical_key='shared.skill';`);
+    if (Number(initialRebuild.rows[0].result.addedCount) !== 2 || Number(lineageRows.rows[0].count) !== 2 || Number(repeated.rows[0].result.unchangedCount) !== 2 || Number(repeatedTwice.rows[0].result.unchangedCount) !== 2) {
+      throw new Error('Exact source identity replay or same-key independent lineage was not idempotent');
+    }
+
+    const originalA = await client.query(`SELECT * FROM public.career_context_items WHERE user_id='${userA}' AND source_record_id='resume-a' AND source_hash='same-a';`);
+    const originalAId = originalA.rows[0].id;
+    await client.query(`UPDATE public.career_context_items SET provenance='user_edited',item_status='active',user_confirmed_at=now() WHERE id='${originalAId}';`);
+    const lineageSnapshot = 'abababab-abab-abab-abab-abababababab';
+    await client.query(`
+      INSERT INTO public.career_context_snapshots(id,user_id,purpose,context_version,projection,consent,source_modules,client_request_id,request_hash)
+      SELECT '${lineageSnapshot}','${userA}','manual_selection',context_version,'{"items":[{"label":"Shared skill A","exactExcerpt":"A"}]}'::jsonb,'{}'::jsonb,ARRAY['resume'],'lineage-history','lineage-history-hash'
+      FROM public.career_context_state WHERE user_id='${userA}';
+      INSERT INTO public.career_context_snapshot_items(snapshot_id,item_id,position) VALUES('${lineageSnapshot}','${originalAId}',0);
+    `);
+    const changedDraft = JSON.stringify([
+      { kind: 'skill', canonicalKey: 'shared.skill', label: 'Shared skill A changed', value: { type: 'text', text: 'A2' }, source: { module: 'resume', recordId: 'resume-a', fieldPath: 'skills.0', sourceRevision: 'v2', sourceHash: 'changed-a' }, exactExcerpt: 'A2', provenance: 'direct_source', status: 'active', sensitivity: 'standard' },
+    ]).replaceAll("'", "''");
+    const changed = await client.query(`SELECT public.rebuild_career_context_tx('${userA}'::uuid, '${changedDraft}'::jsonb) AS result;`);
+    const changedReplay = await client.query(`SELECT public.rebuild_career_context_tx('${userA}'::uuid, '${changedDraft}'::jsonb) AS result;`);
+    const preserved = await client.query(`
+      SELECT old.label,old.value,old.exact_excerpt,old.provenance,old.item_status,old.superseded_by,
+             successor.label AS successor_label,successor.item_status AS successor_status,
+             snap_item.item_id AS historical_item_id
+      FROM public.career_context_items old
+      JOIN public.career_context_items successor ON successor.id=old.superseded_by
+      JOIN public.career_context_snapshot_items snap_item ON snap_item.snapshot_id='${lineageSnapshot}' AND snap_item.item_id=old.id
+      WHERE old.id='${originalAId}';
+    `);
+    const independentB = await client.query(`SELECT superseded_by FROM public.career_context_items WHERE user_id='${userA}' AND source_record_id='resume-b' AND source_hash='same-b';`);
+    const finalLineageRows = await client.query(`SELECT count(*) FROM public.career_context_items WHERE user_id='${userA}' AND canonical_key='shared.skill';`);
     await resetRole(client);
-    if (Number(lineageRows.rows[0].count) !== 2 || Number(repeated.rows[0].result.unchangedCount) !== 2) throw new Error('Exact source-lineage rebuild was not idempotent');
+    const history = preserved.rows[0];
+    if (Number(changed.rows[0].result.updatedCount) !== 1 || Number(changedReplay.rows[0].result.unchangedCount) !== 1 || Number(finalLineageRows.rows[0].count) !== 3 || independentB.rows[0].superseded_by !== null || preserved.rows.length !== 1 || history.label !== 'Shared skill A' || history.value.text !== 'A' || history.exact_excerpt !== 'A' || history.provenance !== 'user_edited' || history.item_status !== 'active' || history.successor_label !== 'Shared skill A changed' || history.successor_status !== 'pending_confirmation' || history.historical_item_id !== originalAId) {
+      throw new Error('Changed source lineage did not create one immutable pending successor while preserving snapshot and user authority');
+    }
     passedCount++;
     console.log('  ✓ Assertion 39. exact_source_lineage_rebuild_is_idempotent passed');
 
