@@ -131,6 +131,17 @@ const mockSupabaseClient: any = {
     if (table === 'career_context_snapshot_items') {
       return {
         insert: async () => ({ error: null }),
+        select: () => ({
+          eq: () => ({
+            order: async () => ({
+              data: mockItems.filter(item => item.item_status === 'active').map((item, position) => ({
+                position,
+                career_context_items: item,
+              })),
+              error: null,
+            }),
+          }),
+        }),
       };
     }
     if (table === 'career_context_bridges') {

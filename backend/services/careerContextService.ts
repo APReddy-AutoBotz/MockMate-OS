@@ -10,11 +10,13 @@ import { supabaseAdmin } from '../supabaseAdmin';
 export async function getCareerContextState(userId: string): Promise<CareerContextState> {
   const now = new Date().toISOString();
   if (supabaseAdmin) {
-    const { data } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from('career_context_state')
       .select('*')
       .eq('user_id', userId)
       .maybeSingle();
+
+    if (error) throw persistenceError(`Failed to read Career Context state: ${error.message}`);
 
     if (data) {
       return CareerContextStateSchema.parse({
@@ -26,7 +28,7 @@ export async function getCareerContextState(userId: string): Promise<CareerConte
     }
 
     // Initialize default state if first time
-    const { data: inserted } = await supabaseAdmin
+    const { data: inserted, error: insertError } = await supabaseAdmin
       .from('career_context_state')
       .insert({
         user_id: userId,
@@ -36,6 +38,8 @@ export async function getCareerContextState(userId: string): Promise<CareerConte
       })
       .select('*')
       .single();
+
+    if (insertError || !inserted) throw persistenceError(`Failed to initialize Career Context state: ${insertError?.message || 'no row returned'}`);
 
     if (inserted) {
       return CareerContextStateSchema.parse({
@@ -47,12 +51,7 @@ export async function getCareerContextState(userId: string): Promise<CareerConte
     }
   }
 
-  return CareerContextStateSchema.parse({
-    userId,
-    contextVersion: 1,
-    personalizationEnabled: false,
-    updatedAt: now,
-  });
+  throw persistenceError('Authoritative persistence unavailable');
 }
 
 export async function setPersonalizationPreference(
@@ -101,7 +100,7 @@ export async function setPersonalizationPreference(
 
 export async function getUserCareerContextItems(userId: string): Promise<CareerContextItem[]> {
   if (!supabaseAdmin) {
-    return [];
+    throw persistenceError('Authoritative persistence unavailable');
   }
 
   const { data, error } = await supabaseAdmin
@@ -110,7 +109,7 @@ export async function getUserCareerContextItems(userId: string): Promise<CareerC
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
 
-  if (error || !data) return [];
+  if (error || !data) throw persistenceError(`Failed to read Career Context items: ${error?.message || 'no rows returned'}`);
   return data.map(mapDbToItem);
 }
 
@@ -124,57 +123,23 @@ export async function saveCareerContextItemDrafts(
     throw err;
   }
 
-  const existingItems = await getUserCareerContextItems(userId);
-  const now = new Date().toISOString();
-  let addedCount = 0;
-  let updatedCount = 0;
-  let unchangedCount = 0;
+  const { data, error } = await supabaseAdmin.rpc('rebuild_career_context_tx', {
+    p_user_id: userId,
+    p_drafts: drafts,
+  });
+  if (error) throw persistenceError(`Career Context rebuild transaction failed: ${error.message}`);
+  if (!data) throw persistenceError('Career Context rebuild transaction returned no result');
+  return {
+    addedCount: Number((data as any).addedCount || 0),
+    updatedCount: Number((data as any).updatedCount || 0),
+    unchangedCount: Number((data as any).unchangedCount || 0),
+  };
+}
 
-  for (const draft of drafts) {
-    const existing = existingItems.find(i => i.canonicalKey === draft.canonicalKey);
-
-    if (!existing) {
-      const newItem = {
-        id: crypto.randomUUID(),
-        user_id: userId,
-        item_kind: draft.kind,
-        canonical_key: draft.canonicalKey,
-        label: draft.label,
-        value: draft.value,
-        source_module: draft.source.module,
-        source_record_id: draft.source.recordId || null,
-        source_path: draft.source.fieldPath || null,
-        source_revision: draft.source.sourceRevision || 'v1',
-        source_hash: draft.source.sourceHash || 'h1',
-        exact_excerpt: draft.exactExcerpt || null,
-        provenance: draft.provenance,
-        item_status: draft.status || 'pending_confirmation',
-        sensitivity: draft.sensitivity,
-        created_at: now,
-        updated_at: now,
-      };
-
-      await supabaseAdmin.from('career_context_items').insert(newItem);
-      addedCount++;
-    } else if (existing.source.sourceHash !== draft.source.sourceHash) {
-      await supabaseAdmin
-        .from('career_context_items')
-        .update({
-          label: draft.label,
-          value: draft.value,
-          source_revision: draft.source.sourceRevision,
-          source_hash: draft.source.sourceHash,
-          exact_excerpt: draft.exactExcerpt || null,
-          updated_at: now,
-        })
-        .eq('id', existing.id);
-      updatedCount++;
-    } else {
-      unchangedCount++;
-    }
-  }
-
-  return { addedCount, updatedCount, unchangedCount };
+function persistenceError(message: string): Error & { status: number } {
+  const error = new Error(message) as Error & { status: number };
+  error.status = 503;
+  return error;
 }
 
 export async function handleItemDecision(

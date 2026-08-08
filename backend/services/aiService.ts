@@ -214,7 +214,7 @@ export const buildDeterministicInterviewPlan = (
   const candidateRole = role || intentText || 'Candidate';
   const isTechRole = /engineer|developer|software|coding|backend|frontend|fullstack|devops|data scientist|programmer/i.test(candidateRole);
 
-  const projItems = (groundingSnapshot?.projection as any)?.items || [];
+  const authoritativeReferences = groundingSnapshot?.groundingReferences || [];
 
   const bank = [
     {
@@ -251,17 +251,8 @@ export const buildDeterministicInterviewPlan = (
     const personaFocus = safePanelIDs[i % safePanelIDs.length];
 
     let groundingReferences: any[] | undefined = undefined;
-    if (projItems.length > 0) {
-      const item = projItems[i % projItems.length];
-      if (item) {
-        groundingReferences = [{
-          id: item.id,
-          label: item.label,
-          canonicalKey: item.canonicalKey,
-          exactExcerpt: item.exactExcerpt,
-          sourceModule: item.sourceModule,
-        }];
-      }
+    if (authoritativeReferences.length > 0) {
+      groundingReferences = [authoritativeReferences[i % authoritativeReferences.length]];
     }
 
     return {
@@ -390,7 +381,7 @@ export const generateInterviewPlan = async (
     const rawParsed = RawInterviewPlanSchema.parse(rawData);
 
     if (!rawParsed.questionSet || rawParsed.questionSet.length === 0) {
-      return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs);
+      return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs, groundingSnapshot);
     }
 
     const normalizedQuestions = rawParsed.questionSet.map((q, idx) => {
@@ -411,7 +402,10 @@ export const generateInterviewPlan = async (
         rubric: q.rubric,
         sourceBullets: q.sourceBullets,
         language: q.language,
-        timeAllocation: q.timeAllocation
+        timeAllocation: q.timeAllocation,
+        groundingReferences: groundingSnapshot?.groundingReferences?.length
+          ? [groundingSnapshot.groundingReferences[idx % groundingSnapshot.groundingReferences.length]]
+          : undefined,
       };
     });
 
@@ -442,7 +436,7 @@ export const generateInterviewPlan = async (
 
     return InterviewPlanSchema.parse(normalizedPlan);
   } catch (err) {
-    return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs);
+    return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs, groundingSnapshot);
   }
 };
 

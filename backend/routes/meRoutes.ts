@@ -56,25 +56,12 @@ router.delete('/data', async (req, res) => {
     }
 
     if (!rpcExecuted || rpcErr) {
-      if (rpcErr) {
-        console.warn('[Me] RPC delete_user_career_context failed, falling back to direct delete:', rpcErr.message || rpcErr);
-      }
-      const p03Tables = [
-        'career_context_snapshot_items',
-        'career_context_bridges',
-        'career_context_snapshots',
-        'career_context_items',
-        'career_context_state',
-      ];
-      for (const table of p03Tables) {
-        const { error } = await supabaseAdmin.from(table).delete().eq('user_id', userId);
-        if (error) {
-          console.error(`[Me] Error deleting table ${table}:`, error.message);
-          failedTables.push(table);
-        } else {
-          deletedTables.push(table);
-        }
-      }
+      console.error('[Me] Transactional Career Context deletion failed:', rpcErr?.message || rpcErr || 'RPC unavailable');
+      return res.status(503).json({
+        success: false, operation: 'app_data_deleted', deletedTables: [],
+        failedTables: ['career_context'], authIdentityDeleted: false,
+        authIdentityRetainedReason: 'Transactional Career Context deletion failed; no other account data was deleted.', requestId,
+      });
     } else {
       deletedTables.push(
         'career_context_snapshot_items',

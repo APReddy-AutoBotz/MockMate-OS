@@ -56,4 +56,15 @@ assertMatch(/supabaseAdmin\.rpc\(['"]create_grounding_snapshot_tx['"]/g, 'backen
 assertMatch(/supabaseAdmin\.rpc\(['"]create_module_bridge_tx['"]/g, 'backend/services/moduleBridgeService.ts', 'create_module_bridge_tx RPC call');
 assertMatch(/supabaseAdmin\.rpc\(['"]consume_module_bridge_tx['"]/g, 'backend/services/moduleBridgeService.ts', 'consume_module_bridge_tx RPC call');
 
-console.log('[Rejection Checks] PASSED: All 6 mandatory architectural rejection checks passed 100%!');
+// 5. P0-3 authority/atomicity regression guards (runtime PostgreSQL tests run in CI).
+const correctionMigration = 'supabase/migrations/20260808000000_p0_3_authority_atomicity_corrections.sql';
+assertMatch(/v_bridge\.status <> 'confirmed'/g, correctionMigration, 'single-use exact confirmed bridge guard');
+assertMatch(/FOR UPDATE[\s\S]*p_expected_context_version/g, correctionMigration, 'locked expected snapshot version guard');
+assertMatch(/item_status <> 'active'[\s\S]*inferred_pending[\s\S]*personal_contact/g, correctionMigration, 'snapshot consent eligibility guards');
+assertMatch(/rebuild_career_context_tx/g, 'backend/services/careerContextService.ts', 'transactional rebuild RPC');
+assertNoMatch(/falling back to direct delete/g, 'backend/routes/meRoutes.ts', 'partial Career Context account deletion fallback');
+assertMatch(/cleanup could not be verified/g, 'backend/routes/interviewRoutes.ts', 'orphan session cleanup failure response');
+assertMatch(/groundingReferences: refs\.length/g, 'backend/routes/interviewRoutes.ts', 'authoritative session grounding reconstruction');
+assertMatch(/career_context_snapshot_items/g, 'backend/services/groundingSnapshotService.ts', 'persisted snapshot membership lineage');
+
+console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

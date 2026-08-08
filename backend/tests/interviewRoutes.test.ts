@@ -808,7 +808,7 @@ describe('Backend Express API & Route Parity Tests', () => {
     });
 
     const orig = supabaseAdminModule.supabaseAdmin;
-    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom };
+    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom, rpc: jest.fn().mockResolvedValue({ error: null }) };
 
     try {
       const res = await request(app)
@@ -853,7 +853,7 @@ describe('Backend Express API & Route Parity Tests', () => {
     });
 
     const orig = supabaseAdminModule.supabaseAdmin;
-    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom };
+    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom, rpc: jest.fn().mockResolvedValue({ error: null }) };
 
     try {
       const res = await request(app)
@@ -896,7 +896,7 @@ describe('Backend Express API & Route Parity Tests', () => {
     });
 
     const orig = supabaseAdminModule.supabaseAdmin;
-    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom };
+    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom, rpc: jest.fn().mockResolvedValue({ error: null }) };
 
     try {
       const res = await request(app)
@@ -925,7 +925,7 @@ describe('Backend Express API & Route Parity Tests', () => {
     }));
 
     const orig = supabaseAdminModule.supabaseAdmin;
-    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom };
+    (supabaseAdminModule as any).supabaseAdmin = { from: mockFrom, rpc: jest.fn().mockResolvedValue({ error: null }) };
 
     try {
       const res1 = await request(app).delete('/api/me/data').set('Authorization', testAuthHeader);

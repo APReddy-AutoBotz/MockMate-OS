@@ -102,9 +102,35 @@ router.post('/sessions', enforceUsageLimit('interview_question'), async (req: an
     }
 
     const bridgeSessionId = parsed.data.context?.bridgeSessionId;
+    let authoritativeContext = parsed.data.context;
+
+    if (bridgeSessionId) {
+      const { getModuleBridgeById } = require('../services/moduleBridgeService');
+      const { getSnapshotById } = require('../services/groundingSnapshotService');
+      const bridge = await getModuleBridgeById(userId, bridgeSessionId);
+      if (!bridge) return res.status(404).json({ error: 'Grounding bridge not found or access denied.' });
+      if (bridge.status !== 'confirmed') return res.status(409).json({ error: `Bridge status is '${bridge.status}', cannot start session.` });
+      if (bridge.targetModule !== 'interview') return res.status(422).json({ error: 'Grounding bridge target is incompatible with Interview practice.' });
+      const snapshot = await getSnapshotById(userId, bridge.snapshotId);
+      if (!snapshot || snapshot.purpose !== bridge.purpose) return res.status(422).json({ error: 'Bridge snapshot is missing or purpose-mismatched.' });
+      if (authoritativeContext.groundingSnapshot?.id !== snapshot.id) return res.status(422).json({ error: 'Browser grounding snapshot does not match the authoritative bridge snapshot.' });
+      const refs = snapshot.groundingReferences || [];
+      authoritativeContext = {
+        ...authoritativeContext,
+        groundingSnapshot: snapshot,
+        bridgeSessionId: bridge.id,
+        interviewPlan: {
+          ...authoritativeContext.interviewPlan,
+          questionSet: authoritativeContext.interviewPlan.questionSet.map((question, index) => ({
+            ...question,
+            groundingReferences: refs.length ? [refs[index % refs.length]] : undefined,
+          })),
+        },
+      };
+    }
 
     // 1. Create real Interview session first
-    const result = await sessionService.createSession(userId, parsed.data.context);
+    const result = await sessionService.createSession(userId, authoritativeContext);
     const actualInterviewSessionId = result.sessionId;
 
     if (!actualInterviewSessionId) {
@@ -118,7 +144,12 @@ router.post('/sessions', enforceUsageLimit('interview_question'), async (req: an
         await consumeModuleBridgeSession(userId, bridgeSessionId, actualInterviewSessionId);
       } catch (bridgeErr: any) {
         console.error('[Interview] Bridge consumption failed for session creation:', bridgeErr.message);
-        await sessionService.deleteSession(userId, actualInterviewSessionId).catch(() => {});
+        try {
+          await sessionService.deleteSession(userId, actualInterviewSessionId);
+        } catch (cleanupErr: any) {
+          console.error('[Interview] Orphan session cleanup failed:', cleanupErr.message);
+          return res.status(503).json({ error: `Grounding bridge consumption failed and session cleanup could not be verified: ${cleanupErr.message}` });
+        }
         const status = bridgeErr.status || 409;
         return res.status(status).json({
           error: `Grounding bridge consumption failed: ${bridgeErr.message}. Practice session cancelled.`

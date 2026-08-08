@@ -442,6 +442,17 @@ export const GroundingProjectionSchema = z.object({
 }).strict();
 export type GroundingProjection = z.infer<typeof GroundingProjectionSchema>;
 
+export const GroundingReferenceSchema = z.object({
+  contextItemId: z.string().uuid(),
+  sourceModule: CareerContextModuleSchema,
+  sourceRecordId: z.string(),
+  sourcePath: z.string(),
+  label: z.string(),
+  exactExcerpt: z.string().nullable().optional(),
+  purpose: GroundingPurposeSchema,
+}).strict();
+export type GroundingReference = z.infer<typeof GroundingReferenceSchema>;
+
 export const CareerContextSnapshotSchema = z.object({
   id: z.string().uuid(),
   userId: z.string().uuid(),
@@ -453,19 +464,9 @@ export const CareerContextSnapshotSchema = z.object({
   consent: GroundingConsentSchema,
   createdAt: z.string().datetime(),
   sourceModules: z.array(CareerContextModuleSchema),
+  groundingReferences: z.array(GroundingReferenceSchema).optional(),
 }).strict();
 export type CareerContextSnapshot = z.infer<typeof CareerContextSnapshotSchema>;
-
-export const GroundingReferenceSchema = z.object({
-  contextItemId: z.string().uuid(),
-  sourceModule: CareerContextModuleSchema,
-  sourceRecordId: z.string(),
-  sourcePath: z.string(),
-  label: z.string(),
-  exactExcerpt: z.string().nullable().optional(),
-  purpose: GroundingPurposeSchema,
-}).strict();
-export type GroundingReference = z.infer<typeof GroundingReferenceSchema>;
 
 export const ModuleBridgeStatusSchema = z.enum([
   'drafted',

@@ -148,6 +148,7 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
     p_consent: consent,
     p_source_modules: sourceModules,
     p_item_ids: items.map(i => i.id),
+    p_expected_context_version: expectedContextVersion ?? contextVersion,
     p_client_request_id: clientRequestId,
     p_request_hash: requestHash,
   });
@@ -186,7 +187,28 @@ export async function getSnapshotById(userId: string, snapshotId: string): Promi
 
   if (error || !data) return null;
 
-  return getSnapshotFromDbRow(data);
+  const { data: memberships, error: membershipError } = await supabaseAdmin
+    .from('career_context_snapshot_items')
+    .select('position, career_context_items!inner(id,user_id,label,source_module,source_record_id,source_path,exact_excerpt)')
+    .eq('snapshot_id', snapshotId)
+    .order('position', { ascending: true });
+  if (membershipError) throw Object.assign(new Error(`Failed to load authoritative snapshot membership: ${membershipError.message}`), { status: 503 });
+
+  const snapshot = getSnapshotFromDbRow(data);
+  const refs = (memberships || []).map((membership: any) => {
+    const item = membership.career_context_items;
+    if (!item || item.user_id !== userId) throw Object.assign(new Error('Snapshot membership ownership mismatch'), { status: 403 });
+    return {
+      contextItemId: item.id,
+      sourceModule: item.source_module,
+      sourceRecordId: item.source_record_id || item.id,
+      sourcePath: item.source_path || 'value',
+      label: item.label,
+      exactExcerpt: item.exact_excerpt || null,
+      purpose: snapshot.purpose,
+    };
+  });
+  return CareerContextSnapshotSchema.parse({ ...snapshot, groundingReferences: refs });
 }
 
 function getSnapshotFromDbRow(data: any): CareerContextSnapshot {
