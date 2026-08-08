@@ -150,7 +150,7 @@ async function runRuntimeVerification() {
       ON CONFLICT (id) DO NOTHING;
     `);
 
-    console.log('[Runtime Assertions] Running 41 mandatory PostgreSQL runtime assertions...');
+    console.log('[Runtime Assertions] Running 43 mandatory PostgreSQL runtime assertions...');
     let passedCount = 0;
 
     // 1. all_five_tables_exist
@@ -618,14 +618,43 @@ async function runRuntimeVerification() {
     passedCount++;
     console.log('  ✓ Assertion 38. expired_bridge_rejection passed');
 
-    // 39. protected_account_deletion
+    // 39. exact_source_lineage_rebuild_is_idempotent
+    await setRole(client, 'service_role');
+    const sameKeyDrafts = JSON.stringify([
+      { kind: 'skill', canonicalKey: 'shared.skill', label: 'Shared skill A', value: { type: 'text', text: 'A' }, source: { module: 'resume', recordId: 'resume-a', fieldPath: 'skills.0', sourceRevision: 'v1', sourceHash: 'same-a' }, exactExcerpt: 'A', provenance: 'direct_source', status: 'pending_confirmation', sensitivity: 'standard' },
+      { kind: 'skill', canonicalKey: 'shared.skill', label: 'Shared skill B', value: { type: 'text', text: 'B' }, source: { module: 'resume', recordId: 'resume-b', fieldPath: 'skills.0', sourceRevision: 'v1', sourceHash: 'same-b' }, exactExcerpt: 'B', provenance: 'direct_source', status: 'pending_confirmation', sensitivity: 'standard' },
+    ]).replaceAll("'", "''");
+    await client.query(`SELECT public.rebuild_career_context_tx('${userA}'::uuid, '${sameKeyDrafts}'::jsonb);`);
+    const repeated = await client.query(`SELECT public.rebuild_career_context_tx('${userA}'::uuid, '${sameKeyDrafts}'::jsonb) AS result;`);
+    const lineageRows = await client.query(`SELECT count(*) FROM public.career_context_items WHERE user_id='${userA}' AND canonical_key='shared.skill';`);
+    await resetRole(client);
+    if (Number(lineageRows.rows[0].count) !== 2 || Number(repeated.rows[0].result.unchangedCount) !== 2) throw new Error('Exact source-lineage rebuild was not idempotent');
+    passedCount++;
+    console.log('  ✓ Assertion 39. exact_source_lineage_rebuild_is_idempotent passed');
+
+    // 40. preference_version_conflict_is_transactional
+    await setRole(client, 'service_role');
+    const preferenceVersion = await client.query(`SELECT context_version FROM public.career_context_state WHERE user_id='${userA}';`);
+    const expectedPreferenceVersion = Number(preferenceVersion.rows[0].context_version);
+    await client.query(`SELECT public.set_personalization_preference_tx('${userA}'::uuid,true,${expectedPreferenceVersion});`);
+    try {
+      await client.query(`SELECT public.set_personalization_preference_tx('${userA}'::uuid,false,${expectedPreferenceVersion});`);
+      throw new Error('Stale personalization preference unexpectedly committed');
+    } catch (e) {
+      if (!e.message.includes('Stale or mismatched context version')) throw e;
+    }
+    await resetRole(client);
+    passedCount++;
+    console.log('  ✓ Assertion 40. preference_version_conflict_is_transactional passed');
+
+    // 41. protected_account_deletion
     await setRole(client, 'service_role');
     await client.query(`SELECT public.delete_user_career_context('${userA}'::uuid);`);
     await resetRole(client);
     passedCount++;
-    console.log('  ✓ Assertion 39. protected_account_deletion passed');
+    console.log('  ✓ Assertion 41. protected_account_deletion passed');
 
-    // 40. no_orphan_rows
+    // 42. no_orphan_rows
     const orphanItems = await client.query(`SELECT count(*) FROM public.career_context_items WHERE user_id = '${userA}'`);
     const orphanSnaps = await client.query(`SELECT count(*) FROM public.career_context_snapshots WHERE user_id = '${userA}'`);
     const orphanBridges = await client.query(`SELECT count(*) FROM public.career_context_bridges WHERE user_id = '${userA}'`);
@@ -640,9 +669,9 @@ async function runRuntimeVerification() {
       throw new Error('Account deletion left orphan rows for User A!');
     }
     passedCount++;
-    console.log('  ✓ Assertion 40. no_orphan_rows passed');
+    console.log('  ✓ Assertion 42. no_orphan_rows passed');
 
-    // 41. other_user_data_retained
+    // 43. other_user_data_retained
     const userBItems = await client.query(`SELECT count(*) FROM public.career_context_items WHERE user_id = '${userB}'`);
     const userBSnaps = await client.query(`SELECT count(*) FROM public.career_context_snapshots WHERE user_id = '${userB}'`);
     const userBBridges = await client.query(`SELECT count(*) FROM public.career_context_bridges WHERE user_id = '${userB}'`);
@@ -655,9 +684,9 @@ async function runRuntimeVerification() {
       throw new Error('User B data was deleted during User A account deletion!');
     }
     passedCount++;
-    console.log('  ✓ Assertion 41. other_user_data_retained passed');
+    console.log('  ✓ Assertion 43. other_user_data_retained passed');
 
-    console.log(`[Runtime Assertions] All ${passedCount}/41 Career Context PostgreSQL assertions passed successfully!`);
+    console.log(`[Runtime Assertions] All ${passedCount}/43 Career Context PostgreSQL assertions passed successfully!`);
   } finally {
     await client.end();
   }

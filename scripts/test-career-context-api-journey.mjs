@@ -97,6 +97,17 @@ function createAuthoritativePersistenceDouble() {
     },
     async rpc(name, args) {
       calls.push({ name, args });
+      if (name === 'set_personalization_preference_tx') {
+        const state = tables.career_context_state.find(row => row.user_id === args.p_user_id);
+        if (!state) return { data: null, error: { message: 'Career Context state not found' } };
+        if (args.p_expected_context_version != null && state.context_version !== args.p_expected_context_version) {
+          return { data: null, error: { message: 'Stale or mismatched context version' } };
+        }
+        state.context_version += 1;
+        state.personalization_enabled = args.p_enabled;
+        state.updated_at = now;
+        return { data: { userId: state.user_id, contextVersion: state.context_version, personalizationEnabled: state.personalization_enabled, updatedAt: state.updated_at }, error: null };
+      }
       if (name === 'rebuild_career_context_tx') {
         const state = tables.career_context_state.find(row => row.user_id === args.p_user_id);
         state.context_version += 1; state.updated_at = now;

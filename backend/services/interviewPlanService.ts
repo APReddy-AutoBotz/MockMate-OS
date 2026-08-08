@@ -22,13 +22,19 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** Return the exact JSON representation accepted by PostgreSQL JSONB. */
+export function jsonSafeInterviewPlan(plan: InterviewPlan): InterviewPlan {
+  const parsed = InterviewPlanSchema.parse(plan);
+  return InterviewPlanSchema.parse(JSON.parse(JSON.stringify(parsed)));
+}
+
 export function hashInterviewPlan(plan: InterviewPlan): string {
-  return crypto.createHash('sha256').update(canonicalJson(InterviewPlanSchema.parse(plan))).digest('hex');
+  return crypto.createHash('sha256').update(canonicalJson(jsonSafeInterviewPlan(plan))).digest('hex');
 }
 
 export async function persistAuthoritativePlan(userId: string, snapshotId: string, bridgeId: string, plan: InterviewPlan): Promise<AuthoritativePlan> {
   if (!supabaseAdmin) throw persistenceError('Authoritative plan persistence unavailable');
-  const parsed = InterviewPlanSchema.parse(plan);
+  const parsed = jsonSafeInterviewPlan(plan);
   const hash = hashInterviewPlan(parsed);
   const { data, error } = await supabaseAdmin.from('interview_generated_plans').insert({
     user_id: userId, snapshot_id: snapshotId, bridge_id: bridgeId, plan_hash: hash, plan_version: 1, plan_payload: parsed,

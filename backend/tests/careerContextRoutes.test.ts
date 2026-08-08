@@ -189,6 +189,17 @@ const mockSupabaseClient: any = {
     };
   },
   rpc: async (fnName: string, args: any) => {
+    if (fnName === 'set_personalization_preference_tx') {
+      return {
+        data: {
+          userId: args.p_user_id,
+          contextVersion: (args.p_expected_context_version ?? 1) + 1,
+          personalizationEnabled: args.p_enabled,
+          updatedAt: new Date().toISOString(),
+        },
+        error: null,
+      };
+    }
     if (fnName === 'mutate_career_context_item') {
       const item = mockItems.find(i => i.id === args.p_item_id && i.user_id === args.p_user_id);
       if (!item) return { data: null, error: new Error('Career Context item not found.') };

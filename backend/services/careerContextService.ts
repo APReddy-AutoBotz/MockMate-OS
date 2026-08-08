@@ -65,36 +65,23 @@ export async function setPersonalizationPreference(
     throw err;
   }
 
-  const now = new Date().toISOString();
-  const currentState = await getCareerContextState(userId);
+  const { data, error } = await supabaseAdmin.rpc('set_personalization_preference_tx', {
+    p_user_id: userId,
+    p_enabled: enabled,
+    p_expected_context_version: expectedContextVersion ?? null,
+  });
 
-  if (expectedContextVersion !== undefined && expectedContextVersion !== currentState.contextVersion) {
-    const err: any = new Error(`Stale or mismatched context version: expected ${expectedContextVersion}, current is ${currentState.contextVersion}`);
-    err.status = 409;
+  if (error || !data) {
+    const err: any = new Error(`Failed to update preference: ${error?.message || 'no row returned'}`);
+    err.status = error?.message?.includes('Stale or mismatched context version') ? 409 : 503;
     throw err;
   }
 
-  const newVer = currentState.contextVersion + 1;
-  const { data, error } = await supabaseAdmin
-    .from('career_context_state')
-    .upsert({
-      user_id: userId,
-      context_version: newVer,
-      personalization_enabled: enabled,
-      updated_at: now,
-    })
-    .select('*')
-    .single();
-
-  if (error || !data) {
-    throw new Error(`Failed to update preference: ${error?.message}`);
-  }
-
   return CareerContextStateSchema.parse({
-    userId: data.user_id,
-    contextVersion: Number(data.context_version),
-    personalizationEnabled: Boolean(data.personalization_enabled),
-    updatedAt: data.updated_at,
+    userId: (data as any).userId,
+    contextVersion: Number((data as any).contextVersion),
+    personalizationEnabled: Boolean((data as any).personalizationEnabled),
+    updatedAt: (data as any).updatedAt,
   });
 }
 

@@ -62,6 +62,9 @@ assertMatch(/v_bridge\.status <> 'confirmed'/g, correctionMigration, 'single-use
 assertMatch(/FOR UPDATE[\s\S]*p_expected_context_version/g, correctionMigration, 'locked expected snapshot version guard');
 assertMatch(/item_status <> 'active'[\s\S]*inferred_pending[\s\S]*personal_contact/g, correctionMigration, 'snapshot consent eligibility guards');
 assertMatch(/rebuild_career_context_tx/g, 'backend/services/careerContextService.ts', 'transactional rebuild RPC');
+assertMatch(/set_personalization_preference_tx/g, 'backend/services/careerContextService.ts', 'transactional personalization preference RPC');
+assertMatch(/source_record_id=v_draft#>>'\{source,recordId\}'/g, 'supabase/migrations/20260808020000_p0_3_plan_serialization_lineage_preference.sql', 'exact source-record lineage matching');
+assertMatch(/JSON\.parse\(JSON\.stringify\(parsed\)\)/g, 'backend/services/interviewPlanService.ts', 'JSON-persistence-equivalent plan hashing');
 assertNoMatch(/falling back to direct delete/g, 'backend/routes/meRoutes.ts', 'partial Career Context account deletion fallback');
 assertMatch(/cleanup could not be verified/g, 'backend/routes/interviewRoutes.ts', 'orphan session cleanup failure response');
 assertMatch(/hashInterviewPlan\(browserPlanPayload\)/g, 'backend/routes/interviewRoutes.ts', 'browser plan tamper rejection');
