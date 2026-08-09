@@ -121,5 +121,7 @@ assertMatch(/const sessionGrounding = useRef\(grounding\)\.current/, 'components
 assertMatch(/const shouldRetry = !sessionGrounding/, 'components/clearspeak/ClearSpeakSession.tsx', 'completed grounded score cannot offer a misleading audio retry after parent handoff cleanup');
 assertMatch(/state\.phase !== 'score_card'[\s\S]*onCanonicalGroundedScore/, 'components/clearspeak/ClearSpeakSession.tsx', 'grounding clears at canonical score completion');
 assertMatch(/notifiedGroundingBridge[\s\S]*notifyGroundingConsumed/, 'components/clearspeak/ClearSpeakDashboard.tsx', 'canonical grounding completion notifies parent once');
+assertMatch(/isValid && result\.content[\s\S]*applyAuthoritativeGrounding\(result\.content, profile, grounding\)[\s\S]*passageCache\.set\(cacheKey, \{ content: acceptedContent/, 'backend/clearspeak/generateService.ts', 'schema-valid provider content is deterministically grounded before cache/persistence');
+assertMatch(/applyAuthoritativeGrounding\(fallback, profile, grounding\)/, 'backend/clearspeak/generateService.ts', 'provider and safety fallback share the authoritative grounding transformation');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');
