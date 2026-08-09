@@ -66,9 +66,9 @@ assertMatch(/set_personalization_preference_tx/g, 'backend/services/careerContex
 assertMatch(/source_record_id=v_draft#>>'\{source,recordId\}'/g, 'supabase/migrations/20260808020000_p0_3_plan_serialization_lineage_preference.sql', 'exact source-record lineage matching');
 assertMatch(/JSON\.parse\(JSON\.stringify\(parsed\)\)/g, 'backend/services/interviewPlanService.ts', 'JSON-persistence-equivalent plan hashing');
 assertNoMatch(/falling back to direct delete/g, 'backend/routes/meRoutes.ts', 'partial Career Context account deletion fallback');
-assertMatch(/cleanup could not be verified/g, 'backend/routes/interviewRoutes.ts', 'orphan session cleanup failure response');
+assertMatch(/createAndBindAuthoritativeSession/g, 'backend/routes/interviewRoutes.ts', 'atomic grounded session creation and authority binding');
 assertMatch(/hashInterviewPlan\(browserPlanPayload\)/g, 'backend/routes/interviewRoutes.ts', 'browser plan tamper rejection');
-assertMatch(/bind_interview_plan_session_tx/g, 'backend/services/interviewPlanService.ts', 'atomic plan/session/bridge binding');
+assertMatch(/create_and_bind_interview_session_tx/g, 'backend/services/interviewPlanService.ts', 'atomic plan/session/bridge binding');
 assertMatch(/INSERT INTO public\.career_context_items[\s\S]*pending_confirmation/g, 'supabase/migrations/20260808010000_p0_3_plan_and_item_lineage_corrections.sql', 'immutable successor item creation');
 assertMatch(/career_context_snapshot_items/g, 'backend/services/groundingSnapshotService.ts', 'persisted snapshot membership lineage');
 
@@ -134,5 +134,9 @@ assertMatch(/release_interview_plan_generation_tx[\s\S]*GREATEST\(used-1,0\)/, i
 assertMatch(/bind_interview_plan_session_tx[\s\S]*usageCharged',false/, interviewUsageMigration, 'grounded session binding consumes authority without a second usage charge');
 assertNoMatch(/bind_interview_plan_session_tx[\s\S]*UPDATE public\.usage_ledger/, interviewUsageMigration, 'grounded session binding usage mutation');
 assertMatch(/failedReservation[\s\S]*releaseAuthoritativePlanGeneration/, 'backend/routes/interviewRoutes.ts', 'all pre-finalization plan failures release the elected reservation');
+const interviewExactlyOnceMigration = 'supabase/migrations/20260809080000_p0_3_interview_exactly_once_authority.sql';
+assertMatch(/renew_interview_plan_generation_tx[\s\S]*reservation_token<>p_reservation_token[\s\S]*lease_expires_at=v_now\+interval '30 seconds'/, interviewExactlyOnceMigration, 'token-scoped plan provider lease heartbeat');
+assertMatch(/create_and_bind_interview_session_tx[\s\S]*INSERT INTO public\.interview_sessions[\s\S]*UPDATE public\.interview_generated_plans[\s\S]*UPDATE public\.career_context_bridges/, interviewExactlyOnceMigration, 'atomic canonical grounded session create and bind');
+assertNoMatch(/sessionService\.createSession[\s\S]*bindAuthoritativePlan/, 'backend/routes/interviewRoutes.ts', 'non-atomic grounded session create then bind');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

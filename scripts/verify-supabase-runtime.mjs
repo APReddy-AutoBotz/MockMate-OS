@@ -772,7 +772,6 @@ async function runRuntimeVerification() {
     const historicalMembership = await client.query(`SELECT count(*) FROM public.career_context_snapshot_items WHERE snapshot_id='${lineageSnapshot}' AND item_id='${originalAId}';`);
     if (!confirmationReplay.rows[0].mutate_career_context_item.replayed || Number(versionAfterConfirmationReplay.rows[0].context_version) !== Number(versionBeforeConfirmation.rows[0].context_version)+1 || lineageAuthority.rows.find(r=>r.source_hash==='same-a')?.item_status !== 'superseded' || lineageAuthority.rows.find(r=>r.source_hash==='changed-a')?.item_status !== 'superseded' || lineageAuthority.rows.find(r=>r.source_hash==='newest-a')?.item_status !== 'active' || Number(historicalMembership.rows[0].count)!==1) throw new Error('Newest successor did not directly receive authority while preserving obsolete and historical evidence');
 
-    const groundedSession = '12121212-1212-4212-8212-121212121212';
     const groundedHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const groundedPlanPayload = '{"meta":{"intent":"test","controls":{"difficulty":"intermediate","totalQuestions":1,"includeBehavioral":true,"includeCoding":false,"timePerQuestion":"90s","deliveryMode":"exam","reasoningMode":"classic_behavioral","sourceMode":"job_description"}},"jdInsights":{"role":"Authoritative Role"},"questionSet":[{"id":"q","phase":"scenario","difficulty":"intermediate","question":"q","expectedSignals":[],"personaFocus":"p1"}]}';
 
@@ -802,21 +801,22 @@ async function runRuntimeVerification() {
     // Retry elects one new worker, charges once, and persists the canonical plan.
     await setRole(client, 'service_role');
     const successfulReservation = await client.query(`SELECT public.reserve_interview_plan_generation_tx('${userA}','${oneTimeBridgeSnapshot}','${replayBridgeId}') AS result;`);
+    const renewedReservation = await client.query(`SELECT public.renew_interview_plan_generation_tx('${userA}','${replayBridgeId}','${successfulReservation.rows[0].result.reservationToken}') AS result;`);
     const concurrentReservation = await client.query(`SELECT public.reserve_interview_plan_generation_tx('${userA}','${oneTimeBridgeSnapshot}','${replayBridgeId}') AS result;`);
-    if (!successfulReservation.rows[0].result.generate || concurrentReservation.rows[0].result.generate) throw new Error('Plan reservation did not elect exactly one worker');
+    if (!successfulReservation.rows[0].result.generate || !renewedReservation.rows[0].result.renewed || concurrentReservation.rows[0].result.generate) throw new Error('Plan reservation heartbeat did not retain exactly one provider worker');
     const finalizedPlan = await client.query(`SELECT public.finalize_interview_plan_generation_tx('${userA}','${oneTimeBridgeSnapshot}','${replayBridgeId}','${successfulReservation.rows[0].result.reservationToken}','${groundedHash}','${groundedPlanPayload}'::jsonb) AS result;`);
     const groundedPlan = finalizedPlan.rows[0].result.id;
-    await resetRole(client);
-    await client.query(`INSERT INTO public.interview_sessions(id,user_id,role,setup,status) VALUES('${groundedSession}','${userA}','Authoritative Role',jsonb_build_object('interviewPlan',jsonb_build_object('authority',jsonb_build_object('planId','${groundedPlan}','planHash','${groundedHash}'))),'active');`);
-    await setRole(client, 'service_role');
-    const firstBind = await client.query(`SELECT public.bind_interview_plan_session_tx('${userA}','${groundedPlan}','${groundedHash}','${replayBridgeId}','${groundedSession}') AS result;`);
-    const lostResponseReplay = await client.query(`SELECT public.bind_interview_plan_session_tx('${userA}','${groundedPlan}','${groundedHash}','${replayBridgeId}','${groundedSession}') AS result;`);
+    const groundedSetup = JSON.stringify({ candidateRole: 'Authoritative Role', interviewPlan: { ...JSON.parse(groundedPlanPayload), authority: { planId: groundedPlan, planHash: groundedHash, bridgeId: replayBridgeId, snapshotId: oneTimeBridgeSnapshot } } }).replaceAll("'", "''");
+    const firstBind = await client.query(`SELECT public.create_and_bind_interview_session_tx('${userA}','${groundedPlan}','${groundedHash}','${replayBridgeId}','${groundedSetup}'::jsonb) AS result;`);
+    const groundedSession = firstBind.rows[0].result.sessionId;
+    const lostResponseReplay = await client.query(`SELECT public.create_and_bind_interview_session_tx('${userA}','${groundedPlan}','${groundedHash}','${replayBridgeId}','${groundedSetup}'::jsonb) AS result;`);
     // The binding calls exercise service-role RPC authority. Direct table reads
     // below are owner-only harness observations, not service-role product access.
     await resetRole(client);
     const usageAfterReplay = await client.query(`SELECT used FROM public.usage_ledger WHERE user_id='${userA}' AND usage_date=current_date AND feature='interview_question';`);
     const boundBridge = await client.query(`SELECT status,target_session_id FROM public.career_context_bridges WHERE id='${replayBridgeId}';`);
-    if (firstBind.rows[0].result.replayed || firstBind.rows[0].result.usageCharged || !lostResponseReplay.rows[0].result.replayed || lostResponseReplay.rows[0].result.usageCharged || Number(usageAfterReplay.rows[0].used)!==20 || boundBridge.rows[0].status!=='consumed' || boundBridge.rows[0].target_session_id!==groundedSession) throw new Error('Final-quota grounded lifecycle or response-loss replay changed usage, bridge, or canonical session');
+    const canonicalSessionCount = await client.query(`SELECT count(*) FROM public.interview_sessions WHERE user_id='${userA}' AND id='${groundedSession}';`);
+    if (firstBind.rows[0].result.replayed || !lostResponseReplay.rows[0].result.replayed || lostResponseReplay.rows[0].result.sessionId!==groundedSession || Number(usageAfterReplay.rows[0].used)!==20 || boundBridge.rows[0].status!=='consumed' || boundBridge.rows[0].target_session_id!==groundedSession || Number(canonicalSessionCount.rows[0].count)!==1) throw new Error('Atomic grounded session response-loss replay changed usage, bridge, or canonical session');
 
     // 41. protected_account_deletion
     await setRole(client, 'service_role');

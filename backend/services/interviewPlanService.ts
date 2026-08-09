@@ -76,6 +76,44 @@ export async function finalizeAuthoritativePlanGeneration(userId: string, snapsh
   return mapPlanRow(data);
 }
 
+/** Keep provider execution authority alive; a stale worker can never renew a successor's lease. */
+export async function renewAuthoritativePlanGeneration(userId: string, bridgeId: string, reservationToken: string): Promise<void> {
+  if (!supabaseAdmin) throw persistenceError('Authoritative plan persistence unavailable');
+  const { data, error } = await supabaseAdmin.rpc('renew_interview_plan_generation_tx', {
+    p_user_id: userId, p_bridge_id: bridgeId, p_reservation_token: reservationToken,
+  });
+  if (error || !data?.renewed) throw persistenceError(`Authoritative plan generation lease was lost: ${error?.message || 'stale reservation'}`);
+}
+
+export async function withAuthoritativePlanLease<T>(
+  userId: string,
+  bridgeId: string,
+  reservationToken: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  let leaseFailure: Error | undefined;
+  let heartbeatRunning = false;
+  const heartbeat = async () => {
+    if (heartbeatRunning || leaseFailure) return;
+    heartbeatRunning = true;
+    try { await renewAuthoritativePlanGeneration(userId, bridgeId, reservationToken); }
+    catch (error: any) { leaseFailure = error; }
+    finally { heartbeatRunning = false; }
+  };
+  await heartbeat();
+  if (leaseFailure) throw leaseFailure;
+  const timer = setInterval(() => { void heartbeat(); }, 5_000);
+  timer.unref?.();
+  try {
+    const result = await work();
+    await heartbeat();
+    if (leaseFailure) throw leaseFailure;
+    return result;
+  } finally {
+    clearInterval(timer);
+  }
+}
+
 /** Release only the caller's still-current failed lease and refund its one charge. */
 export async function releaseAuthoritativePlanGeneration(userId: string, bridgeId: string, reservationToken: string): Promise<void> {
   if (!supabaseAdmin) throw persistenceError('Authoritative plan persistence unavailable');
@@ -115,10 +153,12 @@ export async function getAuthoritativePlan(userId: string, planId: string): Prom
   return { id: data.id, hash: data.plan_hash, version: data.plan_version, snapshotId: data.snapshot_id, bridgeId: data.bridge_id, plan, sessionId: data.session_id || undefined };
 }
 
-export async function bindAuthoritativePlan(userId: string, planId: string, planHash: string, bridgeId: string, sessionId: string): Promise<void> {
+export async function createAndBindAuthoritativeSession(userId: string, planId: string, planHash: string, bridgeId: string, setup: unknown): Promise<{ sessionId: string; replayed: boolean }> {
   if (!supabaseAdmin) throw persistenceError('Authoritative plan persistence unavailable');
-  const { error } = await supabaseAdmin.rpc('bind_interview_plan_session_tx', {
-    p_user_id: userId, p_plan_id: planId, p_plan_hash: planHash, p_bridge_id: bridgeId, p_session_id: sessionId,
+  const { data, error } = await supabaseAdmin.rpc('create_and_bind_interview_session_tx', {
+    p_user_id: userId, p_plan_id: planId, p_plan_hash: planHash, p_bridge_id: bridgeId, p_setup: setup,
   });
   if (error) throw Object.assign(new Error(error.message), { status: 409 });
+  if (!data?.sessionId) throw persistenceError('Atomic grounded session creation returned no canonical session');
+  return { sessionId: data.sessionId, replayed: Boolean(data.replayed) };
 }

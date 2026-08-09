@@ -3,7 +3,7 @@ import { verifyAuthToken } from '../middleware/authMiddleware';
 import { consumeUsage, enforceUsageLimit } from '../services/usageService';
 import * as aiService from '../services/aiService';
 import * as sessionService from '../services/sessionService';
-import { bindAuthoritativePlan, finalizeAuthoritativePlanGeneration, getAuthoritativePlan, getAuthoritativePlanForBridge, hashInterviewPlan, releaseAuthoritativePlanGeneration, reserveAuthoritativePlanGeneration, waitForAuthoritativePlan } from '../services/interviewPlanService';
+import { createAndBindAuthoritativeSession, finalizeAuthoritativePlanGeneration, getAuthoritativePlan, getAuthoritativePlanForBridge, hashInterviewPlan, releaseAuthoritativePlanGeneration, reserveAuthoritativePlanGeneration, waitForAuthoritativePlan, withAuthoritativePlanLease } from '../services/interviewPlanService';
 import { 
   InterviewSessionStartRequestSchema, 
   AnswerSubmissionRequestSchema,
@@ -105,7 +105,10 @@ router.post('/plan', async (req: any, res) => {
       const usage = await consumeUsage(userId, 'interview_question');
       if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached' });
     }
-    const result = InterviewPlanSchema.parse(await aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText, selectedPanelIDs, groundingSnapshot));
+    const generate = () => aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText, selectedPanelIDs, groundingSnapshot);
+    const result = InterviewPlanSchema.parse(planReservationToken && userId && bridgeId
+      ? await withAuthoritativePlanLease(userId, bridgeId, planReservationToken, generate)
+      : await generate());
     if (snapshotId && bridgeId && userId) {
       const artifact = await finalizeAuthoritativePlanGeneration(userId, snapshotId, bridgeId, planReservationToken!, result);
       failedReservation = undefined;
@@ -204,34 +207,13 @@ router.post('/sessions', async (req: any, res) => {
       if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached', feature: 'interview_question', used: usage.used, limit: usage.limit });
     }
 
-    // 1. Create real Interview session first
-    const result = await sessionService.createSession(userId, authoritativeContext);
-    const actualInterviewSessionId = result.sessionId;
-
-    if (!actualInterviewSessionId) {
-      return res.status(500).json({ error: 'Failed to create Interview session' });
-    }
-
-    // 2. Consume module bridge using actual returned Interview session ID
     if (bridgeSessionId) {
-      try {
-        if (!authoritativePlan) throw new Error('Authoritative plan was not loaded');
-        await bindAuthoritativePlan(userId, authoritativePlan.id, authoritativePlan.hash, bridgeSessionId, actualInterviewSessionId);
-      } catch (bridgeErr: any) {
-        console.error('[Interview] Bridge consumption failed for session creation:', bridgeErr.message);
-        try {
-          await sessionService.deleteSession(userId, actualInterviewSessionId);
-        } catch (cleanupErr: any) {
-          console.error('[Interview] Orphan session cleanup failed:', cleanupErr.message);
-          return res.status(503).json({ error: `Grounding bridge consumption failed and session cleanup could not be verified: ${cleanupErr.message}` });
-        }
-        const status = bridgeErr.message?.includes('daily_limit_reached') ? 429 : (bridgeErr.status || 409);
-        return res.status(status).json({
-          error: `Grounding bridge consumption failed: ${bridgeErr.message}. Practice session cancelled.`
-        });
-      }
+      if (!authoritativePlan) throw new Error('Authoritative plan was not loaded');
+      const bound = await createAndBindAuthoritativeSession(userId, authoritativePlan.id, authoritativePlan.hash, bridgeSessionId, authoritativeContext);
+      const questions = authoritativeContext.interviewPlan.questionSet;
+      return res.json({ sessionId: bound.sessionId, openingMessage: `Welcome to your MockMate interview. Reasoning mode: '${authoritativeContext.controls.reasoningMode}'. We will cover ${questions.length} core scenarios through adaptive exploration.`, firstQuestion: questions[0], questionIndex: 0, totalQuestions: questions.length });
     }
-
+    const result = await sessionService.createSession(userId, authoritativeContext);
     res.json(result);
   } catch (error: any) {
     console.error('[Interview] create session error:', error);

@@ -169,6 +169,10 @@ function createAuthoritativePersistenceDouble() {
         tables.interview_plan_generation_reservations.splice(reservationIndex, 1);
         return { data: row, error: null };
       }
+      if (name === 'renew_interview_plan_generation_tx') {
+        const reservation = tables.interview_plan_generation_reservations.find(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id && row.reservation_token === args.p_reservation_token);
+        return { data: reservation ? { renewed: true } : { renewed: false, stale: true }, error: null };
+      }
       if (name === 'release_interview_plan_generation_tx') {
         const reservationIndex = tables.interview_plan_generation_reservations.findIndex(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id && row.reservation_token === args.p_reservation_token);
         if (reservationIndex < 0) return { data: { released: false }, error: null };
@@ -177,13 +181,14 @@ function createAuthoritativePersistenceDouble() {
         if (usage) usage.used = Math.max(usage.used - 1, 0);
         return { data: { released: true, refunded: true }, error: null };
       }
-      if (name === 'bind_interview_plan_session_tx') {
+      if (name === 'create_and_bind_interview_session_tx') {
         const plan = tables.interview_generated_plans.find(row => row.id === args.p_plan_id && row.user_id === args.p_user_id);
         const bridge = tables.career_context_bridges.find(row => row.id === args.p_bridge_id && row.user_id === args.p_user_id);
-        const session = tables.interview_sessions.find(row => row.id === args.p_session_id && row.user_id === args.p_user_id);
-        if (!plan || !bridge || !session || plan.plan_hash !== args.p_plan_hash || plan.bridge_id !== bridge.id || plan.snapshot_id !== bridge.snapshot_id) return { data: null, error: { message: 'Plan lineage mismatch' } };
-        if (plan.session_id) return plan.session_id === session.id ? { data: { sessionId: session.id, replayed: true }, error: null } : { data: null, error: { message: 'Plan already consumed' } };
+        if (!plan || !bridge || plan.plan_hash !== args.p_plan_hash || plan.bridge_id !== bridge.id || plan.snapshot_id !== bridge.snapshot_id) return { data: null, error: { message: 'Plan lineage mismatch' } };
+        if (plan.session_id) return { data: { sessionId: plan.session_id, replayed: true }, error: null };
         if (bridge.status !== 'confirmed') return { data: null, error: { message: 'Bridge already consumed' } };
+        const session = { id: '77777777-7777-4777-8777-777777777777', user_id: args.p_user_id, role: plan.plan_payload.jdInsights.role, setup: args.p_setup, status: 'active' };
+        tables.interview_sessions.push(session);
         Object.assign(plan, { session_id: session.id, consumed_at: now });
         Object.assign(bridge, { status: 'consumed', target_session_id: session.id, consumed_at: now, updated_at: now });
         return { data: { sessionId: session.id, replayed: false }, error: null };
@@ -420,7 +425,7 @@ try {
   }
 
   const rpcNames = authoritative.calls.map(call => call.name);
-  for (const required of ['create_grounding_snapshot_tx', 'create_module_bridge_tx', 'bind_interview_plan_session_tx']) {
+  for (const required of ['create_grounding_snapshot_tx', 'create_module_bridge_tx', 'create_and_bind_interview_session_tx']) {
     if (!rpcNames.includes(required)) throw new Error(`Positive journey bypassed authoritative RPC ${required}`);
   }
 
