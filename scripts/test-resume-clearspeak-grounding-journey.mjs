@@ -71,6 +71,9 @@ try {
         <script>
           const pendingLaunch = { snapshotClientRequestId: 'stable-snapshot-request', bridgeClientRequestId: 'stable-bridge-request' };
           let clearSpeakGrounding = { bridgeId: 'one-time-resume-bridge' };
+          // Mounted-session identity is immutable even after App clears its
+          // one-time launch handoff at canonical completion.
+          const mountedSessionGrounding = clearSpeakGrounding;
           window.launchAttempts = [];
           document.querySelector('#confirm-grounded-launch').addEventListener('click', () => {
             window.launchAttempts.push({ ...pendingLaunch });
@@ -81,6 +84,7 @@ try {
           document.querySelector('#grounded-score-card').addEventListener('score-received', () => {
             clearSpeakGrounding = null;
             window.clearSpeakGrounding = clearSpeakGrounding;
+            window.mountedSessionWasGrounded = Boolean(mountedSessionGrounding);
           });
           document.querySelector('#accept-interview-bridge').addEventListener('click', () => {
             clearSpeakGrounding = null;
@@ -118,6 +122,12 @@ try {
   });
   if (await page.evaluate(() => window.returnedSpeakGrounding) !== null) {
     throw new Error('Immediate navigation after canonical scoring retained consumed Resume grounding');
+  }
+  if (await page.evaluate(() => window.mountedSessionWasGrounded) !== true) {
+    throw new Error('Parent handoff cleanup erased the mounted session grounding identity');
+  }
+  if (await page.locator('#grounded-score-card #cs-retry').count()) {
+    throw new Error('Parent handoff cleanup re-enabled grounded low-score retry');
   }
   await page.click('#accept-interview-bridge');
   if (await page.evaluate(() => window.clearSpeakGrounding) !== null) {

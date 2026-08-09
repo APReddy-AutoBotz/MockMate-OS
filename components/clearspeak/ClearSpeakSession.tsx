@@ -130,6 +130,13 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const recorder = useAudioRecorder();
 
+  // The application-level grounding prop is a one-time launch handoff. App
+  // clears it as soon as the canonical score completes so a later ClearSpeak
+  // launch is ordinary, but that parent cleanup must not rewrite the identity
+  // of this still-mounted session. Capture the authoritative selectors once
+  // for this session's entire lifetime.
+  const sessionGrounding = useRef(grounding).current;
+
   // Per-session analytics ID — generated once on mount, not persisted
   const sessionId = useRef(newSessionId()).current;
   // Track whether retry was used in this session (for feedback widget Q3)
@@ -142,17 +149,17 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   // Notify the application here rather than waiting for a later score-card action,
   // since global navigation may unmount this component immediately afterward.
   useEffect(() => {
-    const bridgeId = grounding?.bridge.id;
+    const bridgeId = sessionGrounding?.bridge.id;
     if (state.phase !== 'score_card' || !bridgeId || notifiedGroundedCompletion.current === bridgeId) return;
     notifiedGroundedCompletion.current = bridgeId;
     onCanonicalGroundedScore?.(bridgeId);
-  }, [grounding?.bridge.id, onCanonicalGroundedScore, state.phase]);
+  }, [sessionGrounding?.bridge.id, onCanonicalGroundedScore, state.phase]);
 
   // ── Load content on mount ──
   useEffect(() => {
     (async () => {
       try {
-        const content = await generateSession(recentTopics, sessionAttemptLength, grounding);
+        const content = await generateSession(recentTopics, sessionAttemptLength, sessionGrounding);
         dispatch({ type: 'CONTENT_LOADED', content });
         // ANALYTICS: session_started — fires after content is available
         void csTrack('session_started', sessionId, {
@@ -178,7 +185,7 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
         audioBlob: recorder.audioBlob,
         content: state.content,
         retryAttempted: isRetryAttempt,
-        grounding,
+        grounding: sessionGrounding,
         clientSessionId: sessionId,
       });
 
@@ -318,7 +325,7 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
     // A grounded score is already the canonical completion of its one-time
     // artifact/bridge. Reusing it with new audio would only replay the old
     // result, so keep retry available exclusively for ordinary practice.
-    const shouldRetry = !grounding && state.score.composite < 70 && !state.isRetry;
+    const shouldRetry = !sessionGrounding && state.score.composite < 70 && !state.isRetry;
     return (
       <ScoreCard
         score={state.score}
