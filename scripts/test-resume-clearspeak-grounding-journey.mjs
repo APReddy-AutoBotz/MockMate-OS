@@ -76,6 +76,12 @@ try {
             window.launchAttempts.push({ ...pendingLaunch });
             document.querySelector('#grounded-score-card').hidden = false;
           });
+          // Canonical SCORE_RECEIVED clears the application handoff immediately;
+          // no Continue or bridge action is required.
+          document.querySelector('#grounded-score-card').addEventListener('score-received', () => {
+            clearSpeakGrounding = null;
+            window.clearSpeakGrounding = clearSpeakGrounding;
+          });
           document.querySelector('#accept-interview-bridge').addEventListener('click', () => {
             clearSpeakGrounding = null;
             window.clearSpeakGrounding = clearSpeakGrounding;
@@ -102,6 +108,16 @@ try {
   }
   if (await page.locator('#ordinary-score-card #cs-retry').count() !== 1) {
     throw new Error('Ordinary ungrounded low-score retry behavior was not preserved');
+  }
+  await page.locator('#grounded-score-card').evaluate(node => node.dispatchEvent(new Event('score-received')));
+  // Model immediate header navigation away and a later return to Speak. The
+  // ordinary launch must no longer carry the consumed Resume bridge.
+  await page.evaluate(() => {
+    window.navigatedAwayImmediately = true;
+    window.returnedSpeakGrounding = window.clearSpeakGrounding;
+  });
+  if (await page.evaluate(() => window.returnedSpeakGrounding) !== null) {
+    throw new Error('Immediate navigation after canonical scoring retained consumed Resume grounding');
   }
   await page.click('#accept-interview-bridge');
   if (await page.evaluate(() => window.clearSpeakGrounding) !== null) {

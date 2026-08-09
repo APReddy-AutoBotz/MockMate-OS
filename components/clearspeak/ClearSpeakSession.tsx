@@ -35,6 +35,8 @@ interface ClearSpeakSessionProps {
   onInterviewBridge: (payload: ClearSpeakBridgePayload) => void;
   /** Called when session fully completes */
   onComplete: (topicTag?: string) => void;
+  /** Called once when a grounded score reaches canonical completion (including replay). */
+  onCanonicalGroundedScore?: (bridgeId: string) => void;
   /** Recent topic tags to enforce content freshness */
   recentTopics?: string[];
   /** Number of sessions attempted in the current UI session to toggle hybrid generation */
@@ -119,6 +121,7 @@ const INITIAL_STATE: SessionState = {
 const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   onInterviewBridge,
   onComplete,
+  onCanonicalGroundedScore,
   recentTopics = [],
   sessionAttemptLength = 0,
   profileRole,
@@ -133,6 +136,17 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   const [retryUsed, setRetryUsed] = useState(false);
   // Track whether feedback widget is showing
   const [showFeedback, setShowFeedback] = useState(false);
+  const notifiedGroundedCompletion = useRef<string | null>(null);
+
+  // SCORE_RECEIVED is the canonical completion boundary for a grounded attempt.
+  // Notify the application here rather than waiting for a later score-card action,
+  // since global navigation may unmount this component immediately afterward.
+  useEffect(() => {
+    const bridgeId = grounding?.bridge.id;
+    if (state.phase !== 'score_card' || !bridgeId || notifiedGroundedCompletion.current === bridgeId) return;
+    notifiedGroundedCompletion.current = bridgeId;
+    onCanonicalGroundedScore?.(bridgeId);
+  }, [grounding?.bridge.id, onCanonicalGroundedScore, state.phase]);
 
   // ── Load content on mount ──
   useEffect(() => {

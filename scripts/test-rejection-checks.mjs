@@ -116,7 +116,9 @@ assertMatch(/Using your selected experience[\s\S]*groundingReferences: grounded/
 const launchReplayMigration = 'supabase/migrations/20260809050000_p0_3_launch_replay_record_authority.sql';
 assertMatch(/career_context_snapshot_items[\s\S]*source_module=v_source_module[\s\S]*source_record_id=p_source_record_id/, launchReplayMigration, 'bridge source record validated against locked snapshot membership');
 assertMatch(/snapshotClientRequestId[\s\S]*bridgeClientRequestId[\s\S]*clientRequestId: snapshotClientRequestId[\s\S]*clientRequestId: bridgeClientRequestId/, 'App.tsx', 'grounded launch request IDs survive response-loss retries');
-assertMatch(/handleInterviewBridge[\s\S]*onGroundingConsumed[\s\S]*onInterviewBridge\(payload\)/, 'components/clearspeak/ClearSpeakDashboard.tsx', 'bridge acceptance clears consumed Resume grounding');
+assertMatch(/handleInterviewBridge[\s\S]*notifyGroundingConsumed[\s\S]*onInterviewBridge\(payload\)/, 'components/clearspeak/ClearSpeakDashboard.tsx', 'bridge acceptance clears consumed Resume grounding');
 assertMatch(/const shouldRetry = !grounding/, 'components/clearspeak/ClearSpeakSession.tsx', 'completed grounded score cannot offer a misleading audio retry');
+assertMatch(/state\.phase !== 'score_card'[\s\S]*onCanonicalGroundedScore/, 'components/clearspeak/ClearSpeakSession.tsx', 'grounding clears at canonical score completion');
+assertMatch(/notifiedGroundingBridge[\s\S]*notifyGroundingConsumed/, 'components/clearspeak/ClearSpeakDashboard.tsx', 'canonical grounding completion notifies parent once');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');
