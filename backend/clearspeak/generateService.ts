@@ -43,9 +43,9 @@ const circuitBreaker = {
 
 const passageCache = new Map<string, { content: ClearSpeakSessionContent; ts: number }>();
 
-function getCacheKey(p: ClearSpeakProfile, recentTopics: string[]): string {
+function getCacheKey(p: ClearSpeakProfile, recentTopics: string[], groundingContext = ''): string {
   const t = recentTopics.join(',').slice(-30);
-  return `${p.role}:${p.level}:${p.goal.slice(0, 20)}:${t}`;
+  return `${p.role}:${p.level}:${p.goal.slice(0, 20)}:${t}:${groundingContext}`;
 }
 
 // ─── Gemini Adapter (Primary) ─────────────────────────────────────────────────
@@ -183,12 +183,13 @@ async function generateWithResilience(
   profile: ClearSpeakProfile,
   systemPrompt: string,
   recentTopics: string[]
+  , groundingContext = ''
 ): Promise<ClearSpeakSessionContent | null> {
   const primaryId = process.env.AI_GEN_PRIMARY || 'gemini';
   const fallbackId = process.env.AI_GEN_FALLBACK || 'groq';
 
   // 1. Caching Check
-  const cacheKey = getCacheKey(profile, recentTopics);
+  const cacheKey = getCacheKey(profile, recentTopics, groundingContext);
   const cached = passageCache.get(cacheKey);
   const ttl = parseInt(process.env.AI_GEN_CACHE_TTL_SEC || '300') * 1000;
   if (cached && Date.now() - cached.ts < ttl) {
@@ -258,15 +259,26 @@ export async function generateSession(
   profile: ClearSpeakProfile,
   recentTopics: string[] = [],
   sessionAttemptLength: number = 0,
+  grounding?: { summary: string; vocabulary: string[] },
 ): Promise<ClearSpeakSessionContent> {
   // FAST PATH: Force exactly 5 hardcoded passages per session to protect API usage
   if (sessionAttemptLength < 5) {
-    return selectFallback(profile.level, recentTopics);
+    const fallback = selectFallback(profile.level, recentTopics);
+    if (!grounding?.summary) return fallback;
+    const words = grounding.summary.trim().split(/\s+/).slice(0, 55);
+    return {
+      ...fallback,
+      topicTag: `Resume practice: ${grounding.vocabulary.slice(0, 2).join(' / ') || profile.role}`,
+      keyVocab: [...new Set([...grounding.vocabulary, ...fallback.keyVocab])].slice(0, 3),
+      passageData: [{ text: words.join(' '), isStressed: false, pauseType: 'stop' }],
+      repeatPhrase: words.slice(0, 12).join(' '),
+      retrySentence: words.slice(0, 18).join(' '),
+    };
   }
 
-  const systemPrompt = buildSystemPrompt(profile, recentTopics);
+  const systemPrompt = buildSystemPrompt(profile, recentTopics, grounding?.summary);
 
-  const result = await generateWithResilience(profile, systemPrompt, recentTopics);
+  const result = await generateWithResilience(profile, systemPrompt, recentTopics, grounding?.summary);
   if (result) return result;
 
   // Final Safety net: Use static bank if both providers fail

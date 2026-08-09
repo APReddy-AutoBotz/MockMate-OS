@@ -94,5 +94,11 @@ assertMatch(/create_clearspeak_grounded_session_tx[\s\S]*status='consumed'[\s\S]
 assertMatch(/sourceModules\.includes\(i\.source\.module\)/, 'App.tsx', 'frontend source-module filtering');
 assertMatch(/conflictSelections/, 'components/GroundingPreviewModal.tsx', 'explicit grounding conflict selection');
 assertNoMatch(/Failed to create grounding snapshot\/bridge:[\s\S]{0,180}onSkip\(\)/, 'App.tsx', 'silent ungrounded fallback after grounded confirmation');
+const replayArtifactMigration = 'supabase/migrations/20260809020000_p0_3_replay_grounding_artifact_authority.sql';
+assertMatch(/reserve_clearspeak_grounded_score_tx[\s\S]*content_hash<>p_submitted_hash/, replayArtifactMigration, 'generated-content integrity reservation before scoring');
+assertMatch(/status='completed'[\s\S]*canonical_response/, replayArtifactMigration, 'canonical grounded score replay');
+assertMatch(/groundingInput[\s\S]*generateSession\(profile, recentTopics, sessionAttemptLength, groundingInput\)/, 'backend/clearspeak/routes.ts', 'snapshot-grounded ClearSpeak generation');
+assertNoMatch(/evaluateBridgeTrigger\(userId, prior\.score, false\)/, 'backend/clearspeak/routes.ts', 'hard-coded replay bridge trigger');
+assertMatch(/getAuthoritativePlanForBridge[\s\S]*consumeUsage\(userId, 'interview_question'\)/, 'backend/routes/interviewRoutes.ts', 'Interview plan replay before usage charging');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

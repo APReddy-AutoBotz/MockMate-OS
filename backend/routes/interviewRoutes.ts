@@ -41,7 +41,7 @@ router.post('/calibrate', enforceUsageLimit('interview_question'), async (req: a
   }
 });
 
-router.post('/plan', enforceUsageLimit('interview_question'), async (req: any, res) => {
+router.post('/plan', async (req: any, res) => {
   try {
     const parsed = PlanGenerationRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -90,6 +90,8 @@ router.post('/plan', enforceUsageLimit('interview_question'), async (req: any, r
         return res.json(InterviewPlanSchema.parse({ ...existing.plan, authority: { planId: existing.id, planHash: existing.hash, version: existing.version, snapshotId, bridgeId } }));
       }
     }
+    const usage = await consumeUsage(userId, 'interview_question');
+    if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached' });
     const result = InterviewPlanSchema.parse(await aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText, selectedPanelIDs, groundingSnapshot));
     if (snapshotId && bridgeId && userId) {
       const artifact = await persistAuthoritativePlan(userId, snapshotId, bridgeId, result);
