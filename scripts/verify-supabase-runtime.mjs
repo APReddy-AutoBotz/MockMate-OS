@@ -284,7 +284,7 @@ async function runRuntimeVerification() {
     await setRole(client, 'service_role');
     await client.query(`
       INSERT INTO public.career_context_items (id, user_id, item_kind, canonical_key, label, value, source_module, source_record_id, source_path, source_revision, source_hash, provenance, item_status, sensitivity)
-      VALUES ('${serviceItemId}', '${userA}', 'skill', 'resume.skill_service', 'Service Skill', '{"type":"text","text":"Node.js"}'::jsonb, 'resume', 'resA', 'skills', 'v1', 'hashService', 'user_confirmed', 'active', 'standard');
+      VALUES ('${serviceItemId}', '${userA}', 'skill', 'resume.skill_service', 'Service Skill', '{"type":"text","text":"Node.js"}'::jsonb, 'resume', 'resA', 'skills', 'v1', 'hashService', 'inferred', 'pending_confirmation', 'standard');
     `);
     await resetRole(client);
     passedCount++;
@@ -295,7 +295,7 @@ async function runRuntimeVerification() {
       await setRole(client, 'service_role');
       await client.query(`
         INSERT INTO public.career_context_items (user_id, item_kind, canonical_key, label, value, source_module, source_record_id, source_path, source_revision, source_hash, provenance, item_status, sensitivity)
-        VALUES ('${userA}', 'skill', 'resume.skill_service', 'Service Skill', '{"type":"text","text":"Node.js"}'::jsonb, 'resume', 'resA', 'skills', 'v1', 'hashService', 'user_confirmed', 'active', 'standard');
+        VALUES ('${userA}', 'skill', 'resume.skill_service', 'Service Skill', '{"type":"text","text":"Node.js"}'::jsonb, 'resume', 'resA', 'skills', 'v1', 'hashService', 'inferred', 'pending_confirmation', 'standard');
       `);
       throw new Error('Duplicate source identity insert succeeded!');
     } catch (e) {
@@ -305,33 +305,35 @@ async function runRuntimeVerification() {
       console.log('  ✓ Assertion 10. source_identity_replay passed');
     }
 
-    // 11. atomic_context_version_increment
+    // 11. first_confirmation_increments_once
     await setRole(client, 'service_role');
     const mut1 = await client.query(`
       SELECT public.mutate_career_context_item(
         p_user_id => '${userA}'::uuid,
         p_item_id => '${serviceItemId}'::uuid,
-        p_decision => 'confirm'::text
+        p_decision => 'confirm'::text,
+        p_expected_context_version => 1::bigint
       ) AS res;
     `);
     await resetRole(client);
-    if (mut1.rows[0].res.contextVersion !== 2) throw new Error('Context version did not increment atomically!');
+    if (mut1.rows[0].res.contextVersion !== 2 || mut1.rows[0].res.replayed || mut1.rows[0].res.item.item_status !== 'active' || mut1.rows[0].res.item.provenance !== 'user_confirmed') throw new Error('First confirmation did not commit exactly once!');
     passedCount++;
-    console.log('  ✓ Assertion 11. atomic_context_version_increment passed');
+    console.log('  ✓ Assertion 11. first_confirmation_increments_once passed');
 
-    // 12. concurrent_version_increments
+    // 12. exact_confirmation_replay_is_noop
     await setRole(client, 'service_role');
     const mut2 = await client.query(`
       SELECT public.mutate_career_context_item(
         p_user_id => '${userA}'::uuid,
         p_item_id => '${serviceItemId}'::uuid,
-        p_decision => 'confirm'::text
+        p_decision => 'confirm'::text,
+        p_expected_context_version => 1::bigint
       ) AS res;
     `);
     await resetRole(client);
-    if (mut2.rows[0].res.contextVersion !== 3) throw new Error('Sequential version increment failed!');
+    if (mut2.rows[0].res.contextVersion !== 2 || !mut2.rows[0].res.replayed || mut2.rows[0].res.item.id !== serviceItemId) throw new Error('Exact confirmation replay changed canonical state or version!');
     passedCount++;
-    console.log('  ✓ Assertion 12. concurrent_version_increments passed');
+    console.log('  ✓ Assertion 12. exact_confirmation_replay_is_noop passed');
 
     // 13. stale_version_rejection
     try {
@@ -341,13 +343,15 @@ async function runRuntimeVerification() {
           p_user_id => '${userA}'::uuid,
           p_item_id => '${serviceItemId}'::uuid,
           p_decision => 'confirm'::text,
-          p_expected_context_version => 1::bigint
+          p_expected_context_version => 0::bigint
         );
       `);
       throw new Error('Stale expected_context_version succeeded!');
     } catch (e) {
       await resetRole(client);
       if (!e.message.includes('Stale or mismatched')) throw e;
+      const versionAfterStale = await client.query(`SELECT context_version FROM public.career_context_state WHERE user_id='${userA}';`);
+      if (Number(versionAfterStale.rows[0].context_version) !== 2) throw new Error('Stale confirmation changed context version!');
       passedCount++;
       console.log('  ✓ Assertion 13. stale_version_rejection passed');
     }
@@ -694,9 +698,10 @@ async function runRuntimeVerification() {
     const versionBeforeConfirmation = await client.query(`SELECT context_version FROM public.career_context_state WHERE user_id='${userA}';`);
     await client.query(`SELECT public.mutate_career_context_item('${userA}','${successor.rows[0].id}','confirm',NULL,${Number(versionBeforeConfirmation.rows[0].context_version)});`);
     const confirmationReplay = await client.query(`SELECT public.mutate_career_context_item('${userA}','${successor.rows[0].id}','confirm',NULL,${Number(versionBeforeConfirmation.rows[0].context_version)});`);
+    const versionAfterConfirmationReplay = await client.query(`SELECT context_version FROM public.career_context_state WHERE user_id='${userA}';`);
     const lineageAuthority = await client.query(`SELECT source_hash,item_status FROM public.career_context_items WHERE id IN ('${originalAId}','${successor.rows[0].id}') ORDER BY source_hash;`);
     const historicalMembership = await client.query(`SELECT count(*) FROM public.career_context_snapshot_items WHERE snapshot_id='${lineageSnapshot}' AND item_id='${originalAId}';`);
-    if (!confirmationReplay.rows[0].mutate_career_context_item.replayed || lineageAuthority.rows.find(r=>r.source_hash==='same-a')?.item_status !== 'superseded' || lineageAuthority.rows.find(r=>r.source_hash==='changed-a')?.item_status !== 'active' || Number(historicalMembership.rows[0].count)!==1) throw new Error('Successor confirmation did not transfer exact lineage authority idempotently');
+    if (!confirmationReplay.rows[0].mutate_career_context_item.replayed || Number(versionAfterConfirmationReplay.rows[0].context_version) !== Number(versionBeforeConfirmation.rows[0].context_version)+1 || lineageAuthority.rows.find(r=>r.source_hash==='same-a')?.item_status !== 'superseded' || lineageAuthority.rows.find(r=>r.source_hash==='changed-a')?.item_status !== 'active' || Number(historicalMembership.rows[0].count)!==1) throw new Error('Successor confirmation did not transfer exact lineage authority exactly once');
 
     const groundedSession = '12121212-1212-4212-8212-121212121212';
     const groundedPlan = '13131313-1313-4313-8313-131313131313';
