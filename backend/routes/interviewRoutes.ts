@@ -3,7 +3,7 @@ import { verifyAuthToken } from '../middleware/authMiddleware';
 import { consumeUsage, enforceUsageLimit } from '../services/usageService';
 import * as aiService from '../services/aiService';
 import * as sessionService from '../services/sessionService';
-import { bindAuthoritativePlan, finalizeAuthoritativePlanGeneration, getAuthoritativePlan, getAuthoritativePlanForBridge, hashInterviewPlan, reserveAuthoritativePlanGeneration, waitForAuthoritativePlan } from '../services/interviewPlanService';
+import { bindAuthoritativePlan, finalizeAuthoritativePlanGeneration, getAuthoritativePlan, getAuthoritativePlanForBridge, hashInterviewPlan, releaseAuthoritativePlanGeneration, reserveAuthoritativePlanGeneration, waitForAuthoritativePlan } from '../services/interviewPlanService';
 import { 
   InterviewSessionStartRequestSchema, 
   AnswerSubmissionRequestSchema,
@@ -42,6 +42,7 @@ router.post('/calibrate', enforceUsageLimit('interview_question'), async (req: a
 });
 
 router.post('/plan', async (req: any, res) => {
+  let failedReservation: { userId: string; bridgeId: string; token: string } | undefined;
   try {
     const parsed = PlanGenerationRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -50,6 +51,7 @@ router.post('/plan', async (req: any, res) => {
     const { role, intent, controls, jdText, resumeText, selectedPanelIDs, snapshotId, bridgeId } = parsed.data;
     const userId = req.user?.uid;
     let groundingSnapshot: CareerContextSnapshot | undefined = undefined;
+    let planReservationToken: string | undefined;
 
     if (Boolean(snapshotId) !== Boolean(bridgeId)) {
       return res.status(422).json({ error: 'Grounded plan generation requires both snapshotId and bridgeId.' });
@@ -96,13 +98,17 @@ router.post('/plan', async (req: any, res) => {
         const artifact = reservation.artifact || await waitForAuthoritativePlan(userId, bridgeId);
         return res.json(InterviewPlanSchema.parse({ ...artifact.plan, authority: { planId: artifact.id, planHash: artifact.hash, version: artifact.version, snapshotId, bridgeId } }));
       }
+      planReservationToken = reservation.reservationToken;
+      if (!planReservationToken) throw Object.assign(new Error('Authoritative plan reservation token was not returned'), { status: 503 });
+      failedReservation = { userId, bridgeId, token: planReservationToken };
     } else {
       const usage = await consumeUsage(userId, 'interview_question');
       if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached' });
     }
     const result = InterviewPlanSchema.parse(await aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText, selectedPanelIDs, groundingSnapshot));
     if (snapshotId && bridgeId && userId) {
-      const artifact = await finalizeAuthoritativePlanGeneration(userId, snapshotId, bridgeId, result);
+      const artifact = await finalizeAuthoritativePlanGeneration(userId, snapshotId, bridgeId, planReservationToken!, result);
+      failedReservation = undefined;
       return res.json(InterviewPlanSchema.parse({
         ...artifact.plan,
         authority: { planId: artifact.id, planHash: artifact.hash, version: artifact.version, snapshotId, bridgeId },
@@ -110,6 +116,13 @@ router.post('/plan', async (req: any, res) => {
     }
     res.json(result);
   } catch (error: any) {
+    if (failedReservation) {
+      try {
+        await releaseAuthoritativePlanGeneration(failedReservation.userId, failedReservation.bridgeId, failedReservation.token);
+      } catch (releaseError: any) {
+        console.error('[Interview] failed plan reservation release:', releaseError.message);
+      }
+    }
     console.error('[Interview] plan error:', error);
     const status = error.status || 500;
     res.status(status).json({ error: error.message || 'Could not create interview practice plan' });
@@ -184,8 +197,8 @@ router.post('/sessions', async (req: any, res) => {
     }
 
     // Ungrounded sessions retain their explicit contract and ordinary usage charge.
-    // Grounded usage is charged atomically by bind_interview_plan_session_tx, after
-    // canonical replay detection, so response-loss recovery never spends twice.
+    // Grounded usage was charged exactly once by the authoritative plan reservation.
+    // Binding consumes the already-authorized lineage without another quota check.
     if (!bridgeSessionId) {
       const usage = await consumeUsage(userId, 'interview_question');
       if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached', feature: 'interview_question', used: usage.used, limit: usage.limit });

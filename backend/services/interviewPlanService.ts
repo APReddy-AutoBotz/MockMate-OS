@@ -12,7 +12,7 @@ export type AuthoritativePlan = {
   sessionId?: string;
 };
 
-export type PlanGenerationReservation = { generate: boolean; artifact?: AuthoritativePlan };
+export type PlanGenerationReservation = { generate: boolean; reservationToken?: string; artifact?: AuthoritativePlan };
 
 const persistenceError = (message: string) => Object.assign(new Error(message), { status: 503 });
 
@@ -62,18 +62,27 @@ export async function reserveAuthoritativePlanGeneration(userId: string, snapsho
     throw Object.assign(new Error(error.message), { status });
   }
   if (data?.plan) return { generate: false, artifact: mapPlanRow(data.plan) };
-  return { generate: Boolean(data?.generate) };
+  return { generate: Boolean(data?.generate), reservationToken: data?.reservationToken };
 }
 
-export async function finalizeAuthoritativePlanGeneration(userId: string, snapshotId: string, bridgeId: string, plan: InterviewPlan): Promise<AuthoritativePlan> {
+export async function finalizeAuthoritativePlanGeneration(userId: string, snapshotId: string, bridgeId: string, reservationToken: string, plan: InterviewPlan): Promise<AuthoritativePlan> {
   if (!supabaseAdmin) throw persistenceError('Authoritative plan persistence unavailable');
   const parsed = jsonSafeInterviewPlan(plan);
   const { data, error } = await supabaseAdmin.rpc('finalize_interview_plan_generation_tx', {
-    p_user_id: userId, p_snapshot_id: snapshotId, p_bridge_id: bridgeId,
+    p_user_id: userId, p_snapshot_id: snapshotId, p_bridge_id: bridgeId, p_reservation_token: reservationToken,
     p_plan_hash: hashInterviewPlan(parsed), p_plan_payload: parsed,
   });
   if (error || !data) throw persistenceError(`Failed to finalize authoritative interview plan: ${error?.message || 'missing result'}`);
   return mapPlanRow(data);
+}
+
+/** Release only the caller's still-current failed lease and refund its one charge. */
+export async function releaseAuthoritativePlanGeneration(userId: string, bridgeId: string, reservationToken: string): Promise<void> {
+  if (!supabaseAdmin) throw persistenceError('Authoritative plan persistence unavailable');
+  const { error } = await supabaseAdmin.rpc('release_interview_plan_generation_tx', {
+    p_user_id: userId, p_bridge_id: bridgeId, p_reservation_token: reservationToken,
+  });
+  if (error) throw persistenceError(`Failed to release authoritative interview plan reservation: ${error.message}`);
 }
 
 export async function waitForAuthoritativePlan(userId: string, bridgeId: string, timeoutMs = 15000): Promise<AuthoritativePlan> {

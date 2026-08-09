@@ -128,5 +128,11 @@ assertMatch(/reserve_interview_plan_generation_tx[\s\S]*pg_advisory_xact_lock[\s
 assertMatch(/require_nonempty_grounding_snapshot/, groundingFinalMigration, 'database rejects empty grounded snapshots');
 assertNoMatch(/bridges\/:bridgeId\/consume/, 'backend/routes/careerContextRoutes.ts', 'browser-directed generic bridge consumption');
 assertMatch(/providerQuestionsAreGrounded[\s\S]*buildDeterministicInterviewPlan/, 'backend/services/aiService.ts', 'provider questions must materially use cited facts or fall back grounded');
+const interviewUsageMigration = 'supabase/migrations/20260809070000_p0_3_interview_plan_usage_convergence.sql';
+assertMatch(/lease_expires_at[\s\S]*reservation_token[\s\S]*usage_charged/, interviewUsageMigration, 'grounded plan reservations have bounded token-scoped takeover authority');
+assertMatch(/release_interview_plan_generation_tx[\s\S]*GREATEST\(used-1,0\)/, interviewUsageMigration, 'failed elected plan worker releases and refunds exactly once');
+assertMatch(/bind_interview_plan_session_tx[\s\S]*usageCharged',false/, interviewUsageMigration, 'grounded session binding consumes authority without a second usage charge');
+assertNoMatch(/bind_interview_plan_session_tx[\s\S]*UPDATE public\.usage_ledger/, interviewUsageMigration, 'grounded session binding usage mutation');
+assertMatch(/failedReservation[\s\S]*releaseAuthoritativePlanGeneration/, 'backend/routes/interviewRoutes.ts', 'all pre-finalization plan failures release the elected reservation');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

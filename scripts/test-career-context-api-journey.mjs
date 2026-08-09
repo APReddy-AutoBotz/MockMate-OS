@@ -46,6 +46,7 @@ function createAuthoritativePersistenceDouble() {
     interview_sessions: [], interview_turns: [],
     interview_generated_plans: [],
     interview_plan_generation_reservations: [],
+    usage_ledger: [],
     resume_reviews: [], clearspeak_profiles: [], clearspeak_sessions: [],
   };
   const calls = [];
@@ -151,15 +152,30 @@ function createAuthoritativePersistenceDouble() {
         if (existingPlan) return { data: { generate: false, plan: existingPlan }, error: null };
         const existingReservation = tables.interview_plan_generation_reservations.find(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id);
         if (existingReservation) return { data: { generate: false }, error: null };
-        tables.interview_plan_generation_reservations.push({ user_id: args.p_user_id, bridge_id: args.p_bridge_id, snapshot_id: args.p_snapshot_id });
-        return { data: { generate: true }, error: null };
+        const reservationToken = '99999999-9999-4999-8999-999999999999';
+        tables.interview_plan_generation_reservations.push({ user_id: args.p_user_id, bridge_id: args.p_bridge_id, snapshot_id: args.p_snapshot_id, reservation_token: reservationToken });
+        const usage = tables.usage_ledger.find(row => row.user_id === args.p_user_id && row.feature === 'interview_question');
+        if (usage) usage.used += 1;
+        else tables.usage_ledger.push({ user_id: args.p_user_id, feature: 'interview_question', used: 1 });
+        return { data: { generate: true, reservationToken, usageCharged: true }, error: null };
       }
       if (name === 'finalize_interview_plan_generation_tx') {
         const existing = tables.interview_generated_plans.find(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id);
         if (existing) return { data: existing, error: null };
+        const reservationIndex = tables.interview_plan_generation_reservations.findIndex(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id && row.reservation_token === args.p_reservation_token);
+        if (reservationIndex < 0) return { data: null, error: { message: 'stale reservation token' } };
         const row = { id: '66666666-6666-4666-8666-666666666666', user_id: args.p_user_id, snapshot_id: args.p_snapshot_id, bridge_id: args.p_bridge_id, plan_hash: args.p_plan_hash, plan_version: 1, plan_payload: args.p_plan_payload };
         tables.interview_generated_plans.push(row);
+        tables.interview_plan_generation_reservations.splice(reservationIndex, 1);
         return { data: row, error: null };
+      }
+      if (name === 'release_interview_plan_generation_tx') {
+        const reservationIndex = tables.interview_plan_generation_reservations.findIndex(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id && row.reservation_token === args.p_reservation_token);
+        if (reservationIndex < 0) return { data: { released: false }, error: null };
+        tables.interview_plan_generation_reservations.splice(reservationIndex, 1);
+        const usage = tables.usage_ledger.find(row => row.user_id === args.p_user_id && row.feature === 'interview_question');
+        if (usage) usage.used = Math.max(usage.used - 1, 0);
+        return { data: { released: true, refunded: true }, error: null };
       }
       if (name === 'bind_interview_plan_session_tx') {
         const plan = tables.interview_generated_plans.find(row => row.id === args.p_plan_id && row.user_id === args.p_user_id);
@@ -336,7 +352,7 @@ try {
   const authoritativePlan = await planResponse.json();
   const concurrentAuthoritativePlan = await concurrentPlanResponse.json();
   const finalizeCalls = authoritative.calls.filter(call => call.name === 'finalize_interview_plan_generation_tx');
-  if (authoritativePlan.authority.planId !== concurrentAuthoritativePlan.authority.planId || authoritative.tables.interview_generated_plans.length !== 1 || finalizeCalls.length !== 1 || authoritative.tables.interview_plan_generation_reservations.length !== 1) {
+  if (authoritativePlan.authority.planId !== concurrentAuthoritativePlan.authority.planId || authoritative.tables.interview_generated_plans.length !== 1 || finalizeCalls.length !== 1 || authoritative.tables.interview_plan_generation_reservations.length !== 0 || authoritative.tables.usage_ledger[0]?.used !== 1) {
     throw new Error('Concurrent grounded plan creation did not converge on one charged provider worker and canonical artifact');
   }
   const tamperedPlan = structuredClone(authoritativePlan);
