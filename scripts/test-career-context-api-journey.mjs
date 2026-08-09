@@ -45,6 +45,7 @@ function createAuthoritativePersistenceDouble() {
     career_context_bridges: [],
     interview_sessions: [], interview_turns: [],
     interview_generated_plans: [],
+    interview_plan_generation_reservations: [],
     resume_reviews: [], clearspeak_profiles: [], clearspeak_sessions: [],
   };
   const calls = [];
@@ -144,6 +145,21 @@ function createAuthoritativePersistenceDouble() {
           created_at: now, updated_at: now, confirmed_at: now,
         });
         return { data: { bridgeId }, error: null };
+      }
+      if (name === 'reserve_interview_plan_generation_tx') {
+        const existingPlan = tables.interview_generated_plans.find(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id);
+        if (existingPlan) return { data: { generate: false, plan: existingPlan }, error: null };
+        const existingReservation = tables.interview_plan_generation_reservations.find(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id);
+        if (existingReservation) return { data: { generate: false }, error: null };
+        tables.interview_plan_generation_reservations.push({ user_id: args.p_user_id, bridge_id: args.p_bridge_id, snapshot_id: args.p_snapshot_id });
+        return { data: { generate: true }, error: null };
+      }
+      if (name === 'finalize_interview_plan_generation_tx') {
+        const existing = tables.interview_generated_plans.find(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id);
+        if (existing) return { data: existing, error: null };
+        const row = { id: '66666666-6666-4666-8666-666666666666', user_id: args.p_user_id, snapshot_id: args.p_snapshot_id, bridge_id: args.p_bridge_id, plan_hash: args.p_plan_hash, plan_version: 1, plan_payload: args.p_plan_payload };
+        tables.interview_generated_plans.push(row);
+        return { data: row, error: null };
       }
       if (name === 'bind_interview_plan_session_tx') {
         const plan = tables.interview_generated_plans.find(row => row.id === args.p_plan_id && row.user_id === args.p_user_id);
@@ -301,8 +317,8 @@ try {
     headers: headersUserB,
     body: JSON.stringify({ targetSessionId: '77777777-7777-4777-8777-777777777777' }),
   });
-  if (resConsumeB.status !== 404 && resConsumeB.status !== 403) {
-    throw new Error(`Expected 404/403 for cross-user bridge consumption, got ${resConsumeB.status}`);
+  if (resConsumeB.status !== 404) {
+    throw new Error(`Expected generic bridge consumption to be unavailable, got ${resConsumeB.status}`);
   }
 
   // 8. Starting a real API session reconstructs question references from the
@@ -312,11 +328,17 @@ try {
     includeCoding: false, timePerQuestion: '90s', deliveryMode: 'exam',
     reasoningMode: 'classic_behavioral', sourceMode: 'job_description',
   };
-  const planResponse = await fetch(`${baseUrl}/api/interview/plan`, { method: 'POST', headers: headersUserA, body: JSON.stringify({
+  const planRequest = () => fetch(`${baseUrl}/api/interview/plan`, { method: 'POST', headers: headersUserA, body: JSON.stringify({
     role: 'Backend Engineer', intent: 'Practice grounded examples', controls, selectedPanelIDs: ['p1'], snapshotId, bridgeId,
   }) });
-  if (planResponse.status !== 200) throw new Error(`Expected authoritative plan, got ${planResponse.status}: ${await planResponse.text()}`);
+  const [planResponse, concurrentPlanResponse] = await Promise.all([planRequest(), planRequest()]);
+  if (planResponse.status !== 200 || concurrentPlanResponse.status !== 200) throw new Error(`Expected concurrent authoritative plans, got ${planResponse.status}/${concurrentPlanResponse.status}`);
   const authoritativePlan = await planResponse.json();
+  const concurrentAuthoritativePlan = await concurrentPlanResponse.json();
+  const finalizeCalls = authoritative.calls.filter(call => call.name === 'finalize_interview_plan_generation_tx');
+  if (authoritativePlan.authority.planId !== concurrentAuthoritativePlan.authority.planId || authoritative.tables.interview_generated_plans.length !== 1 || finalizeCalls.length !== 1 || authoritative.tables.interview_plan_generation_reservations.length !== 1) {
+    throw new Error('Concurrent grounded plan creation did not converge on one charged provider worker and canonical artifact');
+  }
   const tamperedPlan = structuredClone(authoritativePlan);
   tamperedPlan.questionSet[0].question = 'Browser fabricated question';
   const tampered = await fetch(`${baseUrl}/api/interview/sessions`, { method: 'POST', headers: headersUserA, body: JSON.stringify({ context: {
@@ -372,11 +394,11 @@ try {
     throw new Error('Exact response-loss replay did not return one canonical session');
   }
 
-  // Direct bridge replay remains rejected and cannot overwrite target_session_id.
+  // Generic browser-directed consumption is unavailable, even to the owner.
   const replay = await fetch(`${baseUrl}/api/career-context/bridges/${bridgeId}/consume`, {
     method: 'POST', headers: headersUserA, body: JSON.stringify({ targetSessionId: session.sessionId }),
   });
-  if (replay.status !== 409) throw new Error(`Expected 409 for consumed-bridge replay, got ${replay.status}`);
+  if (replay.status !== 404) throw new Error(`Expected 404 for generic bridge consumption, got ${replay.status}`);
   if (authoritative.tables.career_context_bridges[0].target_session_id !== session.sessionId) {
     throw new Error('Consumed bridge target session was overwritten');
   }

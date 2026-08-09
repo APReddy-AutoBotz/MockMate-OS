@@ -458,32 +458,10 @@ describe('Career Context API Routes (P0-3)', () => {
     expect(res2.body.bridge.id).toBe(res1.body.bridge.id);
   });
 
-  it('6. POST /api/career-context/bridges/:bridgeId/consume consumes bridge session and prevents re-use', async () => {
-    mockBridges.push({
-      id: BRIDGE_ID,
-      user_id: TEST_USER_ID,
-      source_module: 'resume',
-      target_module: 'interview',
-      purpose: 'resume_to_interview',
-      snapshot_id: SNAPSHOT_ID,
-      status: 'confirmed',
-      client_request_id: 'req_to_consume',
-      created_at: new Date().toISOString(),
-    });
-
+  it('6. denies browser-directed generic bridge consumption', async () => {
     const res1 = await request(app)
       .post(`/api/career-context/bridges/${BRIDGE_ID}/consume`)
       .send({ targetSessionId: '99999999-9999-9999-9999-999999999999' });
-
-    expect(res1.status).toBe(200);
-    expect(res1.body.bridge.status).toBe('consumed');
-
-    // Second consumption attempt must fail
-    const res2 = await request(app)
-      .post(`/api/career-context/bridges/${BRIDGE_ID}/consume`)
-      .send({ targetSessionId: '10001000-1000-1000-1000-100010001000' });
-
-    expect(res2.status).toBe(409);
-    expect(res2.body.error).toContain('already been consumed');
+    expect(res1.status).toBe(404);
   });
 });

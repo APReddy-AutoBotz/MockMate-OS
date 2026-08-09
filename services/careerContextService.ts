@@ -12,9 +12,6 @@ import {
   ModuleBridgeCreateRequest,
   ModuleBridgeCreateResponse,
   ModuleBridgeCreateResponseSchema,
-  ModuleBridgeConsumeRequest,
-  ModuleBridgeConsumeResponse,
-  ModuleBridgeConsumeResponseSchema,
 } from 'mockmate-shared';
 
 export async function fetchCareerContext(): Promise<CareerContextGetResponse> {
@@ -61,17 +58,6 @@ export async function createModuleBridge(
   return apiClient.post(
     '/api/career-context/bridges',
     ModuleBridgeCreateResponseSchema,
-    request
-  );
-}
-
-export async function consumeModuleBridge(
-  bridgeId: string,
-  request: ModuleBridgeConsumeRequest
-): Promise<ModuleBridgeConsumeResponse> {
-  return apiClient.post(
-    `/api/career-context/bridges/${bridgeId}/consume`,
-    ModuleBridgeConsumeResponseSchema,
     request
   );
 }

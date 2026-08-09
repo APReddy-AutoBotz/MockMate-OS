@@ -394,6 +394,14 @@ export const generateInterviewPlan = async (
       return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs, groundingSnapshot);
     }
 
+    const providerQuestionsAreGrounded = !groundingSnapshot?.groundingReferences?.length || rawParsed.questionSet.every((q, idx) => {
+      const fact = sanitizePromptText(groundingSnapshot.groundingReferences![idx % groundingSnapshot.groundingReferences!.length].exactExcerpt || '');
+      return fact.length > 0 && q.question.toLocaleLowerCase().includes(fact.toLocaleLowerCase());
+    });
+    if (!providerQuestionsAreGrounded) {
+      return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs, groundingSnapshot);
+    }
+
     const normalizedQuestions = rawParsed.questionSet.map((q, idx) => {
       let focus = (q.personaFocus || '').trim();
       if (!safePanelIDs.includes(focus)) {

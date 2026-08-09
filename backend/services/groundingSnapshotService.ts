@@ -39,6 +39,9 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
     expectedContextVersion,
     clientRequestId = crypto.randomUUID()
   } = input;
+  if (includedItemIds.length === 0) {
+    throw Object.assign(new Error('Grounded snapshots require at least one authoritative included fact'), { status: 422 });
+  }
   const acknowledgedAt = new Date().toISOString();
 
   const requestHashForVersion = (contextVersion: number) => crypto.createHash('sha256').update(JSON.stringify({

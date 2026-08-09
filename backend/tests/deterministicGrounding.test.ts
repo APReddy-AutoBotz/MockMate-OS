@@ -1,4 +1,5 @@
-import { buildDeterministicInterviewPlan } from '../services/aiService';
+import * as aiService from '../services/aiService';
+const { buildDeterministicInterviewPlan } = aiService;
 
 describe('deterministic interview grounding', () => {
   const controls: any = {
@@ -28,5 +29,28 @@ describe('deterministic interview grounding', () => {
     expect(() => buildDeterministicInterviewPlan('Engineer', 'Practice', controls, ['p1'], {
       groundingReferences: [{ exactExcerpt: null, label: 'Generic label' }], projection: {},
     } as any)).toThrow('requires authoritative snapshot facts');
+  });
+
+  it('rejects generic provider questions and uses the fact-grounded deterministic fallback', async () => {
+    const reference = {
+      contextItemId: '11111111-1111-4111-8111-111111111111', sourceModule: 'resume',
+      sourceRecordId: 'resume-a', sourcePath: 'projects.0', label: 'Atlas migration',
+      exactExcerpt: 'Led the Atlas migration and reduced processing time by 30 percent.',
+      purpose: 'resume_to_interview',
+    };
+    const provider = jest.spyOn(aiService, 'callWithFallback').mockResolvedValueOnce({
+      text: JSON.stringify({ meta: { intent: 'Practice' }, jdInsights: { role: 'Engineer' }, questionSet: [{ question: 'Tell me about yourself.', personaFocus: 'p1' }] }),
+      provider: 'test', model: 'test', fallbackTriggered: false,
+    });
+    const plan = await aiService.generateInterviewPlan('Engineer', 'Practice', controls, undefined, undefined, ['p1'], {
+      id: '22222222-2222-4222-8222-222222222222', userId: '33333333-3333-4333-8333-333333333333',
+      purpose: 'resume_to_interview', contextVersion: 1, projection: {}, conflicts: [],
+      consent: { scope: 'one_time', purpose: 'resume_to_interview', includedItemIds: [reference.contextItemId], excludedItemIds: [], sourceModules: ['resume'], acknowledgedAt: new Date().toISOString() },
+      sourceModules: ['resume'], groundingReferences: [reference], createdAt: new Date().toISOString(),
+    } as any);
+    expect(plan.meta.planSource).toBe('deterministic_fallback');
+    expect(plan.questionSet[0].question).toContain(reference.exactExcerpt);
+    expect(plan.questionSet[0].groundingReferences).toEqual([reference]);
+    provider.mockRestore();
   });
 });

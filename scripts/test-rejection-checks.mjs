@@ -123,5 +123,10 @@ assertMatch(/state\.phase !== 'score_card'[\s\S]*onCanonicalGroundedScore/, 'com
 assertMatch(/notifiedGroundingBridge[\s\S]*notifyGroundingConsumed/, 'components/clearspeak/ClearSpeakDashboard.tsx', 'canonical grounding completion notifies parent once');
 assertMatch(/isValid && result\.content[\s\S]*applyAuthoritativeGrounding\(result\.content, profile, grounding\)[\s\S]*passageCache\.set\(cacheKey, \{ content: acceptedContent/, 'backend/clearspeak/generateService.ts', 'schema-valid provider content is deterministically grounded before cache/persistence');
 assertMatch(/applyAuthoritativeGrounding\(fallback, profile, grounding\)/, 'backend/clearspeak/generateService.ts', 'provider and safety fallback share the authoritative grounding transformation');
+const groundingFinalMigration = 'supabase/migrations/20260809060000_p0_3_grounding_authority_final_closure.sql';
+assertMatch(/reserve_interview_plan_generation_tx[\s\S]*pg_advisory_xact_lock[\s\S]*usage_ledger/, groundingFinalMigration, 'grounded plan generation serialized before one usage charge');
+assertMatch(/require_nonempty_grounding_snapshot/, groundingFinalMigration, 'database rejects empty grounded snapshots');
+assertNoMatch(/bridges\/:bridgeId\/consume/, 'backend/routes/careerContextRoutes.ts', 'browser-directed generic bridge consumption');
+assertMatch(/providerQuestionsAreGrounded[\s\S]*buildDeterministicInterviewPlan/, 'backend/services/aiService.ts', 'provider questions must materially use cited facts or fall back grounded');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

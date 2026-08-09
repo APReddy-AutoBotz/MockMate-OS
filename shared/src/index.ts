@@ -403,7 +403,7 @@ export type GroundingPurpose = z.infer<typeof GroundingPurposeSchema>;
 export const GroundingConsentSchema = z.object({
   scope: z.enum(['one_time', 'future_sessions']),
   purpose: GroundingPurposeSchema,
-  includedItemIds: z.array(z.string().uuid()),
+  includedItemIds: z.array(z.string().uuid()).min(1, 'Grounded snapshots require at least one authoritative fact'),
   excludedItemIds: z.array(z.string().uuid()),
   sourceModules: z.array(CareerContextModuleSchema),
   acknowledgedAt: z.string().datetime(),
@@ -567,7 +567,7 @@ export type CareerContextItemDecisionResponse = z.infer<typeof CareerContextItem
 
 export const GroundingSnapshotCreateRequestSchema = z.object({
   purpose: GroundingPurposeSchema,
-  includedItemIds: z.array(z.string().uuid()),
+  includedItemIds: z.array(z.string().uuid()).min(1, 'Grounded snapshots require at least one authoritative fact'),
   excludedItemIds: z.array(z.string().uuid()).default([]),
   conflictSelections: z.record(z.string(), z.string()).default({}),
   consent: GroundingConsentSchema,

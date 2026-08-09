@@ -8,7 +8,7 @@ import {
   saveCareerContextItemDrafts
 } from '../services/careerContextService';
 import { createGroundingSnapshot, getSnapshotById } from '../services/groundingSnapshotService';
-import { createModuleBridgeSession, consumeModuleBridgeSession } from '../services/moduleBridgeService';
+import { createModuleBridgeSession } from '../services/moduleBridgeService';
 import { projectCareerContext } from '../services/careerContextProjectionService';
 import { buildResumeContextItems } from '../services/careerContextAdapters/resumeContextAdapter';
 import { buildClearSpeakContextItems } from '../services/careerContextAdapters/clearSpeakContextAdapter';
@@ -20,7 +20,6 @@ import {
   CareerContextItemDecisionRequestSchema,
   GroundingSnapshotCreateRequestSchema,
   ModuleBridgeCreateRequestSchema,
-  ModuleBridgeConsumeRequestSchema,
   CareerContextPreferenceRequestSchema
 } from 'mockmate-shared';
 
@@ -326,31 +325,6 @@ router.post('/bridges', async (req, res) => {
     console.error('[CareerContextRoutes] POST /bridges error:', err);
     const status = err.status || 500;
     return res.status(status).json({ error: err.message || 'Failed to create bridge' });
-  }
-});
-
-// POST /api/career-context/bridges/:bridgeId/consume
-router.post('/bridges/:bridgeId/consume', async (req, res) => {
-  try {
-    const userId = (req as any).user?.uid;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const { bridgeId } = req.params;
-    const parseResult = ModuleBridgeConsumeRequestSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(422).json({ error: 'Invalid bridge consume payload', details: parseResult.error.issues });
-    }
-
-    const { targetSessionId } = parseResult.data;
-
-    const bridge = await consumeModuleBridgeSession(userId, bridgeId, targetSessionId);
-    const snapshot = await getSnapshotById(userId, bridge.snapshotId);
-    const projection = snapshot ? snapshot.projection : null;
-    return res.json({ success: true, bridge, projection });
-  } catch (err: any) {
-    console.error('[CareerContextRoutes] POST /bridges/consume error:', err);
-    const status = err.status || 500;
-    return res.status(status).json({ error: err.message || 'Failed to consume bridge' });
   }
 });
 

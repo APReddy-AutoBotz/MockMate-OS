@@ -125,6 +125,7 @@ describe('P0-3 Career Context and Grounding Shared Contracts', () => {
       acknowledgedAt: '2026-07-30T10:00:00Z'
     };
     expect(GroundingConsentSchema.safeParse(validConsent).success).toBe(true);
+    expect(GroundingConsentSchema.safeParse({ ...validConsent, includedItemIds: [] }).success).toBe(false);
 
     const invalidConsent = {
       ...validConsent,

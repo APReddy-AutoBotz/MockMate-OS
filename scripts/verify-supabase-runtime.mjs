@@ -231,7 +231,7 @@ async function runRuntimeVerification() {
     await setRole(client, 'service_role');
     await client.query(`
       INSERT INTO public.career_context_snapshots (id, user_id, purpose, context_version, projection, consent, source_modules, client_request_id, request_hash)
-      VALUES ('${snapB}', '${userB}', 'resume_to_interview', 1, '{"role":"B"}'::jsonb, '{"scope":"one_time"}'::jsonb, ARRAY['resume'], 'reqB', 'hashB')
+      VALUES ('${snapB}', '${userB}', 'resume_to_interview', 1, '{"role":"B"}'::jsonb, '{"scope":"one_time","includedItemIds":["22222222-2222-2222-2222-222222222222"]}'::jsonb, ARRAY['resume'], 'reqB', 'hashB')
       ON CONFLICT (id) DO NOTHING;
     `);
     await resetRole(client);
@@ -398,7 +398,7 @@ async function runRuntimeVerification() {
     await setRole(client, 'service_role');
     await client.query(`
       INSERT INTO public.career_context_snapshots (id, user_id, purpose, context_version, projection, consent, source_modules, client_request_id, request_hash)
-      VALUES ('${snapA}', '${userA}', 'resume_to_interview', 4, '{"role":"Engineer"}'::jsonb, '{"scope":"one_time"}'::jsonb, ARRAY['resume'], '${clientReqSnapA}', '${reqHashSnapA}');
+      VALUES ('${snapA}', '${userA}', 'resume_to_interview', 4, '{"role":"Engineer"}'::jsonb, '{"scope":"one_time","includedItemIds":["${serviceItemId}"]}'::jsonb, ARRAY['resume'], '${clientReqSnapA}', '${reqHashSnapA}');
     `);
     await resetRole(client);
     passedCount++;
@@ -533,7 +533,7 @@ async function runRuntimeVerification() {
       await setRole(client, 'service_role');
       await client.query(`
         INSERT INTO public.career_context_snapshots (user_id, purpose, context_version, projection, consent, source_modules, client_request_id, request_hash)
-        VALUES ('${userA}', 'resume_to_interview', 4, '{"role":"Different"}'::jsonb, '{"scope":"one_time"}'::jsonb, ARRAY['resume'], '${clientReqSnapA}', 'different_hash');
+        VALUES ('${userA}', 'resume_to_interview', 4, '{"role":"Different"}'::jsonb, '{"scope":"one_time","includedItemIds":["${serviceItemId}"]}'::jsonb, ARRAY['resume'], '${clientReqSnapA}', 'different_hash');
       `);
       throw new Error('Changed snapshot replay succeeded!');
     } catch (e) {
@@ -659,7 +659,7 @@ async function runRuntimeVerification() {
     const lineageSnapshot = 'abababab-abab-abab-abab-abababababab';
     await client.query(`
       INSERT INTO public.career_context_snapshots(id,user_id,purpose,context_version,projection,consent,source_modules,client_request_id,request_hash)
-      SELECT '${lineageSnapshot}','${userA}','manual_selection',context_version,'{"items":[{"label":"Shared skill A","exactExcerpt":"A"}]}'::jsonb,'{}'::jsonb,ARRAY['resume'],'lineage-history','lineage-history-hash'
+      SELECT '${lineageSnapshot}','${userA}','manual_selection',context_version,'{"items":[{"label":"Shared skill A","exactExcerpt":"A"}]}'::jsonb,'{"includedItemIds":["${originalAId}"]}'::jsonb,ARRAY['resume'],'lineage-history','lineage-history-hash'
       FROM public.career_context_state WHERE user_id='${userA}';
       INSERT INTO public.career_context_snapshot_items(snapshot_id,item_id,position) VALUES('${lineageSnapshot}','${originalAId}',0);
     `);
@@ -704,7 +704,7 @@ async function runRuntimeVerification() {
 
     // Concurrent identical snapshot creation must converge on one canonical row.
     const snapshotVersion = Number((await client.query(`SELECT context_version FROM public.career_context_state WHERE user_id='${userA}'`)).rows[0].context_version);
-    const snapshotSql = `SELECT public.create_grounding_snapshot_tx('${userA}','manual_selection','{}','[]','{"includedItemIds":[]}',ARRAY['resume'],ARRAY[]::uuid[],'concurrent-snapshot','concurrent-snapshot-hash',${snapshotVersion}) AS result`;
+    const snapshotSql = `SELECT public.create_grounding_snapshot_tx('${userA}','manual_selection','{}','[]','{"includedItemIds":["${originalAId}"]}',ARRAY['resume'],ARRAY['${originalAId}']::uuid[],'concurrent-snapshot','concurrent-snapshot-hash',${snapshotVersion}) AS result`;
     const snapshotClients = [new Client({ connectionString }), new Client({ connectionString })];
     await Promise.all(snapshotClients.map(async concurrentClient => {
       await concurrentClient.connect();
@@ -726,8 +726,8 @@ async function runRuntimeVerification() {
     const futureBridgeSnapshot = '15151515-1515-4515-8515-151515151515';
     await client.query(`
       INSERT INTO public.career_context_snapshots(id,user_id,purpose,context_version,projection,consent,source_modules,client_request_id,request_hash)
-      VALUES ('${oneTimeBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"one_time"}',ARRAY['resume'],'one-time-snapshot','one-time-snapshot-hash'),
-             ('${futureBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"future_sessions"}',ARRAY['resume'],'future-snapshot','future-snapshot-hash');
+      VALUES ('${oneTimeBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"one_time","includedItemIds":["${originalAId}"]}',ARRAY['resume'],'one-time-snapshot','one-time-snapshot-hash'),
+             ('${futureBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"future_sessions","includedItemIds":["${originalAId}"]}',ARRAY['resume'],'future-snapshot','future-snapshot-hash');
       INSERT INTO public.career_context_snapshot_items(snapshot_id,item_id,position)
       VALUES ('${oneTimeBridgeSnapshot}','${originalAId}',0),('${futureBridgeSnapshot}','${originalAId}',0);
     `);

@@ -3,7 +3,7 @@ import { verifyAuthToken } from '../middleware/authMiddleware';
 import { consumeUsage, enforceUsageLimit } from '../services/usageService';
 import * as aiService from '../services/aiService';
 import * as sessionService from '../services/sessionService';
-import { bindAuthoritativePlan, getAuthoritativePlan, getAuthoritativePlanForBridge, hashInterviewPlan, persistAuthoritativePlan } from '../services/interviewPlanService';
+import { bindAuthoritativePlan, finalizeAuthoritativePlanGeneration, getAuthoritativePlan, getAuthoritativePlanForBridge, hashInterviewPlan, reserveAuthoritativePlanGeneration, waitForAuthoritativePlan } from '../services/interviewPlanService';
 import { 
   InterviewSessionStartRequestSchema, 
   AnswerSubmissionRequestSchema,
@@ -90,11 +90,19 @@ router.post('/plan', async (req: any, res) => {
         return res.json(InterviewPlanSchema.parse({ ...existing.plan, authority: { planId: existing.id, planHash: existing.hash, version: existing.version, snapshotId, bridgeId } }));
       }
     }
-    const usage = await consumeUsage(userId, 'interview_question');
-    if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached' });
+    if (snapshotId && bridgeId && userId) {
+      const reservation = await reserveAuthoritativePlanGeneration(userId, snapshotId, bridgeId);
+      if (!reservation.generate) {
+        const artifact = reservation.artifact || await waitForAuthoritativePlan(userId, bridgeId);
+        return res.json(InterviewPlanSchema.parse({ ...artifact.plan, authority: { planId: artifact.id, planHash: artifact.hash, version: artifact.version, snapshotId, bridgeId } }));
+      }
+    } else {
+      const usage = await consumeUsage(userId, 'interview_question');
+      if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached' });
+    }
     const result = InterviewPlanSchema.parse(await aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText, selectedPanelIDs, groundingSnapshot));
     if (snapshotId && bridgeId && userId) {
-      const artifact = await persistAuthoritativePlan(userId, snapshotId, bridgeId, result);
+      const artifact = await finalizeAuthoritativePlanGeneration(userId, snapshotId, bridgeId, result);
       return res.json(InterviewPlanSchema.parse({
         ...artifact.plan,
         authority: { planId: artifact.id, planHash: artifact.hash, version: artifact.version, snapshotId, bridgeId },
