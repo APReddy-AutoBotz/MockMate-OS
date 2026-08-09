@@ -719,10 +719,12 @@ async function runRuntimeVerification() {
     await setRole(client, 'service_role');
     const firstBind = await client.query(`SELECT public.bind_interview_plan_session_tx('${userA}','${groundedPlan}','${groundedHash}','${replayBridgeId}','${groundedSession}') AS result;`);
     const lostResponseReplay = await client.query(`SELECT public.bind_interview_plan_session_tx('${userA}','${groundedPlan}','${groundedHash}','${replayBridgeId}','${groundedSession}') AS result;`);
+    // The binding calls exercise service-role RPC authority. Direct table reads
+    // below are owner-only harness observations, not service-role product access.
+    await resetRole(client);
     const usageAfterReplay = await client.query(`SELECT used FROM public.usage_ledger WHERE user_id='${userA}' AND usage_date=current_date AND feature='interview_question';`);
     const boundBridge = await client.query(`SELECT status,target_session_id FROM public.career_context_bridges WHERE id='${replayBridgeId}';`);
     if (firstBind.rows[0].result.replayed || !lostResponseReplay.rows[0].result.replayed || lostResponseReplay.rows[0].result.usageCharged || Number(usageAfterReplay.rows[0].used)!==20 || boundBridge.rows[0].status!=='consumed' || boundBridge.rows[0].target_session_id!==groundedSession) throw new Error('Final-quota response-loss replay changed usage, bridge, or canonical session');
-    await resetRole(client);
 
     // 41. protected_account_deletion
     await setRole(client, 'service_role');
