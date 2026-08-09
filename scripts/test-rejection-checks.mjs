@@ -78,5 +78,7 @@ assertMatch(/usageCharged',false/, 'supabase/migrations/20260808040000_p0_3_grou
 assertMatch(/item_status='superseded'/, 'supabase/migrations/20260808040000_p0_3_grounded_session_replay_authority.sql', 'atomic predecessor supersession');
 assertMatch(/Grounding snapshots and authoritative plan selectors require a valid bridgeSessionId/, 'backend/routes/interviewRoutes.ts', 'grounded bridge requirement');
 assertMatch(/candidateRole: authoritativePlan\.plan\.jdInsights\.role/, 'backend/routes/interviewRoutes.ts', 'authoritative grounded role');
+assertNoMatch(/'inferred',\s*'pending_confirmation'/g, 'scripts/verify-supabase-runtime.mjs', 'non-canonical pending provenance fixture');
+assertMatch(/'inferred_pending',\s*'pending_confirmation'/g, 'scripts/verify-supabase-runtime.mjs', 'canonical first-confirmation fixture provenance');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

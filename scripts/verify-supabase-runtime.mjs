@@ -284,7 +284,7 @@ async function runRuntimeVerification() {
     await setRole(client, 'service_role');
     await client.query(`
       INSERT INTO public.career_context_items (id, user_id, item_kind, canonical_key, label, value, source_module, source_record_id, source_path, source_revision, source_hash, provenance, item_status, sensitivity)
-      VALUES ('${serviceItemId}', '${userA}', 'skill', 'resume.skill_service', 'Service Skill', '{"type":"text","text":"Node.js"}'::jsonb, 'resume', 'resA', 'skills', 'v1', 'hashService', 'inferred', 'pending_confirmation', 'standard');
+      VALUES ('${serviceItemId}', '${userA}', 'skill', 'resume.skill_service', 'Service Skill', '{"type":"text","text":"Node.js"}'::jsonb, 'resume', 'resA', 'skills', 'v1', 'hashService', 'inferred_pending', 'pending_confirmation', 'standard');
     `);
     await resetRole(client);
     passedCount++;
@@ -295,7 +295,7 @@ async function runRuntimeVerification() {
       await setRole(client, 'service_role');
       await client.query(`
         INSERT INTO public.career_context_items (user_id, item_kind, canonical_key, label, value, source_module, source_record_id, source_path, source_revision, source_hash, provenance, item_status, sensitivity)
-        VALUES ('${userA}', 'skill', 'resume.skill_service', 'Service Skill', '{"type":"text","text":"Node.js"}'::jsonb, 'resume', 'resA', 'skills', 'v1', 'hashService', 'inferred', 'pending_confirmation', 'standard');
+        VALUES ('${userA}', 'skill', 'resume.skill_service', 'Service Skill', '{"type":"text","text":"Node.js"}'::jsonb, 'resume', 'resA', 'skills', 'v1', 'hashService', 'inferred_pending', 'pending_confirmation', 'standard');
       `);
       throw new Error('Duplicate source identity insert succeeded!');
     } catch (e) {
