@@ -8,6 +8,7 @@ import type { CareerContextSnapshot, ModuleBridgeSession } from 'mockmate-shared
 interface ClearSpeakDashboardProps {
   onInterviewBridge: (payload: ClearSpeakBridgePayload) => void;
   grounding?: { snapshot: CareerContextSnapshot; bridge: ModuleBridgeSession };
+  onGroundingConsumed?: (bridgeId: string) => void;
 }
 
 type DashboardView = 'loading' | 'onboarding' | 'dashboard' | 'session';
@@ -19,7 +20,7 @@ const clarityLabel = (score: number) => {
   return 'Keep practicing';
 };
 
-const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBridge, grounding }) => {
+const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBridge, grounding, onGroundingConsumed }) => {
   const [view, setView] = useState<DashboardView>('loading');
   const [profile, setProfile] = useState<ClearSpeakProfile | null>(null);
   const [progress, setProgress] = useState<ClearSpeakProgress | null>(null);
@@ -54,6 +55,7 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
       });
       setSessionAttemptLength(prev => prev + 1);
     } catch {}
+    if (grounding) onGroundingConsumed?.(grounding.bridge.id);
     setView('dashboard');
   };
 

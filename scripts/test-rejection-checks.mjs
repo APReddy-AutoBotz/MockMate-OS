@@ -108,5 +108,10 @@ assertMatch(/pg_advisory_xact_lock[\s\S]*client_request_id/, replayConvergenceMi
 assertMatch(/hashArtifactContent\(canonical\)/, 'backend/clearspeak/routes.ts', 'stable generated artifact content hash');
 assertMatch(/generationArtifactId[\s\S]*generationArtifactHash/, 'shared/src/index.ts', 'grounded ClearSpeak content selectors in shared schema');
 assertMatch(/All AI providers failed[\s\S]*grounding\?\.summary[\s\S]*passageData/, 'backend/clearspeak/generateService.ts', 'grounded final provider safety fallback');
+const finalAuthorityMigration = 'supabase/migrations/20260809040000_p0_3_snapshot_replay_bridge_provenance.sql';
+assertMatch(/sm\.module_name=p_source_module[\s\S]*VALUES\(v_bridge_id,p_user_id,v_source_module/, finalAuthorityMigration, 'bridge provenance derived from locked snapshot manifest');
+assertMatch(/existingRequest[\s\S]*requestHashForVersion\(originalVersion\)[\s\S]*return replayed/, 'backend/services/groundingSnapshotService.ts', 'snapshot replay before live context validation');
+assertMatch(/onGroundingConsumed[\s\S]*setClearSpeakGrounding/, 'App.tsx', 'consumed ClearSpeak grounding cleared after canonical completion');
+assertMatch(/Using your selected experience[\s\S]*groundingReferences: grounded/, 'backend/services/aiService.ts', 'deterministic questions use referenced snapshot facts');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

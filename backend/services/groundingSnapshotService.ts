@@ -41,14 +41,52 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
   } = input;
   const acknowledgedAt = new Date().toISOString();
 
+  const requestHashForVersion = (contextVersion: number) => crypto.createHash('sha256').update(JSON.stringify({
+    userId,
+    purpose,
+    contextVersion,
+    includedItemIds: [...includedItemIds].sort(),
+    excludedItemIds: [...excludedItemIds].sort(),
+    conflictSelections,
+    scope,
+    sourceModules: [...sourceModules].sort(),
+  })).digest('hex');
+
+  // Response-loss recovery precedes every check against mutable live state.
+  // The committed snapshot is immutable, so its original context version is
+  // the only version with which the original request can be authenticated.
+  const { data: existingRequest, error: existingRequestError } = await supabaseAdmin
+    .from('career_context_snapshots')
+    .select('id, context_version, request_hash')
+    .eq('user_id', userId)
+    .eq('client_request_id', clientRequestId)
+    .maybeSingle();
+  if (existingRequestError) {
+    throw Object.assign(new Error(`Failed to resolve snapshot request replay: ${existingRequestError.message}`), { status: 503 });
+  }
+  if (existingRequest) {
+    const originalVersion = Number(existingRequest.context_version);
+    const replayVersion = expectedContextVersion ?? originalVersion;
+    if (replayVersion !== originalVersion || requestHashForVersion(originalVersion) !== existingRequest.request_hash) {
+      throw Object.assign(new Error('Snapshot clientRequestId replay has materially different original request inputs'), { status: 409 });
+    }
+    const replayed = await getSnapshotById(userId, existingRequest.id);
+    if (!replayed) throw Object.assign(new Error('Canonical snapshot replay could not be loaded'), { status: 503 });
+    return replayed;
+  }
+
   // 1. Load active state version for user
   let contextVersion = 1;
   let personalizationEnabled = false;
-  const { data: stateData } = await supabaseAdmin
+  const { data: stateData, error: stateError } = await supabaseAdmin
     .from('career_context_state')
     .select('context_version, personalization_enabled')
     .eq('user_id', userId)
     .maybeSingle();
+
+  if (stateError) {
+    throw Object.assign(new Error(`Failed to load authoritative context version: ${stateError.message}`), { status: 503 });
+  }
 
   if (stateData) {
     contextVersion = Number(stateData.context_version);
@@ -62,20 +100,7 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
   }
 
   // 2. Canonical request hash for idempotency
-  const sortedInc = [...includedItemIds].sort();
-  const sortedExc = [...excludedItemIds].sort();
-  const sortedMods = [...sourceModules].sort();
-  const rawHashPayload = JSON.stringify({
-    userId,
-    purpose,
-    contextVersion,
-    includedItemIds: sortedInc,
-    excludedItemIds: sortedExc,
-    conflictSelections,
-    scope,
-    sourceModules: sortedMods,
-  });
-  const requestHash = crypto.createHash('sha256').update(rawHashPayload).digest('hex');
+  const requestHash = requestHashForVersion(contextVersion);
 
   // 3. Load specified items (verifying ownership, active status, and sensitivity)
   let items: CareerContextItem[] = [];

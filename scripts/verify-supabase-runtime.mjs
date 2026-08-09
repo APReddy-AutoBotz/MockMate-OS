@@ -735,6 +735,12 @@ async function runRuntimeVerification() {
     const replayBridgeRows = await client.query(`SELECT count(*) FROM public.career_context_bridges WHERE user_id='${userA}' AND client_request_id='bridge-response-loss';`);
     if (!replayBridgeAgain.rows[0].result.replayed || replayBridgeAgain.rows[0].result.bridgeId !== replayBridgeId || Number(replayBridgeRows.rows[0].count) !== 1) throw new Error('Nullable bridge exact replay did not reuse one row');
     try {
+      await client.query(`SELECT public.create_module_bridge_tx('${userA}','clearspeak','interview','resume_to_interview','${futureBridgeSnapshot}','resA','contradictory-provenance','contradictory-provenance-hash');`);
+      throw new Error('Bridge persisted provenance contradicting its authoritative snapshot');
+    } catch (e) {
+      if (!e.message.includes('contradicts authoritative snapshot provenance')) throw e;
+    }
+    try {
       await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resA','bridge-distinct','bridge-distinct-hash');`);
       throw new Error('One-time snapshot authorized a second distinct bridge');
     } catch (e) {

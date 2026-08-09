@@ -573,6 +573,13 @@ const App: React.FC = () => {
                             <ClearSpeakDashboard
                                 onInterviewBridge={handleInterviewBridge}
                                 grounding={clearSpeakGrounding || undefined}
+                                onGroundingConsumed={(bridgeId) => {
+                                    // A Resume -> ClearSpeak authorization is single use. Clear it
+                                    // only after the child has received the canonical completed
+                                    // score (including a response-loss replay), and never merely
+                                    // because the user navigated or generation started.
+                                    setClearSpeakGrounding(current => current?.bridge.id === bridgeId ? null : current);
+                                }}
                             />
                         </ErrorBoundary>
                     </motion.div>

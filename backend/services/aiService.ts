@@ -215,6 +215,14 @@ export const buildDeterministicInterviewPlan = (
   const isTechRole = /engineer|developer|software|coding|backend|frontend|fullstack|devops|data scientist|programmer/i.test(candidateRole);
 
   const authoritativeReferences = groundingSnapshot?.groundingReferences || [];
+  const usableGroundingReferences = authoritativeReferences.flatMap(reference => {
+    const fact = sanitizePromptText(reference.exactExcerpt || '');
+    return fact ? [{ reference, fact }] : [];
+  });
+
+  if (authoritativeReferences.length > 0 && usableGroundingReferences.length === 0) {
+    throw new Error('Grounded deterministic plan requires authoritative snapshot facts');
+  }
 
   const bank = [
     {
@@ -250,19 +258,21 @@ export const buildDeterministicInterviewPlan = (
     const template = bank[i % bank.length];
     const personaFocus = safePanelIDs[i % safePanelIDs.length];
 
-    let groundingReferences: any[] | undefined = undefined;
-    if (authoritativeReferences.length > 0) {
-      groundingReferences = [authoritativeReferences[i % authoritativeReferences.length]];
-    }
+    const grounded = usableGroundingReferences.length > 0
+      ? usableGroundingReferences[i % usableGroundingReferences.length]
+      : undefined;
+    const question = grounded
+      ? `Using your selected experience, "${grounded.fact}", ${template.question.charAt(0).toLowerCase()}${template.question.slice(1)}`
+      : template.question;
 
     return {
-      id: createDeterministicQuestionId(candidateRole, sessionControls.reasoningMode || 'classic_behavioral', template.question, i + 1),
+      id: createDeterministicQuestionId(candidateRole, sessionControls.reasoningMode || 'classic_behavioral', question, i + 1),
       phase: template.phase,
       difficulty: sessionControls.difficulty,
-      question: template.question,
+      question,
       expectedSignals: template.expectedSignals,
       personaFocus,
-      groundingReferences,
+      groundingReferences: grounded ? [grounded.reference] : undefined,
     };
   });
 
@@ -294,7 +304,7 @@ export const buildDeterministicInterviewPlan = (
   });
 };
 
-import { buildGroundingPromptSection } from './groundingPromptBuilder';
+import { buildGroundingPromptSection, sanitizePromptText } from './groundingPromptBuilder';
 import { CareerContextSnapshot } from 'mockmate-shared';
 
 export const generateInterviewPlan = async (
