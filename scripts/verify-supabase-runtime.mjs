@@ -746,7 +746,16 @@ async function runRuntimeVerification() {
       await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','foreign-or-arbitrary-record','contradictory-record','contradictory-record-hash');`);
       throw new Error('Bridge persisted a source record outside authoritative snapshot membership');
     } catch (e) {
-      if (!e.message.includes('source record does not belong to authoritative snapshot membership')) throw e;
+      if (!e.message.includes('source module or record does not belong to authoritative snapshot membership')) throw e;
+    }
+    await resetRole(client);
+    await client.query(`UPDATE public.career_context_snapshots SET source_modules=ARRAY['resume','clearspeak'] WHERE id='${futureBridgeSnapshot}';`);
+    await setRole(client, 'service_role');
+    try {
+      await client.query(`SELECT public.create_module_bridge_tx('${userA}','clearspeak','interview','resume_to_interview','${futureBridgeSnapshot}',NULL,'empty-module-bridge','empty-module-bridge-hash');`);
+      throw new Error('A declared source module with no selected snapshot members authorized a bridge');
+    } catch (e) {
+      if (!e.message.includes('source module or record does not belong to authoritative snapshot membership')) throw e;
     }
     try {
       await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resume-a','bridge-distinct','bridge-distinct-hash');`);
@@ -817,6 +826,17 @@ async function runRuntimeVerification() {
     const boundBridge = await client.query(`SELECT status,target_session_id FROM public.career_context_bridges WHERE id='${replayBridgeId}';`);
     const canonicalSessionCount = await client.query(`SELECT count(*) FROM public.interview_sessions WHERE user_id='${userA}' AND id='${groundedSession}';`);
     if (firstBind.rows[0].result.replayed || !lostResponseReplay.rows[0].result.replayed || lostResponseReplay.rows[0].result.sessionId!==groundedSession || Number(usageAfterReplay.rows[0].used)!==20 || boundBridge.rows[0].status!=='consumed' || boundBridge.rows[0].target_session_id!==groundedSession || Number(canonicalSessionCount.rows[0].count)!==1) throw new Error('Atomic grounded session response-loss replay changed usage, bridge, or canonical session');
+
+    // Atomic session inserts use the authoritative reasoning-mode policy rather
+    // than the old behavioral framing default.
+    const clarificationModes = ['classic_technical','problem_framing','ai_collaboration_review','uncertainty_handling'];
+    for (const [index, mode] of clarificationModes.entries()) {
+      const setup = JSON.stringify({ controls: { reasoningMode: mode, difficulty: 'intermediate' }, interviewPlan: { questionSet: [{ id: `policy-q-${index}` }] } }).replaceAll("'", "''");
+      await client.query(`INSERT INTO public.interview_sessions(id,user_id,role,setup,status,pending_question) VALUES(gen_random_uuid(),'${userA}','Policy Role','${setup}'::jsonb,'active','{"id":"policy-q-${index}"}'::jsonb);`);
+    }
+    const policyStages = await client.query(`SELECT setup#>>'{controls,reasoningMode}' AS mode,current_stage,adaptive_policy FROM public.interview_sessions WHERE user_id='${userA}' AND role='Policy Role';`);
+    if (policyStages.rows.length!==4 || policyStages.rows.some(row=>row.current_stage!=='clarification' || Number(row.adaptive_policy.maxProbesPerRoot)!==1 || Number(row.adaptive_policy.maxChallenges)!==2)) throw new Error('Atomic grounded session initialization did not follow clarification-first reasoning-mode policy while preserving adaptive challenge semantics');
+    console.log('  ✓ Supplemental reasoning-mode initial-stage assertions passed');
 
     // 41. protected_account_deletion
     await setRole(client, 'service_role');

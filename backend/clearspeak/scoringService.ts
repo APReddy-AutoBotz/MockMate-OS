@@ -53,9 +53,14 @@ async function transcribeAudio(audioBuffer: Buffer): Promise<TranscriptResult> {
     throw new Error('GROQ_API_KEY is required for live transcription');
   }
 
-  const client = new OpenAI({ 
+  const client = new OpenAI({
     apiKey,
     baseURL: 'https://api.groq.com/openai/v1',
+    // Grounded scoring reservations use a two-minute takeover lease. Keep the
+    // only external operation strictly below that boundary and disable SDK
+    // retries, which otherwise apply the timeout independently per attempt.
+    timeout: 90_000,
+    maxRetries: 0,
   });
 
   // Node Buffer.buffer is ArrayBufferLike (potentially SharedArrayBuffer).

@@ -98,6 +98,8 @@ describe('Career Context Pure Adapters', () => {
       expect(items.some(i => i.canonicalKey === 'clearspeak.profile.role')).toBe(true);
       expect(items.some(i => i.canonicalKey === 'clearspeak.profile.goal')).toBe(true);
       expect(items.some(i => i.canonicalKey === 'clearspeak.practiced_vocab')).toBe(true);
+      expect(items.find(i => i.canonicalKey === 'clearspeak.practiced_vocab')?.provenance).toBe('user_edited');
+      expect(items.find(i => i.canonicalKey === 'clearspeak.delivery_composite_score')?.provenance).toBe('system_observed');
       
       const scoreItem = items.find(i => i.canonicalKey === 'clearspeak.delivery_composite_score');
       expect(scoreItem?.kind).toBe('practice_metric');

@@ -138,5 +138,10 @@ const interviewExactlyOnceMigration = 'supabase/migrations/20260809080000_p0_3_i
 assertMatch(/renew_interview_plan_generation_tx[\s\S]*reservation_token<>p_reservation_token[\s\S]*lease_expires_at=v_now\+interval '30 seconds'/, interviewExactlyOnceMigration, 'token-scoped plan provider lease heartbeat');
 assertMatch(/create_and_bind_interview_session_tx[\s\S]*INSERT INTO public\.interview_sessions[\s\S]*UPDATE public\.interview_generated_plans[\s\S]*UPDATE public\.career_context_bridges/, interviewExactlyOnceMigration, 'atomic canonical grounded session create and bind');
 assertNoMatch(/sessionService\.createSession[\s\S]*bindAuthoritativePlan/, 'backend/routes/interviewRoutes.ts', 'non-atomic grounded session create then bind');
+const provenanceLeasePolicyMigration = 'supabase/migrations/20260809090000_p0_3_provenance_lease_policy_closure.sql';
+assertMatch(/IF NOT EXISTS \([\s\S]*career_context_snapshot_items[\s\S]*i\.source_module=v_source_module[\s\S]*p_source_record_id IS NULL/, provenanceLeasePolicyMigration, 'bridge source module requires actual locked snapshot membership even without a record selector');
+assertMatch(/classic_technical','problem_framing','ai_collaboration_review','uncertainty_handling'[\s\S]*THEN 'clarification'/, provenanceLeasePolicyMigration, 'atomic interview sessions derive clarification-first stage from authoritative mode policy');
+assertMatch(/timeout: 90_000[\s\S]*maxRetries: 0/, 'backend/clearspeak/scoringService.ts', 'ClearSpeak provider execution is bounded below the scoring takeover lease');
+assertMatch(/canonicalKey: 'clearspeak\.practiced_vocab'[\s\S]*provenance: 'user_edited'/, 'backend/services/careerContextAdapters/clearSpeakContextAdapter.ts', 'ordinary browser-supplied ClearSpeak vocabulary is never classified as system-observed');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

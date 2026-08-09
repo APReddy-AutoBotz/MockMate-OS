@@ -83,7 +83,10 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
     });
   }
 
-  // 3. Practiced Vocabulary (from practiced_words, NOT raw transcript/audio)
+  // 3. Practiced Vocabulary (from practiced_words, NOT raw transcript/audio).
+  // Ordinary ClearSpeak session metadata is submitted by the browser. Until it
+  // is bound to a server-generated artifact it must not be represented as a
+  // system observation, even though the score itself is server-derived.
   if (practicedWords && practicedWords.length > 0 && sessionRecordId) {
     const cleanWords = practicedWords.map(w => w.trim()).filter(Boolean);
     if (cleanWords.length > 0) {
@@ -101,7 +104,7 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
           capturedAt: new Date().toISOString(),
         },
         exactExcerpt: cleanWords.join(', '),
-        provenance: 'system_observed',
+        provenance: 'user_edited',
         status: 'active',
         sensitivity: 'standard',
       });
