@@ -513,6 +513,8 @@ export const CareerContextGetResponseSchema = z.object({
   state: CareerContextStateSchema,
   activeItems: z.array(CareerContextItemSchema),
   pendingItems: z.array(CareerContextItemSchema),
+  conflicts: z.array(GroundingConflictSchema).default([]),
+  projection: GroundingProjectionSchema.optional(),
 }).strict();
 export type CareerContextGetResponse = z.infer<typeof CareerContextGetResponseSchema>;
 
@@ -521,6 +523,13 @@ export const CareerContextRebuildRequestSchema = z.object({
   clientRequestId: z.string().optional(),
 }).strict();
 export type CareerContextRebuildRequest = z.infer<typeof CareerContextRebuildRequestSchema>;
+
+export const CareerContextSourceManifestEntrySchema = z.object({
+  module: CareerContextModuleSchema,
+  recordId: z.string().min(1),
+  fieldPaths: z.array(z.string().min(1)),
+}).strict();
+export type CareerContextSourceManifestEntry = z.infer<typeof CareerContextSourceManifestEntrySchema>;
 
 export const CareerContextRebuildResponseSchema = z.object({
   success: z.boolean(),

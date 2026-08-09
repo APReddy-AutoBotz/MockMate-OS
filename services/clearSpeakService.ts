@@ -15,6 +15,8 @@ import {
   ClearSpeakProgressSchema,
   BridgeTriggerState,
   BridgeTriggerStateSchema,
+  CareerContextSnapshot,
+  ModuleBridgeSession,
 } from 'mockmate-shared';
 
 const ProfileWrapperSchema = z.object({ profile: ClearSpeakProfileSchema }).strict();
@@ -25,6 +27,8 @@ export const ScoreResponseSchema = z.object({
   score: ClearSpeakSessionScoreSchema,
   progress: ClearSpeakProgressSchema,
   bridgeTrigger: BridgeTriggerStateSchema,
+  sessionId: z.string().uuid().optional(),
+  groundingReplayed: z.boolean().optional(),
 }).strict();
 export type ScoreResponse = z.infer<typeof ScoreResponseSchema>;
 
@@ -48,8 +52,12 @@ export async function getProfile(): Promise<ClearSpeakProfile | null> {
 export async function generateSession(
   recentTopics: string[] = [],
   sessionAttemptLength: number = 0,
+  grounding?: { snapshot: CareerContextSnapshot; bridge: ModuleBridgeSession },
 ): Promise<ClearSpeakSessionContent> {
-  const data = await apiClient.post('clearspeak/generate', ContentWrapperSchema, { recentTopics, sessionAttemptLength });
+  const data = await apiClient.post('clearspeak/generate', ContentWrapperSchema, {
+    recentTopics, sessionAttemptLength,
+    grounding: grounding ? { snapshotId: grounding.snapshot.id, bridgeSessionId: grounding.bridge.id } : undefined,
+  });
   return data.content;
 }
 
@@ -57,6 +65,8 @@ export interface ScorePayload {
   audioBlob: Blob;
   content: ClearSpeakSessionContent;
   retryAttempted: boolean;
+  grounding?: { snapshot: CareerContextSnapshot; bridge: ModuleBridgeSession };
+  clientSessionId?: string;
 }
 
 export class LowConfidenceError extends Error {
@@ -67,11 +77,16 @@ export class LowConfidenceError extends Error {
 }
 
 export async function scoreSession(payload: ScorePayload): Promise<ScoreResponse> {
-  const { audioBlob, content, retryAttempted } = payload;
+  const { audioBlob, content, retryAttempted, grounding, clientSessionId } = payload;
   const form = new FormData();
   form.append('audio', audioBlob, 'recording.webm');
   form.append('content', JSON.stringify(content));
   form.append('retryAttempted', String(retryAttempted));
+  if (grounding) {
+    form.append('snapshotId', grounding.snapshot.id);
+    form.append('bridgeSessionId', grounding.bridge.id);
+    form.append('clientSessionId', clientSessionId || grounding.bridge.id);
+  }
 
   try {
     return await apiClient.post('clearspeak/score', ScoreResponseSchema, form);

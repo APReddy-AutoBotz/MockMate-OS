@@ -68,6 +68,7 @@ const App: React.FC = () => {
         onSuccess: (snapshot: CareerContextSnapshot, bridge?: ModuleBridgeSession) => void;
         onSkip: () => void;
     } | null>(null);
+    const [clearSpeakGrounding, setClearSpeakGrounding] = useState<{ snapshot: CareerContextSnapshot; bridge: ModuleBridgeSession } | null>(null);
 
     useEffect(() => {
         // Use the auth listener to determine starting state
@@ -249,7 +250,7 @@ const App: React.FC = () => {
     ) => {
         try {
             const contextData = await fetchCareerContext();
-            const activeItems = (contextData.activeItems || []).filter(i => i.status === 'active' && i.sensitivity !== 'personal_contact');
+            const activeItems = (contextData.activeItems || []).filter(i => i.status === 'active' && i.sensitivity !== 'personal_contact' && sourceModules.includes(i.source.module));
             if (activeItems.length === 0) {
                 onSkip();
                 return;
@@ -258,18 +259,17 @@ const App: React.FC = () => {
                 purpose,
                 sourceModules,
                 targetModule,
-                items: contextData.activeItems || [],
-                conflicts: [],
+                items: activeItems,
+                conflicts: (contextData.conflicts || []).filter(c => c.competingItemIds.some(id => activeItems.some(i => i.id === id))),
                 onSuccess,
                 onSkip,
             });
         } catch (err) {
-            console.warn('[Grounding Launch] Could not fetch career context, running ungrounded:', err);
-            onSkip();
+            console.error('[Grounding Launch] Authoritative context could not be loaded; grounded launch aborted:', err);
         }
     };
 
-    const handleModalConfirm = async (selectedItemIds: string[], scope: 'one_time' | 'future_sessions') => {
+    const handleModalConfirm = async (selectedItemIds: string[], scope: 'one_time' | 'future_sessions', conflictSelections: Record<string, string>) => {
         if (!pendingGroundingLaunch) return;
         const { purpose, sourceModules, targetModule, items, onSuccess, onSkip } = pendingGroundingLaunch;
         const excludedItemIds = items.filter(i => !selectedItemIds.includes(i.id)).map(i => i.id);
@@ -280,7 +280,7 @@ const App: React.FC = () => {
                 purpose,
                 includedItemIds: selectedItemIds,
                 excludedItemIds,
-                conflictSelections: {},
+                conflictSelections,
                 consent: {
                     scope,
                     purpose,
@@ -304,8 +304,8 @@ const App: React.FC = () => {
             onSuccess(snapshotRes.snapshot, bridgeRes.bridge);
         } catch (err: any) {
             console.error('[Grounding Launch] Failed to create grounding snapshot/bridge:', err);
-            setPendingGroundingLaunch(null);
-            onSkip();
+            // An explicit grounded launch is fail-closed. Keep the consent modal
+            // open so retry/cancel remains the user's decision; never downgrade it.
         }
     };
 
@@ -342,7 +342,9 @@ const App: React.FC = () => {
             ['resume'],
             'clearspeak',
             (snapshot, bridge) => {
+                if (!bridge) throw new Error('Authoritative ClearSpeak bridge was not created');
                 audioService.playStart();
+                setClearSpeakGrounding({ snapshot, bridge });
                 setAppState('CLEARSPEAK');
             },
             () => {
@@ -570,6 +572,7 @@ const App: React.FC = () => {
                         <ErrorBoundary>
                             <ClearSpeakDashboard
                                 onInterviewBridge={handleInterviewBridge}
+                                grounding={clearSpeakGrounding || undefined}
                             />
                         </ErrorBoundary>
                     </motion.div>

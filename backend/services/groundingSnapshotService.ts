@@ -98,6 +98,11 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
       }
 
       for (const r of rawItems) {
+        if (!sourceModules.includes(r.source_module)) {
+          const err: any = new Error(`Item ${r.id} belongs to undeclared source module ${r.source_module}.`);
+          err.status = 422;
+          throw err;
+        }
         if (r.item_status !== 'active') {
           const err: any = new Error(`Item ${r.id} is not active (status: ${r.item_status}).`);
           err.status = 422;

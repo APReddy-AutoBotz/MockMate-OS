@@ -5,6 +5,7 @@ import {
   CareerContextItemSchema,
   CareerContextStateSchema
 } from 'mockmate-shared';
+import type { CareerContextSourceManifestEntry } from 'mockmate-shared';
 import { supabaseAdmin } from '../supabaseAdmin';
 
 export async function getCareerContextState(userId: string): Promise<CareerContextState> {
@@ -102,7 +103,8 @@ export async function getUserCareerContextItems(userId: string): Promise<CareerC
 
 export async function saveCareerContextItemDrafts(
   userId: string,
-  drafts: CareerContextItemDraft[]
+  drafts: CareerContextItemDraft[],
+  sourceManifest: CareerContextSourceManifestEntry[]
 ): Promise<{ addedCount: number; updatedCount: number; unchangedCount: number }> {
   if (!supabaseAdmin) {
     const err: any = new Error('Authoritative persistence unavailable');
@@ -113,6 +115,7 @@ export async function saveCareerContextItemDrafts(
   const { data, error } = await supabaseAdmin.rpc('rebuild_career_context_tx', {
     p_user_id: userId,
     p_drafts: drafts,
+    p_source_manifest: sourceManifest,
   });
   if (error) throw persistenceError(`Career Context rebuild transaction failed: ${error.message}`);
   if (!data) throw persistenceError('Career Context rebuild transaction returned no result');

@@ -6,7 +6,7 @@ interface GroundingPreviewModalProps {
   purpose: GroundingPurpose;
   items: CareerContextItem[];
   conflicts: GroundingConflict[];
-  onConfirm: (selectedItemIds: string[], scope: 'one_time' | 'future_sessions') => void;
+  onConfirm: (selectedItemIds: string[], scope: 'one_time' | 'future_sessions', conflictSelections: Record<string, string>) => void;
   onSkip: () => void;
   onClose: () => void;
 }
@@ -22,6 +22,7 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
   const eligibleItems = items.filter(i => i.status === 'active' && i.sensitivity !== 'personal_contact');
   const [selectedIds, setSelectedIds] = useState<string[]>(eligibleItems.map(i => i.id));
   const [scope, setScope] = useState<'one_time' | 'future_sessions'>('one_time');
+  const [conflictSelections, setConflictSelections] = useState<Record<string, string>>({});
 
   const toggleItem = (id: string) => {
     setSelectedIds(prev =>
@@ -65,8 +66,20 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
               <AlertTriangle className="w-4 h-4" /> Conflict Detected
             </div>
             <p className="text-xs text-amber-200/80">
-              Multiple target roles or goals exist in your context. Please ensure your selection below represents your intended practice focus.
+              Select one authoritative value for every conflict before continuing.
             </p>
+            {conflicts.filter(c => c.requiresUserChoice).map(conflict => (
+              <fieldset key={conflict.canonicalKey} className="space-y-1 pt-2">
+                <legend className="text-xs font-semibold text-amber-100">{conflict.canonicalKey}</legend>
+                {conflict.competingItemIds.map((id, index) => (
+                  <label key={id} className="flex items-center gap-2 text-xs text-white/80">
+                    <input type="radio" name={`conflict-${conflict.canonicalKey}`} checked={conflictSelections[conflict.canonicalKey] === id}
+                      onChange={() => { setConflictSelections(prev => ({ ...prev, [conflict.canonicalKey]: id })); setSelectedIds(prev => [...prev.filter(x => !conflict.competingItemIds.includes(x)), id]); }} />
+                    {conflict.descriptions[index] || id}
+                  </label>
+                ))}
+              </fieldset>
+            ))}
           </div>
         )}
 
@@ -151,8 +164,8 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
             Continue Without Grounding
           </button>
           <button
-            onClick={() => onConfirm(selectedIds, scope)}
-            disabled={selectedIds.length === 0}
+            onClick={() => onConfirm(selectedIds, scope, conflictSelections)}
+            disabled={selectedIds.length === 0 || conflicts.some(c => c.requiresUserChoice && !conflictSelections[c.canonicalKey])}
             className="px-6 py-2.5 rounded-xl bg-brand-primary text-brand-dark hover:bg-brand-primary/90 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors disabled:opacity-40"
           >
             Continue With Selected Context <ChevronRight className="w-4 h-4" />

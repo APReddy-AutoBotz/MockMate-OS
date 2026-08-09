@@ -85,5 +85,14 @@ assertMatch(/consent->>'scope'='one_time'[\s\S]*snapshot_id=p_snapshot_id/g, clo
 assertMatch(/item_status='pending_confirmation'[\s\S]*item_status='superseded'[\s\S]*superseded_by=v_new_id/g, closureMigration, 'obsolete pending successor convergence');
 assertMatch(/superseded_by=p_item_id AND item_status='active'/g, closureMigration, 'newest successor active predecessor binding');
 assertNoMatch(/questionSet\?\.\[idx\]\?\.groundingReferences/g, 'backend/services/aiService.ts', 'adaptive root-index grounding fallback');
+const sourceClosureMigration = 'supabase/migrations/20260809010000_p0_3_source_and_clearspeak_authority.sql';
+assertMatch(/p_source_manifest[\s\S]*provenance<>'user_edited'[\s\S]*item_status=CASE/, sourceClosureMigration, 'successful-source omission reconciliation preserving user edits');
+assertMatch(/source_hash=COALESCE[\s\S]*item_status IN \('active','pending_confirmation'\)/, sourceClosureMigration, 'active lineage value replay detection');
+assertMatch(/:reconcile:/, sourceClosureMigration, 'immutable source reversion successor identity');
+assertMatch(/source_module=ANY\(p_source_modules\)/, sourceClosureMigration, 'transactional snapshot source-module validation');
+assertMatch(/create_clearspeak_grounded_session_tx[\s\S]*status='consumed'[\s\S]*target_session_id=v_session_id/, sourceClosureMigration, 'atomic ClearSpeak session bridge consumption');
+assertMatch(/sourceModules\.includes\(i\.source\.module\)/, 'App.tsx', 'frontend source-module filtering');
+assertMatch(/conflictSelections/, 'components/GroundingPreviewModal.tsx', 'explicit grounding conflict selection');
+assertNoMatch(/Failed to create grounding snapshot\/bridge:[\s\S]{0,180}onSkip\(\)/, 'App.tsx', 'silent ungrounded fallback after grounded confirmation');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

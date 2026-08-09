@@ -16,6 +16,7 @@ import { buildInterviewContextItems } from '../services/careerContextAdapters/in
 import { supabaseAdmin } from '../supabaseAdmin';
 import {
   CareerContextItemDraft,
+  CareerContextSourceManifestEntry,
   CareerContextItemDecisionRequestSchema,
   GroundingSnapshotCreateRequestSchema,
   ModuleBridgeCreateRequestSchema,
@@ -66,6 +67,7 @@ router.post('/rebuild', async (req, res) => {
     }
 
     const drafts: CareerContextItemDraft[] = [];
+    const sourceManifest: CareerContextSourceManifestEntry[] = [];
 
     // 1. Rebuild from resume_reviews
     const { data: resumes, error: resumesError } = await supabaseAdmin
@@ -163,7 +165,18 @@ router.post('/rebuild', async (req, res) => {
       });
     }
 
-    const result = await saveCareerContextItemDrafts(userId, drafts);
+    for (const module of ['resume', 'clearspeak', 'interview'] as const) {
+      sourceManifest.push({ module, recordId: '__module__', fieldPaths: [] });
+    }
+    const manifestByRecord = new Map<string, CareerContextSourceManifestEntry>();
+    for (const draft of drafts) {
+      const key = `${draft.source.module}:${draft.source.recordId}`;
+      const entry = manifestByRecord.get(key) || { module: draft.source.module, recordId: draft.source.recordId, fieldPaths: [] };
+      if (!entry.fieldPaths.includes(draft.source.fieldPath)) entry.fieldPaths.push(draft.source.fieldPath);
+      manifestByRecord.set(key, entry);
+    }
+    sourceManifest.push(...manifestByRecord.values());
+    const result = await saveCareerContextItemDrafts(userId, drafts, sourceManifest);
     const updatedState = await getCareerContextState(userId);
 
     return res.json({

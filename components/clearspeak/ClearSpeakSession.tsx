@@ -18,6 +18,7 @@ import type {
   BridgeTriggerState,
   ClearSpeakBridgePayload,
 } from './types';
+import type { CareerContextSnapshot, ModuleBridgeSession } from 'mockmate-shared';
 import { generateSession, scoreSession, LowConfidenceError } from '../../services/clearSpeakService';
 import { csTrack, newSessionId } from '../../services/csAnalytics';
 import { useAudioRecorder } from './useAudioRecorder';
@@ -43,6 +44,7 @@ interface ClearSpeakSessionProps {
    * Used to populate the bridge payload role field correctly.
    */
   profileRole: import('./types').ClearSpeakRole;
+  grounding?: { snapshot: CareerContextSnapshot; bridge: ModuleBridgeSession };
 }
 
 // ─── State Machine ────────────────────────────────────────────────────────────
@@ -120,6 +122,7 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   recentTopics = [],
   sessionAttemptLength = 0,
   profileRole,
+  grounding,
 }) => {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const recorder = useAudioRecorder();
@@ -135,7 +138,7 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   useEffect(() => {
     (async () => {
       try {
-        const content = await generateSession(recentTopics, sessionAttemptLength);
+        const content = await generateSession(recentTopics, sessionAttemptLength, grounding);
         dispatch({ type: 'CONTENT_LOADED', content });
         // ANALYTICS: session_started — fires after content is available
         void csTrack('session_started', sessionId, {
@@ -161,6 +164,8 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
         audioBlob: recorder.audioBlob,
         content: state.content,
         retryAttempted: isRetryAttempt,
+        grounding,
+        clientSessionId: sessionId,
       });
 
       // Clear blob from memory — privacy policy
