@@ -301,7 +301,10 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   }
 
   if (state.phase === 'score_card' && state.score && state.content) {
-    const shouldRetry = state.score.composite < 70 && !state.isRetry;
+    // A grounded score is already the canonical completion of its one-time
+    // artifact/bridge. Reusing it with new audio would only replay the old
+    // result, so keep retry available exclusively for ordinary practice.
+    const shouldRetry = !grounding && state.score.composite < 70 && !state.isRetry;
     return (
       <ScoreCard
         score={state.score}

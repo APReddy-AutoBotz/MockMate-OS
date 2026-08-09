@@ -65,6 +65,8 @@ const App: React.FC = () => {
         targetModule: CareerContextModule;
         items: CareerContextItem[];
         conflicts: GroundingConflict[];
+        snapshotClientRequestId: string;
+        bridgeClientRequestId: string;
         onSuccess: (snapshot: CareerContextSnapshot, bridge?: ModuleBridgeSession) => void;
         onSkip: () => void;
     } | null>(null);
@@ -261,6 +263,11 @@ const App: React.FC = () => {
                 targetModule,
                 items: activeItems,
                 conflicts: (contextData.conflicts || []).filter(c => c.competingItemIds.some(id => activeItems.some(i => i.id === id))),
+                // These identify the logical launch, not server-owned artifacts. Keep
+                // them stable until that launch succeeds or the user cancels it so a
+                // lost HTTP response recovers the canonical snapshot/bridge.
+                snapshotClientRequestId: `req_snap_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+                bridgeClientRequestId: `req_br_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
                 onSuccess,
                 onSkip,
             });
@@ -271,11 +278,10 @@ const App: React.FC = () => {
 
     const handleModalConfirm = async (selectedItemIds: string[], scope: 'one_time' | 'future_sessions', conflictSelections: Record<string, string>) => {
         if (!pendingGroundingLaunch) return;
-        const { purpose, sourceModules, targetModule, items, onSuccess, onSkip } = pendingGroundingLaunch;
+        const { purpose, sourceModules, targetModule, items, snapshotClientRequestId, bridgeClientRequestId, onSuccess } = pendingGroundingLaunch;
         const excludedItemIds = items.filter(i => !selectedItemIds.includes(i.id)).map(i => i.id);
 
         try {
-            const clientRequestId = `req_snap_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
             const snapshotRes = await createGroundingSnapshot({
                 purpose,
                 includedItemIds: selectedItemIds,
@@ -289,7 +295,7 @@ const App: React.FC = () => {
                     sourceModules,
                     acknowledgedAt: new Date().toISOString(),
                 },
-                clientRequestId,
+                clientRequestId: snapshotClientRequestId,
             });
 
             const bridgeRes = await createModuleBridge({
@@ -297,7 +303,7 @@ const App: React.FC = () => {
                 targetModule,
                 purpose,
                 snapshotId: snapshotRes.snapshot.id,
-                clientRequestId: `req_br_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+                clientRequestId: bridgeClientRequestId,
             });
 
             setPendingGroundingLaunch(null);

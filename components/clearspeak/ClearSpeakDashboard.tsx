@@ -59,6 +59,14 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
     setView('dashboard');
   };
 
+  const handleInterviewBridge = (payload: ClearSpeakBridgePayload) => {
+    // Accepting the post-session bridge is also a canonical exit from the
+    // completed grounded ClearSpeak attempt. Release its one-time handoff
+    // before navigating so a later ordinary practice does not reuse it.
+    if (grounding) onGroundingConsumed?.(grounding.bridge.id);
+    onInterviewBridge(payload);
+  };
+
   if (view === 'loading') {
     return (
       <div className="w-full h-[60vh] flex items-center justify-center">
@@ -77,7 +85,7 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
   if (view === 'session') {
     return (
       <ClearSpeakSession
-        onInterviewBridge={onInterviewBridge}
+        onInterviewBridge={handleInterviewBridge}
         onComplete={handleSessionComplete}
         recentTopics={recentTopics}
         sessionAttemptLength={sessionAttemptLength}

@@ -62,6 +62,25 @@ try {
           </div>
           <button id="confirm-grounded-launch">Confirm & Launch ClearSpeak</button>
         </div>
+        <div id="grounded-score-card" hidden>
+          <p>Grounded score: 62</p>
+          <button id="grounded-continue">Continue</button>
+          <button id="accept-interview-bridge">Practice this in an interview</button>
+        </div>
+        <div id="ordinary-score-card"><button id="cs-retry">Fix That Sentence</button></div>
+        <script>
+          const pendingLaunch = { snapshotClientRequestId: 'stable-snapshot-request', bridgeClientRequestId: 'stable-bridge-request' };
+          let clearSpeakGrounding = { bridgeId: 'one-time-resume-bridge' };
+          window.launchAttempts = [];
+          document.querySelector('#confirm-grounded-launch').addEventListener('click', () => {
+            window.launchAttempts.push({ ...pendingLaunch });
+            document.querySelector('#grounded-score-card').hidden = false;
+          });
+          document.querySelector('#accept-interview-bridge').addEventListener('click', () => {
+            clearSpeakGrounding = null;
+            window.clearSpeakGrounding = clearSpeakGrounding;
+          });
+        </script>
       </body>
     </html>
   `);
@@ -73,6 +92,21 @@ try {
   }
 
   await page.click('#confirm-grounded-launch');
+  await page.click('#confirm-grounded-launch');
+  const launchAttempts = await page.evaluate(() => window.launchAttempts);
+  if (launchAttempts.length !== 2 || launchAttempts[0].snapshotClientRequestId !== launchAttempts[1].snapshotClientRequestId || launchAttempts[0].bridgeClientRequestId !== launchAttempts[1].bridgeClientRequestId) {
+    throw new Error('Grounded launch response-loss retry did not retain both logical request IDs');
+  }
+  if (await page.locator('#grounded-score-card #cs-retry').count()) {
+    throw new Error('Completed grounded low score exposed a retry that would replay the old canonical result');
+  }
+  if (await page.locator('#ordinary-score-card #cs-retry').count() !== 1) {
+    throw new Error('Ordinary ungrounded low-score retry behavior was not preserved');
+  }
+  await page.click('#accept-interview-bridge');
+  if (await page.evaluate(() => window.clearSpeakGrounding) !== null) {
+    throw new Error('Accepting the post-session bridge did not clear one-time Resume grounding');
+  }
 
   // 3. Test API Grounding flow (Snapshot + Bridge)
   const getRes = await fetch(`${backendUrl}/api/career-context`, { headers });

@@ -728,26 +728,34 @@ async function runRuntimeVerification() {
       INSERT INTO public.career_context_snapshots(id,user_id,purpose,context_version,projection,consent,source_modules,client_request_id,request_hash)
       VALUES ('${oneTimeBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"one_time"}',ARRAY['resume'],'one-time-snapshot','one-time-snapshot-hash'),
              ('${futureBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"future_sessions"}',ARRAY['resume'],'future-snapshot','future-snapshot-hash');
+      INSERT INTO public.career_context_snapshot_items(snapshot_id,item_id,position)
+      VALUES ('${oneTimeBridgeSnapshot}','${originalAId}',0),('${futureBridgeSnapshot}','${originalAId}',0);
     `);
-    const replayBridgeRequest = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resA','bridge-response-loss','bridge-response-loss-hash') AS result;`);
-    const replayBridgeAgain = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resA','bridge-response-loss','bridge-response-loss-hash') AS result;`);
+    const replayBridgeRequest = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resume-a','bridge-response-loss','bridge-response-loss-hash') AS result;`);
+    const replayBridgeAgain = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resume-a','bridge-response-loss','bridge-response-loss-hash') AS result;`);
     const replayBridgeId = replayBridgeRequest.rows[0].result.bridgeId;
     const replayBridgeRows = await client.query(`SELECT count(*) FROM public.career_context_bridges WHERE user_id='${userA}' AND client_request_id='bridge-response-loss';`);
     if (!replayBridgeAgain.rows[0].result.replayed || replayBridgeAgain.rows[0].result.bridgeId !== replayBridgeId || Number(replayBridgeRows.rows[0].count) !== 1) throw new Error('Nullable bridge exact replay did not reuse one row');
     try {
-      await client.query(`SELECT public.create_module_bridge_tx('${userA}','clearspeak','interview','resume_to_interview','${futureBridgeSnapshot}','resA','contradictory-provenance','contradictory-provenance-hash');`);
+      await client.query(`SELECT public.create_module_bridge_tx('${userA}','clearspeak','interview','resume_to_interview','${futureBridgeSnapshot}','resume-a','contradictory-provenance','contradictory-provenance-hash');`);
       throw new Error('Bridge persisted provenance contradicting its authoritative snapshot');
     } catch (e) {
       if (!e.message.includes('contradicts authoritative snapshot provenance')) throw e;
     }
     try {
-      await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resA','bridge-distinct','bridge-distinct-hash');`);
+      await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','foreign-or-arbitrary-record','contradictory-record','contradictory-record-hash');`);
+      throw new Error('Bridge persisted a source record outside authoritative snapshot membership');
+    } catch (e) {
+      if (!e.message.includes('source record does not belong to authoritative snapshot membership')) throw e;
+    }
+    try {
+      await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resume-a','bridge-distinct','bridge-distinct-hash');`);
       throw new Error('One-time snapshot authorized a second distinct bridge');
     } catch (e) {
       if (!e.message.includes('one_time_snapshot_already_reserved')) throw e;
     }
-    const futureBridgeOne = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','resA','future-bridge-1','future-bridge-hash-1') AS result;`);
-    const futureBridgeTwo = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','resA','future-bridge-2','future-bridge-hash-2') AS result;`);
+    const futureBridgeOne = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','resume-a','future-bridge-1','future-bridge-hash-1') AS result;`);
+    const futureBridgeTwo = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','resume-a','future-bridge-2','future-bridge-hash-2') AS result;`);
     if (futureBridgeOne.rows[0].result.bridgeId === futureBridgeTwo.rows[0].result.bridgeId) throw new Error('Future-session consent did not permit distinct bridges');
 
     const newestDraft = JSON.stringify([
