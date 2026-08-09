@@ -283,7 +283,17 @@ export async function generateSession(
 
   // Final Safety net: Use static bank if both providers fail
   console.warn('[ClearSpeak/Resilience] All AI providers failed. Falling back to static content bank.');
-  return selectFallback(profile.level, recentTopics);
+  const fallback = selectFallback(profile.level, recentTopics);
+  if (!grounding?.summary) return fallback;
+  const words = grounding.summary.trim().split(/\s+/).slice(0, 55);
+  return {
+    ...fallback,
+    topicTag: `Resume practice: ${grounding.vocabulary.slice(0, 2).join(' / ') || profile.role}`,
+    keyVocab: [...new Set([...grounding.vocabulary, ...fallback.keyVocab])].slice(0, 3),
+    passageData: [{ text: words.join(' '), isStressed: false, pauseType: 'stop' }],
+    repeatPhrase: words.slice(0, 12).join(' '),
+    retrySentence: words.slice(0, 18).join(' '),
+  };
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────

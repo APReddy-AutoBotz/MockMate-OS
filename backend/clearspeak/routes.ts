@@ -34,6 +34,7 @@ import type { ClearSpeakProfile } from 'mockmate-shared';
 import { getModuleBridgeById } from '../services/moduleBridgeService';
 import { getSnapshotById } from '../services/groundingSnapshotService';
 import crypto from 'crypto';
+import { canonicalJsonValue, hashArtifactContent } from './artifactAuthority';
 
 const router = Router();
 
@@ -246,8 +247,8 @@ router.post('/generate', async (req: Request, res: Response) => {
     const content = await generateSession(profile, recentTopics, sessionAttemptLength, groundingInput);
 
     if (grounding && snapshot && supabaseAdmin) {
-      const canonical = JSON.parse(JSON.stringify(content));
-      const contentHash = crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+      const canonical = canonicalJsonValue(content);
+      const contentHash = hashArtifactContent(canonical);
       const artifactId = crypto.randomUUID();
       const inserted = await supabaseAdmin.from('clearspeak_generated_artifacts').insert({
         id: artifactId, user_id: userId, bridge_id: grounding.bridgeSessionId,
@@ -321,7 +322,7 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
       const canonicalContent = { ...content };
       delete canonicalContent.generationArtifactId;
       delete canonicalContent.generationArtifactHash;
-      const submittedHash = crypto.createHash('sha256').update(JSON.stringify(JSON.parse(JSON.stringify(canonicalContent)))).digest('hex');
+      const submittedHash = hashArtifactContent(canonicalContent);
       const reservation = await supabaseAdmin.rpc('reserve_clearspeak_grounded_score_tx', {
         p_user_id: userId, p_bridge_id: bridgeSessionId, p_snapshot_id: snapshotId,
         p_artifact_id: artifactId, p_content_hash: artifactHash, p_submitted_hash: submittedHash,
@@ -329,8 +330,7 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
       if (reservation.error || !reservation.data) return res.status(409).json({ error: reservation.error?.message || 'Grounded ClearSpeak authority could not be reserved' });
       reservedArtifact = reservation.data;
       if (reservedArtifact.replayed) {
-        const progress = await getProgress(userId);
-        return res.json({ ...reservedArtifact.response, progress, groundingReplayed: true });
+        return res.json({ ...reservedArtifact.response, groundingReplayed: true });
       }
       content = reservedArtifact.content;
     }
@@ -353,8 +353,9 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
       });
     } catch (error) {
       if (reservedArtifact && supabaseAdmin) {
-        await supabaseAdmin.from('clearspeak_generated_artifacts').update({ status: 'generated', updated_at: new Date().toISOString() })
-          .eq('id', reservedArtifact.artifactId).eq('user_id', userId).eq('status', 'scoring');
+        await supabaseAdmin.from('clearspeak_generated_artifacts').update({ status: 'generated', reservation_token: null, scoring_lease_expires_at: null, updated_at: new Date().toISOString() })
+          .eq('id', reservedArtifact.artifactId).eq('user_id', userId).eq('status', 'scoring')
+          .eq('reservation_token', reservedArtifact.reservationToken);
       }
       throw error;
     }
@@ -369,8 +370,9 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
     // user-readable message so the frontend can surface a retry prompt.
     if (score.composite <= 15 && score.clarity === 0) {
       if (reservedArtifact && supabaseAdmin) {
-        await supabaseAdmin.from('clearspeak_generated_artifacts').update({ status: 'generated', updated_at: new Date().toISOString() })
-          .eq('id', reservedArtifact.artifactId).eq('user_id', userId).eq('status', 'scoring');
+        await supabaseAdmin.from('clearspeak_generated_artifacts').update({ status: 'generated', reservation_token: null, scoring_lease_expires_at: null, updated_at: new Date().toISOString() })
+          .eq('id', reservedArtifact.artifactId).eq('user_id', userId).eq('status', 'scoring')
+          .eq('reservation_token', reservedArtifact.reservationToken);
       }
       return res.status(422).json({
         error: 'low_confidence_transcription',
@@ -382,22 +384,24 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
     let persistedSessionId: string | undefined;
     let groundingReplayed = false;
     let canonicalGroundedTrigger: any = null;
+    let canonicalGroundedProgress: any = null;
     if (bridgeSessionId && snapshotId) {
       if (!supabaseAdmin) return res.status(503).json({ error: 'Authoritative persistence unavailable for grounded ClearSpeak practice' });
-      const bridgeTrigger = await evaluateBridgeTrigger(userId, score, Boolean(content.bridgeReady));
       const { data, error } = await supabaseAdmin.rpc('finalize_clearspeak_grounded_score_tx', {
         p_user_id: userId, p_bridge_id: bridgeSessionId, p_snapshot_id: snapshotId,
-        p_artifact_id: reservedArtifact.artifactId, p_score: score, p_bridge_trigger: bridgeTrigger,
+        p_artifact_id: reservedArtifact.artifactId, p_score: score,
+        p_bridge_trigger: { bridgeReadyFlag: Boolean(content.bridgeReady) },
+        p_reservation_token: reservedArtifact.reservationToken,
         p_topic_tag: content.topicTag,
         p_practiced_words: Array.isArray(content.keyVocab) ? content.keyVocab : [],
       });
       if (error || !data) return res.status(error?.message?.includes('already') ? 409 : 503).json({ error: error?.message || 'Grounded ClearSpeak session could not be created' });
       persistedSessionId = (data as any).sessionId;
       groundingReplayed = Boolean((data as any).replayed);
-      canonicalGroundedTrigger = (data as any).response?.bridgeTrigger || bridgeTrigger;
+      canonicalGroundedTrigger = (data as any).response?.bridgeTrigger;
+      canonicalGroundedProgress = (data as any).response?.progress;
       if (groundingReplayed) {
-        const progress = await getProgress(userId);
-        return res.json({ ...(data as any).response, progress, groundingReplayed: true });
+        return res.json({ ...(data as any).response, groundingReplayed: true });
       }
     } else if (supabaseAdmin) {
       const { data, error } = await supabaseAdmin.from('clearspeak_sessions').insert({
@@ -412,7 +416,9 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
     }
 
     // Update Supabase progress. Only score JSON is stored; raw audio is never persisted.
-    const updatedProgress = await recordSessionResult(userId, score, content.topicTag);
+    const updatedProgress = bridgeSessionId && snapshotId
+      ? canonicalGroundedProgress
+      : await recordSessionResult(userId, score, content.topicTag);
 
     // Evaluate bridge trigger against persisted data
     const bridgeTrigger = canonicalGroundedTrigger ?? await evaluateBridgeTrigger(userId, score, content.bridgeReady);

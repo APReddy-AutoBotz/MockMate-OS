@@ -100,5 +100,13 @@ assertMatch(/status='completed'[\s\S]*canonical_response/, replayArtifactMigrati
 assertMatch(/groundingInput[\s\S]*generateSession\(profile, recentTopics, sessionAttemptLength, groundingInput\)/, 'backend/clearspeak/routes.ts', 'snapshot-grounded ClearSpeak generation');
 assertNoMatch(/evaluateBridgeTrigger\(userId, prior\.score, false\)/, 'backend/clearspeak/routes.ts', 'hard-coded replay bridge trigger');
 assertMatch(/getAuthoritativePlanForBridge[\s\S]*consumeUsage\(userId, 'interview_question'\)/, 'backend/routes/interviewRoutes.ts', 'Interview plan replay before usage charging');
+const replayConvergenceMigration = 'supabase/migrations/20260809030000_p0_3_replay_grounding_convergence.sql';
+assertMatch(/scoring_lease_expires_at[\s\S]*reservation_token/, replayConvergenceMigration, 'recoverable leased scoring reservation');
+assertMatch(/status='scoring'[\s\S]*scoring_lease_expires_at>now\(\)/, replayConvergenceMigration, 'bounded scoring takeover');
+assertMatch(/clearspeak_progress[\s\S]*FOR UPDATE[\s\S]*canonical_response/, replayConvergenceMigration, 'exactly-once grounded progress and canonical response');
+assertMatch(/pg_advisory_xact_lock[\s\S]*client_request_id/, replayConvergenceMigration, 'serialized snapshot idempotency lookup');
+assertMatch(/hashArtifactContent\(canonical\)/, 'backend/clearspeak/routes.ts', 'stable generated artifact content hash');
+assertMatch(/generationArtifactId[\s\S]*generationArtifactHash/, 'shared/src/index.ts', 'grounded ClearSpeak content selectors in shared schema');
+assertMatch(/All AI providers failed[\s\S]*grounding\?\.summary[\s\S]*passageData/, 'backend/clearspeak/generateService.ts', 'grounded final provider safety fallback');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

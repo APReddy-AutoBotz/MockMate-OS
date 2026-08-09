@@ -191,6 +191,11 @@ describe('Shared Canonical Runtime Contracts', () => {
       bridgeReady: true
     };
     expect(ClearSpeakSessionContentSchema.safeParse(content).success).toBe(true);
+    expect(ClearSpeakSessionContentSchema.safeParse({
+      ...content,
+      generationArtifactId: '11111111-1111-4111-8111-111111111111',
+      generationArtifactHash: 'a'.repeat(64),
+    }).success).toBe(true);
 
     const score = {
       clarity: 80,

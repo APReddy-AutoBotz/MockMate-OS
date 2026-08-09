@@ -1539,6 +1539,8 @@ export const ClearSpeakSessionContentSchema = z.object({
   retrySentence: z.string().optional(),
   bridgeReady: z.boolean(),
   interviewBridgeQuestion: z.string().optional(),
+  generationArtifactId: z.string().uuid().optional(),
+  generationArtifactHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
 export type ClearSpeakSessionContent = z.infer<typeof ClearSpeakSessionContentSchema>;
 

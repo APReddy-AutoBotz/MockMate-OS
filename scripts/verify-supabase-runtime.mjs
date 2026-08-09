@@ -702,6 +702,23 @@ async function runRuntimeVerification() {
     passedCount++;
     console.log('  ✓ Assertion 40. preference_version_conflict_is_transactional passed');
 
+    // Concurrent identical snapshot creation must converge on one canonical row.
+    const snapshotVersion = Number((await client.query(`SELECT context_version FROM public.career_context_state WHERE user_id='${userA}'`)).rows[0].context_version);
+    const snapshotSql = `SELECT public.create_grounding_snapshot_tx('${userA}','manual_selection','{}','[]','{"includedItemIds":[]}',ARRAY['resume'],ARRAY[]::uuid[],'concurrent-snapshot','concurrent-snapshot-hash',${snapshotVersion}) AS result`;
+    const snapshotClients = [new Client({ connectionString }), new Client({ connectionString })];
+    await Promise.all(snapshotClients.map(async concurrentClient => {
+      await concurrentClient.connect();
+      await setRole(concurrentClient, 'service_role');
+    }));
+    const concurrentSnapshots = await Promise.all(snapshotClients.map(concurrentClient => concurrentClient.query(snapshotSql)));
+    await Promise.all(snapshotClients.map(concurrentClient => concurrentClient.end()));
+    const concurrentSnapshotIds = concurrentSnapshots.map(result => result.rows[0].result.snapshotId);
+    const concurrentSnapshotRows = await client.query(`SELECT count(*) FROM public.career_context_snapshots WHERE user_id='${userA}' AND client_request_id='concurrent-snapshot'`);
+    if (new Set(concurrentSnapshotIds).size !== 1 || Number(concurrentSnapshotRows.rows[0].count) !== 1 || !concurrentSnapshots.some(result => result.rows[0].result.replayed)) {
+      throw new Error('Concurrent identical snapshot requests did not converge on one canonical snapshot');
+    }
+    console.log('  ✓ Supplemental concurrent snapshot idempotency assertion passed');
+
     // Additional adversarial state-machine evidence: one-time/future consent,
     // nullable bridge replay, successor convergence, and canonical session replay.
     await setRole(client, 'service_role');
