@@ -84,6 +84,22 @@ if (!normalizedSql.includes('create or replace function public.delete_user_caree
   failures.push('Missing RPC definition: delete_user_career_context');
 }
 
+// 4. A prior accepted migration already installs the current ten-argument
+// snapshot RPC. Any later forward migration that redefines it must first drop
+// that exact signature (or use CREATE OR REPLACE), otherwise an empty database
+// migration run fails with PostgreSQL 42723 before runtime assertions begin.
+const sourceAuthorityMigration = await readFile(
+  path.join(migrationsDir, '20260809010000_p0_3_source_and_clearspeak_authority.sql'),
+  'utf8',
+);
+const snapshot10Signature =
+  'public.create_grounding_snapshot_tx(UUID,TEXT,JSONB,JSONB,JSONB,TEXT[],UUID[],TEXT,TEXT,BIGINT)';
+const snapshot10Drop = sourceAuthorityMigration.indexOf(`DROP FUNCTION IF EXISTS ${snapshot10Signature};`);
+const snapshot10Create = sourceAuthorityMigration.indexOf('CREATE FUNCTION public.create_grounding_snapshot_tx(');
+if (snapshot10Drop === -1 || snapshot10Create === -1 || snapshot10Drop > snapshot10Create) {
+  failures.push('The source-authority migration must safely replace the existing ten-argument create_grounding_snapshot_tx signature');
+}
+
 if (failures.length > 0) {
   console.error('Supabase migration static verification FAILED with errors:');
   for (const failure of failures) {

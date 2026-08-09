@@ -121,6 +121,23 @@ async function runRuntimeVerification() {
     }
     console.log('[Runtime Verification] All migration SQL compiled and executed cleanly!');
 
+    // Regression for the complete empty-database chain: the accepted authority
+    // migration and the newest forward migration both define this contract, but
+    // applying the chain once must converge on exactly one callable signature.
+    const snapshotFunctionResult = await client.query(`
+      SELECT count(*)::int AS count
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public'
+        AND p.proname = 'create_grounding_snapshot_tx'
+        AND oidvectortypes(p.proargtypes) =
+          'uuid, text, jsonb, jsonb, jsonb, text[], uuid[], text, text, bigint'
+    `);
+    if (snapshotFunctionResult.rows[0]?.count !== 1) {
+      throw new Error('Full migration chain did not converge on exactly one ten-argument create_grounding_snapshot_tx function');
+    }
+    console.log('[Runtime Verification] Full chain installed the ten-argument snapshot RPC exactly once.');
+
     // Setup Test Users
     const userA = '11111111-1111-1111-1111-111111111111';
     const userB = '22222222-2222-2222-2222-222222222222';

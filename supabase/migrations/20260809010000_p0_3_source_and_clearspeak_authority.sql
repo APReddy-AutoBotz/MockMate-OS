@@ -130,6 +130,7 @@ GRANT EXECUTE ON FUNCTION public.assert_snapshot_source_modules_tx(UUID,UUID[],T
 
 -- Replace snapshot creation so module validation occurs under the same locks.
 DROP FUNCTION IF EXISTS public.create_grounding_snapshot_tx(UUID,TEXT,JSONB,JSONB,JSONB,TEXT[],UUID[],TEXT,TEXT);
+DROP FUNCTION IF EXISTS public.create_grounding_snapshot_tx(UUID,TEXT,JSONB,JSONB,JSONB,TEXT[],UUID[],TEXT,TEXT,BIGINT);
 CREATE FUNCTION public.create_grounding_snapshot_tx(
  p_user_id UUID, p_purpose TEXT, p_projection JSONB, p_conflicts JSONB, p_consent JSONB,
  p_source_modules TEXT[], p_item_ids UUID[], p_client_request_id TEXT, p_request_hash TEXT,
