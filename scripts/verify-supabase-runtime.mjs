@@ -706,11 +706,17 @@ async function runRuntimeVerification() {
     const groundedSession = '12121212-1212-4212-8212-121212121212';
     const groundedPlan = '13131313-1313-4313-8313-131313131313';
     const groundedHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+    // These synthetic rows model state that production creates through separate
+    // owner-authoritative paths. Seed them as the harness owner, then explicitly
+    // restore service_role before exercising the binding RPC and replay laws.
+    await resetRole(client);
     await client.query(`
       INSERT INTO public.interview_sessions(id,user_id,role,setup,status) VALUES('${groundedSession}','${userA}','Authoritative Role',jsonb_build_object('interviewPlan',jsonb_build_object('authority',jsonb_build_object('planId','${groundedPlan}','planHash','${groundedHash}'))),'active');
       INSERT INTO public.interview_generated_plans(id,user_id,snapshot_id,bridge_id,plan_hash,plan_payload) VALUES('${groundedPlan}','${userA}','${snapA}','${replayBridgeId}','${groundedHash}','{"meta":{"intent":"test","controls":{"difficulty":"intermediate","totalQuestions":1,"includeBehavioral":true,"includeCoding":false,"timePerQuestion":"90s","deliveryMode":"exam","reasoningMode":"classic_behavioral","sourceMode":"job_description"}},"jdInsights":{"role":"Authoritative Role"},"questionSet":[{"id":"q","phase":"scenario","difficulty":"intermediate","question":"q","expectedSignals":[],"personaFocus":"p1"}]}'::jsonb);
       INSERT INTO public.usage_ledger(user_id,usage_date,feature,used,limit_value) VALUES('${userA}',current_date,'interview_question',19,20) ON CONFLICT(user_id,usage_date,feature) DO UPDATE SET used=19,limit_value=20;
     `);
+    await setRole(client, 'service_role');
     const firstBind = await client.query(`SELECT public.bind_interview_plan_session_tx('${userA}','${groundedPlan}','${groundedHash}','${replayBridgeId}','${groundedSession}') AS result;`);
     const lostResponseReplay = await client.query(`SELECT public.bind_interview_plan_session_tx('${userA}','${groundedPlan}','${groundedHash}','${replayBridgeId}','${groundedSession}') AS result;`);
     const usageAfterReplay = await client.query(`SELECT used FROM public.usage_ledger WHERE user_id='${userA}' AND usage_date=current_date AND feature='interview_question';`);
