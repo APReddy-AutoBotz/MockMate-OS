@@ -80,5 +80,10 @@ assertMatch(/Grounding snapshots and authoritative plan selectors require a vali
 assertMatch(/candidateRole: authoritativePlan\.plan\.jdInsights\.role/, 'backend/routes/interviewRoutes.ts', 'authoritative grounded role');
 assertNoMatch(/'inferred',\s*'pending_confirmation'/g, 'scripts/verify-supabase-runtime.mjs', 'non-canonical pending provenance fixture');
 assertMatch(/'inferred_pending',\s*'pending_confirmation'/g, 'scripts/verify-supabase-runtime.mjs', 'canonical first-confirmation fixture provenance');
+const closureMigration = 'supabase/migrations/20260809000000_p0_3_consent_lineage_audit_closure.sql';
+assertMatch(/consent->>'scope'='one_time'[\s\S]*snapshot_id=p_snapshot_id/g, closureMigration, 'one-time snapshot bridge reservation');
+assertMatch(/item_status='pending_confirmation'[\s\S]*item_status='superseded'[\s\S]*superseded_by=v_new_id/g, closureMigration, 'obsolete pending successor convergence');
+assertMatch(/superseded_by=p_item_id AND item_status='active'/g, closureMigration, 'newest successor active predecessor binding');
+assertNoMatch(/questionSet\?\.\[idx\]\?\.groundingReferences/g, 'backend/services/aiService.ts', 'adaptive root-index grounding fallback');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

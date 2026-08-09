@@ -52,7 +52,7 @@ export async function createModuleBridgeSession(input: CreateBridgeInput): Promi
   if (rpcErr) {
     const err: any = new Error(rpcErr.message);
     if (rpcErr.message.includes('Bridge snapshot ownership mismatch')) err.status = 404;
-    else if (rpcErr.message.includes('unique_user_bridge_client_req')) err.status = 409;
+    else if (rpcErr.message.includes('unique_user_bridge_client_req') || rpcErr.message.includes('one_time_snapshot_already_reserved')) err.status = 409;
     else err.status = 400;
     throw err;
   }

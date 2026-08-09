@@ -1045,4 +1045,45 @@ describe('Backend Express API & Route Parity Tests', () => {
     expect(report.challengeRecoveryTimeline?.[0].recoveryTurnId).toBe('33333333-3333-3333-3333-333333333333');
     expect(report.challengeRecoveryTimeline?.[0].trajectory).toBe('improved');
   });
+
+  it('39. Adaptive context audit uses only each persisted question lineage', async () => {
+    const rootReference = {
+      contextItemId: '11111111-1111-4111-8111-111111111111', sourceModule: 'resume',
+      sourceRecordId: 'resume-1', sourcePath: 'skills.0', label: 'Root evidence',
+      exactExcerpt: 'Root excerpt', purpose: 'resume_to_interview',
+    };
+    const probeReference = {
+      ...rootReference, contextItemId: '22222222-2222-4222-8222-222222222222',
+      sourcePath: 'experience.0', label: 'Probe evidence', exactExcerpt: 'Probe excerpt',
+    };
+    const reflectionReference = {
+      ...rootReference, contextItemId: '33333333-3333-4333-8333-333333333333',
+      sourcePath: 'projects.0', label: 'Reflection evidence', exactExcerpt: 'Reflection excerpt',
+    };
+    const groundedContext: any = {
+      ...sampleContext,
+      groundingSnapshot: {
+        id: '44444444-4444-4444-8444-444444444444', purpose: 'resume_to_interview',
+        sourceModules: ['resume'],
+      },
+      interviewPlan: {
+        ...sampleContext.interviewPlan,
+        questionSet: sampleContext.interviewPlan.questionSet.map((question, index) => ({
+          ...question, groundingReferences: [{ ...rootReference, label: `Unrelated root ${index}` }],
+        })),
+      },
+    };
+    const history: any[] = [
+      { id: 'root', interviewer: 'A', question: 'Root?', candidateResponse: 'A', timestamp: 1, questionKind: 'root', questionBlueprint: { groundingReferences: [rootReference] } },
+      { id: 'probe', interviewer: 'A', question: 'Probe?', candidateResponse: 'A', timestamp: 2, questionKind: 'probe', questionBlueprint: { groundingReferences: [probeReference] } },
+      { id: 'challenge', interviewer: 'A', question: 'Challenge?', candidateResponse: 'A', timestamp: 3, questionKind: 'challenge', questionBlueprint: {} },
+      { id: 'reflection', interviewer: 'A', question: 'Reflect?', candidateResponse: 'A', timestamp: 4, questionKind: 'reflection', questionBlueprint: { groundingReferences: [reflectionReference] } },
+    ];
+
+    const report = await aiService.generateFinalReport(history, groundedContext);
+    expect(report.contextAudit?.groundedQuestions.map(question => question.questionId)).toEqual(['root', 'probe', 'reflection']);
+    expect(report.contextAudit?.groundedQuestions.map(question => question.groundingReferences[0].label)).toEqual([
+      'Root evidence', 'Probe evidence', 'Reflection evidence',
+    ]);
+  });
 });

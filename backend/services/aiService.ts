@@ -776,7 +776,9 @@ REQUIRED OUTPUT SCHEMA (JSON):
       groundedQuestions: (history || []).map((t: any, idx: number) => ({
         questionId: t.id || `q_${idx}`,
         questionText: t.question || '',
-        groundingReferences: t.questionBlueprint?.groundingReferences || (context?.interviewPlan?.questionSet?.[idx]?.groundingReferences) || [],
+        // Adaptive history indices do not align with root questionSet indices.
+        // Only audit lineage persisted on the exact question that was asked.
+        groundingReferences: t.questionBlueprint?.groundingReferences || [],
       })).filter((g: any) => g.groundingReferences && g.groundingReferences.length > 0),
     } : undefined,
   };

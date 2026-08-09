@@ -685,23 +685,44 @@ async function runRuntimeVerification() {
     passedCount++;
     console.log('  ✓ Assertion 40. preference_version_conflict_is_transactional passed');
 
-    // Additional adversarial state-machine evidence: nullable bridge replay,
-    // successor authority transfer, and final-quota canonical session replay.
+    // Additional adversarial state-machine evidence: one-time/future consent,
+    // nullable bridge replay, successor convergence, and canonical session replay.
     await setRole(client, 'service_role');
-    const replayBridgeRequest = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${snapA}','resA','bridge-response-loss','bridge-response-loss-hash') AS result;`);
-    const replayBridgeAgain = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${snapA}','resA','bridge-response-loss','bridge-response-loss-hash') AS result;`);
+    const oneTimeBridgeSnapshot = '14141414-1414-4414-8414-141414141414';
+    const futureBridgeSnapshot = '15151515-1515-4515-8515-151515151515';
+    await client.query(`
+      INSERT INTO public.career_context_snapshots(id,user_id,purpose,context_version,projection,consent,source_modules,client_request_id,request_hash)
+      VALUES ('${oneTimeBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"one_time"}',ARRAY['resume'],'one-time-snapshot','one-time-snapshot-hash'),
+             ('${futureBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"future_sessions"}',ARRAY['resume'],'future-snapshot','future-snapshot-hash');
+    `);
+    const replayBridgeRequest = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resA','bridge-response-loss','bridge-response-loss-hash') AS result;`);
+    const replayBridgeAgain = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resA','bridge-response-loss','bridge-response-loss-hash') AS result;`);
     const replayBridgeId = replayBridgeRequest.rows[0].result.bridgeId;
     const replayBridgeRows = await client.query(`SELECT count(*) FROM public.career_context_bridges WHERE user_id='${userA}' AND client_request_id='bridge-response-loss';`);
     if (!replayBridgeAgain.rows[0].result.replayed || replayBridgeAgain.rows[0].result.bridgeId !== replayBridgeId || Number(replayBridgeRows.rows[0].count) !== 1) throw new Error('Nullable bridge exact replay did not reuse one row');
+    try {
+      await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resA','bridge-distinct','bridge-distinct-hash');`);
+      throw new Error('One-time snapshot authorized a second distinct bridge');
+    } catch (e) {
+      if (!e.message.includes('one_time_snapshot_already_reserved')) throw e;
+    }
+    const futureBridgeOne = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','resA','future-bridge-1','future-bridge-hash-1') AS result;`);
+    const futureBridgeTwo = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','resA','future-bridge-2','future-bridge-hash-2') AS result;`);
+    if (futureBridgeOne.rows[0].result.bridgeId === futureBridgeTwo.rows[0].result.bridgeId) throw new Error('Future-session consent did not permit distinct bridges');
 
-    const successor = await client.query(`SELECT id FROM public.career_context_items WHERE user_id='${userA}' AND source_record_id='resume-a' AND source_hash='changed-a';`);
+    const newestDraft = JSON.stringify([
+      { kind: 'skill', canonicalKey: 'shared.skill', label: 'Shared skill A newest', value: { type: 'text', text: 'A3' }, source: { module: 'resume', recordId: 'resume-a', fieldPath: 'skills.0', sourceRevision: 'v3', sourceHash: 'newest-a' }, exactExcerpt: 'A3', provenance: 'direct_source', status: 'active', sensitivity: 'standard' },
+    ]).replaceAll("'", "''");
+    await client.query(`SELECT public.rebuild_career_context_tx('${userA}'::uuid, '${newestDraft}'::jsonb);`);
+
+    const successor = await client.query(`SELECT id FROM public.career_context_items WHERE user_id='${userA}' AND source_record_id='resume-a' AND source_hash='newest-a';`);
     const versionBeforeConfirmation = await client.query(`SELECT context_version FROM public.career_context_state WHERE user_id='${userA}';`);
     await client.query(`SELECT public.mutate_career_context_item('${userA}','${successor.rows[0].id}','confirm',NULL,${Number(versionBeforeConfirmation.rows[0].context_version)});`);
     const confirmationReplay = await client.query(`SELECT public.mutate_career_context_item('${userA}','${successor.rows[0].id}','confirm',NULL,${Number(versionBeforeConfirmation.rows[0].context_version)});`);
     const versionAfterConfirmationReplay = await client.query(`SELECT context_version FROM public.career_context_state WHERE user_id='${userA}';`);
-    const lineageAuthority = await client.query(`SELECT source_hash,item_status FROM public.career_context_items WHERE id IN ('${originalAId}','${successor.rows[0].id}') ORDER BY source_hash;`);
+    const lineageAuthority = await client.query(`SELECT source_hash,item_status,superseded_by FROM public.career_context_items WHERE user_id='${userA}' AND source_record_id='resume-a' ORDER BY source_hash;`);
     const historicalMembership = await client.query(`SELECT count(*) FROM public.career_context_snapshot_items WHERE snapshot_id='${lineageSnapshot}' AND item_id='${originalAId}';`);
-    if (!confirmationReplay.rows[0].mutate_career_context_item.replayed || Number(versionAfterConfirmationReplay.rows[0].context_version) !== Number(versionBeforeConfirmation.rows[0].context_version)+1 || lineageAuthority.rows.find(r=>r.source_hash==='same-a')?.item_status !== 'superseded' || lineageAuthority.rows.find(r=>r.source_hash==='changed-a')?.item_status !== 'active' || Number(historicalMembership.rows[0].count)!==1) throw new Error('Successor confirmation did not transfer exact lineage authority exactly once');
+    if (!confirmationReplay.rows[0].mutate_career_context_item.replayed || Number(versionAfterConfirmationReplay.rows[0].context_version) !== Number(versionBeforeConfirmation.rows[0].context_version)+1 || lineageAuthority.rows.find(r=>r.source_hash==='same-a')?.item_status !== 'superseded' || lineageAuthority.rows.find(r=>r.source_hash==='changed-a')?.item_status !== 'superseded' || lineageAuthority.rows.find(r=>r.source_hash==='newest-a')?.item_status !== 'active' || Number(historicalMembership.rows[0].count)!==1) throw new Error('Newest successor did not directly receive authority while preserving obsolete and historical evidence');
 
     const groundedSession = '12121212-1212-4212-8212-121212121212';
     const groundedPlan = '13131313-1313-4313-8313-131313131313';
@@ -713,7 +734,7 @@ async function runRuntimeVerification() {
     await resetRole(client);
     await client.query(`
       INSERT INTO public.interview_sessions(id,user_id,role,setup,status) VALUES('${groundedSession}','${userA}','Authoritative Role',jsonb_build_object('interviewPlan',jsonb_build_object('authority',jsonb_build_object('planId','${groundedPlan}','planHash','${groundedHash}'))),'active');
-      INSERT INTO public.interview_generated_plans(id,user_id,snapshot_id,bridge_id,plan_hash,plan_payload) VALUES('${groundedPlan}','${userA}','${snapA}','${replayBridgeId}','${groundedHash}','{"meta":{"intent":"test","controls":{"difficulty":"intermediate","totalQuestions":1,"includeBehavioral":true,"includeCoding":false,"timePerQuestion":"90s","deliveryMode":"exam","reasoningMode":"classic_behavioral","sourceMode":"job_description"}},"jdInsights":{"role":"Authoritative Role"},"questionSet":[{"id":"q","phase":"scenario","difficulty":"intermediate","question":"q","expectedSignals":[],"personaFocus":"p1"}]}'::jsonb);
+      INSERT INTO public.interview_generated_plans(id,user_id,snapshot_id,bridge_id,plan_hash,plan_payload) VALUES('${groundedPlan}','${userA}','${oneTimeBridgeSnapshot}','${replayBridgeId}','${groundedHash}','{"meta":{"intent":"test","controls":{"difficulty":"intermediate","totalQuestions":1,"includeBehavioral":true,"includeCoding":false,"timePerQuestion":"90s","deliveryMode":"exam","reasoningMode":"classic_behavioral","sourceMode":"job_description"}},"jdInsights":{"role":"Authoritative Role"},"questionSet":[{"id":"q","phase":"scenario","difficulty":"intermediate","question":"q","expectedSignals":[],"personaFocus":"p1"}]}'::jsonb);
       INSERT INTO public.usage_ledger(user_id,usage_date,feature,used,limit_value) VALUES('${userA}',current_date,'interview_question',19,20) ON CONFLICT(user_id,usage_date,feature) DO UPDATE SET used=19,limit_value=20;
     `);
     await setRole(client, 'service_role');
