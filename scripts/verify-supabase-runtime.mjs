@@ -729,7 +729,7 @@ async function runRuntimeVerification() {
       INSERT INTO public.career_context_snapshots(id,user_id,purpose,context_version,projection,consent,source_modules,client_request_id,request_hash)
       VALUES ('${oneTimeBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"one_time","includedItemIds":["${originalAId}"]}',ARRAY['resume'],'one-time-snapshot','one-time-snapshot-hash'),
              ('${futureBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"future_sessions","includedItemIds":["${originalAId}"]}',ARRAY['resume'],'future-snapshot','future-snapshot-hash'),
-             ('${emptyDeclaredModuleSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"future_sessions","includedItemIds":["${originalAId}"]}',ARRAY['resume','clearspeak'],'empty-declared-module-snapshot','empty-declared-module-snapshot-hash');
+             ('${emptyDeclaredModuleSnapshot}','${userA}','clearspeak_to_interview',1,'{}','{"scope":"future_sessions","includedItemIds":["${originalAId}"]}',ARRAY['resume','clearspeak'],'empty-declared-module-snapshot','empty-declared-module-snapshot-hash');
       INSERT INTO public.career_context_snapshot_items(snapshot_id,item_id,position)
       VALUES ('${oneTimeBridgeSnapshot}','${originalAId}',0),
              ('${futureBridgeSnapshot}','${originalAId}',0),
@@ -753,7 +753,7 @@ async function runRuntimeVerification() {
       if (!e.message.includes('source module or record does not belong to authoritative snapshot membership')) throw e;
     }
     try {
-      await client.query(`SELECT public.create_module_bridge_tx('${userA}','clearspeak','interview','resume_to_interview','${emptyDeclaredModuleSnapshot}',NULL,'empty-module-bridge','empty-module-bridge-hash');`);
+      await client.query(`SELECT public.create_module_bridge_tx('${userA}','clearspeak','interview','clearspeak_to_interview','${emptyDeclaredModuleSnapshot}',NULL,'empty-module-bridge','empty-module-bridge-hash');`);
       throw new Error('A declared source module with no selected snapshot members authorized a bridge');
     } catch (e) {
       if (!e.message.includes('source module or record does not belong to authoritative snapshot membership')) throw e;
