@@ -719,33 +719,78 @@ async function runRuntimeVerification() {
     }
     console.log('  ✓ Supplemental concurrent snapshot idempotency assertion passed');
 
-    // The browser intentionally submits only the selected conflict winner.
+    // The browser intentionally submits only selected conflict winners. Seed
+    // two genuine active authoritative conflict sets as the harness owner;
+    // rejected competitors exist for validation but never become members.
+    await resetRole(client);
+    const conflictWinnerA = '31313131-3131-4313-8313-313131313131';
+    const conflictLoserA = '32323232-3232-4323-8323-323232323232';
+    const conflictWinnerB = '33333333-3333-4333-8333-333333333333';
+    const conflictLoserB = '34343434-3434-4343-8343-343434343434';
+    await client.query(`INSERT INTO public.career_context_items
+      (id,user_id,kind,canonical_key,label,value,source_module,source_record_id,source_path,source_revision,source_hash,exact_excerpt,provenance,item_status,sensitivity,user_confirmed_at)
+      VALUES
+      ('${conflictWinnerA}','${userA}','skill','runtime.conflict.a','Winner A','{"type":"text","text":"Winner A"}','resume','runtime-a1','skills.0','v1','runtime-a1','Winner A','user_confirmed','active','standard',now()),
+      ('${conflictLoserA}','${userA}','skill','runtime.conflict.a','Loser A','{"type":"text","text":"Loser A"}','resume','runtime-a2','skills.0','v1','runtime-a2','Loser A','user_confirmed','active','standard',now()),
+      ('${conflictWinnerB}','${userA}','skill','runtime.conflict.b','Winner B','{"type":"text","text":"Winner B"}','resume','runtime-b1','skills.0','v1','runtime-b1','Winner B','user_confirmed','active','standard',now()),
+      ('${conflictLoserB}','${userA}','skill','runtime.conflict.b','Loser B','{"type":"text","text":"Loser B"}','resume','runtime-b2','skills.0','v1','runtime-b2','Loser B','user_confirmed','active','standard',now());`);
+    await setRole(client, 'service_role');
     // PostgreSQL validates that winner against the broader locked active set,
     // while immutable membership contains the winner and never its competitor.
-    await setRole(client, 'service_role');
     const winnerOnlyVersion = Number((await client.query(`SELECT context_version FROM public.career_context_state WHERE user_id='${userA}'`)).rows[0].context_version);
     const winnerOnly = await client.query(`SELECT public.create_grounding_snapshot_tx(
-      '${userA}','manual_selection','{"skills":["A"]}','[]',
-      '{"scope":"one_time","includedItemIds":["${originalAId}"]}',ARRAY['resume'],ARRAY['${originalAId}']::uuid[],
-      'winner-only-conflict','winner-only-conflict-hash',${winnerOnlyVersion},'{"shared.skill":"${originalAId}"}'::jsonb
+      '${userA}','manual_selection','{"skills":["Winner A","Winner B"]}','[]',
+      '{"scope":"one_time","includedItemIds":["${conflictWinnerA}","${conflictWinnerB}"]}',ARRAY['resume'],ARRAY['${conflictWinnerA}','${conflictWinnerB}']::uuid[],
+      'winner-only-conflict','winner-only-conflict-hash',${winnerOnlyVersion},'{"runtime.conflict.a":"${conflictWinnerA}","runtime.conflict.b":"${conflictWinnerB}"}'::jsonb
     ) AS result;`);
     const winnerOnlyReplay = await client.query(`SELECT public.create_grounding_snapshot_tx(
-      '${userA}','manual_selection','{"skills":["A"]}','[]',
-      '{"scope":"one_time","includedItemIds":["${originalAId}"]}',ARRAY['resume'],ARRAY['${originalAId}']::uuid[],
-      'winner-only-conflict','winner-only-conflict-hash',${winnerOnlyVersion},'{"shared.skill":"${originalAId}"}'::jsonb
+      '${userA}','manual_selection','{"skills":["Winner A","Winner B"]}','[]',
+      '{"scope":"one_time","includedItemIds":["${conflictWinnerA}","${conflictWinnerB}"]}',ARRAY['resume'],ARRAY['${conflictWinnerA}','${conflictWinnerB}']::uuid[],
+      'winner-only-conflict','winner-only-conflict-hash',${winnerOnlyVersion},'{"runtime.conflict.a":"${conflictWinnerA}","runtime.conflict.b":"${conflictWinnerB}"}'::jsonb
     ) AS result;`);
     const winnerMembership = await client.query(`SELECT item_id FROM public.career_context_snapshot_items WHERE snapshot_id='${winnerOnly.rows[0].result.snapshotId}' ORDER BY position;`);
+    const alternateWinner = await client.query(`SELECT public.create_grounding_snapshot_tx(
+      '${userA}','manual_selection','{"skills":["Loser A"]}','[]',
+      '{"scope":"one_time","includedItemIds":["${conflictLoserA}"]}',ARRAY['resume'],ARRAY['${conflictLoserA}']::uuid[],
+      'alternate-winner-conflict','alternate-winner-conflict-hash',${winnerOnlyVersion},'{"runtime.conflict.a":"${conflictLoserA}"}'::jsonb
+    ) AS result;`);
+    const alternateMembership = await client.query(`SELECT item_id FROM public.career_context_snapshot_items WHERE snapshot_id='${alternateWinner.rows[0].result.snapshotId}';`);
     try {
       await client.query(`SELECT public.create_grounding_snapshot_tx(
-        '${userA}','manual_selection','{}','[]','{"scope":"one_time","includedItemIds":["${originalAId}"]}',
-        ARRAY['resume'],ARRAY['${originalAId}']::uuid[],'missing-winner','missing-winner-hash',${winnerOnlyVersion},'{}'::jsonb
+        '${userA}','manual_selection','{}','[]','{"scope":"one_time","includedItemIds":["${conflictWinnerA}"]}',
+        ARRAY['resume'],ARRAY['${conflictWinnerA}']::uuid[],'missing-winner','missing-winner-hash',${winnerOnlyVersion},'{}'::jsonb
       );`);
       throw new Error('Winner-only conflict snapshot accepted a missing selection');
     } catch (e) {
       if (!e.message.includes('Unresolved or mismatched authoritative conflict selection')) throw e;
     }
+    for (const [label, sql, expected] of [
+      ['unknown conflict key', `SELECT public.create_grounding_snapshot_tx('${userA}','manual_selection','{}','[]','{"scope":"one_time","includedItemIds":["${conflictWinnerA}"]}',ARRAY['resume'],ARRAY['${conflictWinnerA}']::uuid[],'unknown-conflict','unknown-conflict-hash',${winnerOnlyVersion},'{"unknown.key":"${conflictWinnerA}"}'::jsonb)`, 'invalid for the authoritative context'],
+      ['changed winner replay', `SELECT public.create_grounding_snapshot_tx('${userA}','manual_selection','{}','[]','{"scope":"one_time","includedItemIds":["${conflictLoserA}","${conflictWinnerB}"]}',ARRAY['resume'],ARRAY['${conflictLoserA}','${conflictWinnerB}']::uuid[],'winner-only-conflict','changed-winner-hash',${winnerOnlyVersion},'{"runtime.conflict.a":"${conflictLoserA}","runtime.conflict.b":"${conflictWinnerB}"}'::jsonb)`, 'mismatched request hash'],
+      ['stale context version', `SELECT public.create_grounding_snapshot_tx('${userA}','manual_selection','{}','[]','{"scope":"one_time","includedItemIds":["${conflictWinnerA}"]}',ARRAY['resume'],ARRAY['${conflictWinnerA}']::uuid[],'stale-winner','stale-winner-hash',${winnerOnlyVersion - 1},'{"runtime.conflict.a":"${conflictWinnerA}"}'::jsonb)`, 'Stale or mismatched context version'],
+    ]) {
+      try {
+        await client.query(sql);
+        throw new Error(`Winner-only conflict authority accepted ${label}`);
+      } catch (e) {
+        if (!e.message.includes(expected)) throw e;
+      }
+    }
     await resetRole(client);
-    if (winnerMembership.rows.length !== 1 || winnerMembership.rows[0].item_id !== originalAId ||
+    await client.query(`UPDATE public.career_context_items SET item_status='revoked' WHERE id='${conflictLoserB}';`);
+    await setRole(client, 'service_role');
+    try {
+      await client.query(`SELECT public.create_grounding_snapshot_tx(
+        '${userA}','manual_selection','{}','[]','{"scope":"one_time","includedItemIds":["${conflictLoserB}"]}',
+        ARRAY['resume'],ARRAY['${conflictLoserB}']::uuid[],'revoked-winner','revoked-winner-hash',${winnerOnlyVersion},'{"runtime.conflict.b":"${conflictLoserB}"}'::jsonb
+      );`);
+      throw new Error('Winner-only conflict authority accepted a revoked winner');
+    } catch (e) {
+      if (!e.message.includes('invalid for the authoritative context')) throw e;
+    }
+    await resetRole(client);
+    if (winnerMembership.rows.length !== 2 || winnerMembership.rows[0].item_id !== conflictWinnerA || winnerMembership.rows[1].item_id !== conflictWinnerB ||
+        alternateMembership.rows.length !== 1 || alternateMembership.rows[0].item_id !== conflictLoserA ||
         winnerOnly.rows[0].result.snapshotId !== winnerOnlyReplay.rows[0].result.snapshotId || !winnerOnlyReplay.rows[0].result.replayed) {
       throw new Error('Winner-only conflict request did not preserve canonical winner-only membership and replay');
     }
