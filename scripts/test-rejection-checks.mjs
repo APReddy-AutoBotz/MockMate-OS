@@ -146,5 +146,7 @@ assertMatch(/canonicalKey: 'clearspeak\.practiced_vocab'[\s\S]*provenance: 'user
 const provenanceBudgetMigration = 'supabase/migrations/20260810000000_p0_3_bridge_provenance_budget_parity.sql';
 assertMatch(/resume_to_clearspeak'[\s\S]*p_source_module='resume'[\s\S]*resume_to_interview'[\s\S]*p_source_module='resume'[\s\S]*clearspeak_to_interview'[\s\S]*p_source_module='clearspeak'[\s\S]*interview_personalization'[\s\S]*p_source_module='interview'/, provenanceBudgetMigration, 'bridge purpose binds canonical source and target modules');
 assertMatch(/maxTurns',LEAST\(12,GREATEST\(v_question_count,CASE WHEN[\s\S]*difficulty}'='expert' THEN 10 ELSE 8 END\)\)/, provenanceBudgetMigration, 'grounded Interview budget matches ordinary expert and intermediate difficulty law');
+assertMatch(/resolveSnapshotConflictItems\(items, conflictSelections\)[\s\S]*projectCareerContext\(resolvedItems[\s\S]*includedItemIds: resolvedItems\.map[\s\S]*p_item_ids: resolvedItems\.map/, 'backend/services/groundingSnapshotService.ts', 'conflict-resolved winners are the only snapshot consent and membership authority');
+assertNoMatch(/alternativeTargetRoles = activeItems/, 'backend/services/careerContextProjectionService.ts', 'rejected target-role alternatives cannot leak into the resolved projection');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

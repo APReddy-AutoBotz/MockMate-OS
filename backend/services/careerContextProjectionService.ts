@@ -59,7 +59,7 @@ export function projectCareerContext(
     }
   }
 
-  const alternativeTargetRoles = activeItems
+  const alternativeTargetRoles = selectedItems
     .filter(i => i.kind === 'target_role' && getItemStringValue(i) !== targetRole)
     .map(getItemStringValue);
 
@@ -106,6 +106,60 @@ export function projectCareerContext(
     },
     conflicts,
   };
+}
+
+/**
+ * Resolve the exact item membership authorized by an explicit snapshot
+ * request. Unlike the projection preview, snapshot creation must fail closed:
+ * every requested conflict needs one winner and selections may not refer to a
+ * different/non-conflicting canonical key.
+ */
+export function resolveSnapshotConflictItems(
+  items: CareerContextItem[],
+  conflictSelections: Record<string, string>
+): CareerContextItem[] {
+  const byCanonicalKey = new Map<string, CareerContextItem[]>();
+  for (const item of items) {
+    const competing = byCanonicalKey.get(item.canonicalKey) || [];
+    competing.push(item);
+    byCanonicalKey.set(item.canonicalKey, competing);
+  }
+
+  for (const selectedKey of Object.keys(conflictSelections)) {
+    const competing = byCanonicalKey.get(selectedKey);
+    if (!competing || competing.length < 2) {
+      throw Object.assign(
+        new Error(`Conflict selection for '${selectedKey}' does not identify a requested conflict.`),
+        { status: 422 }
+      );
+    }
+  }
+
+  const resolved: CareerContextItem[] = [];
+  for (const [canonicalKey, competing] of byCanonicalKey) {
+    if (competing.length === 1) {
+      resolved.push(competing[0]);
+      continue;
+    }
+
+    const selectedId = conflictSelections[canonicalKey];
+    if (!selectedId) {
+      throw Object.assign(
+        new Error(`Unresolved conflict for key '${canonicalKey}'. Explicit selection required.`),
+        { status: 422 }
+      );
+    }
+    const winner = competing.find(item => item.id === selectedId);
+    if (!winner) {
+      throw Object.assign(
+        new Error(`Conflict winner for '${canonicalKey}' must be one of its requested eligible items.`),
+        { status: 422 }
+      );
+    }
+    resolved.push(winner);
+  }
+
+  return resolved;
 }
 
 function getItemStringValue(item: CareerContextItem): string {

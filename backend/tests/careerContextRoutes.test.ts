@@ -21,6 +21,7 @@ jest.mock('../middleware/authMiddleware', () => ({
 const mockItems: any[] = [];
 const mockSnapshots: any[] = [];
 const mockBridges: any[] = [];
+const mockSnapshotMemberships = new Map<string, string[]>();
 
 const mockSupabaseClient: any = {
   from: (table: string) => {
@@ -132,9 +133,11 @@ const mockSupabaseClient: any = {
       return {
         insert: async () => ({ error: null }),
         select: () => ({
-          eq: () => ({
+          eq: (_column: string, snapshotId: string) => ({
             order: async () => ({
-              data: mockItems.filter(item => item.item_status === 'active').map((item, position) => ({
+              data: mockItems
+                .filter(item => (mockSnapshotMemberships.get(snapshotId) || []).includes(item.id))
+                .map((item, position) => ({
                 position,
                 career_context_items: item,
               })),
@@ -250,6 +253,7 @@ const mockSupabaseClient: any = {
         created_at: new Date().toISOString(),
       };
       mockSnapshots.push(snapshotRow);
+      mockSnapshotMemberships.set(snapId, [...args.p_item_ids]);
       return { data: { snapshotId: snapId }, error: null };
     }
     if (fnName === 'create_module_bridge_tx') {
@@ -314,6 +318,7 @@ describe('Career Context API Routes (P0-3)', () => {
     mockItems.length = 0;
     mockSnapshots.length = 0;
     mockBridges.length = 0;
+    mockSnapshotMemberships.clear();
 
     // Seed mock active item & contact item & inferred item
     mockItems.push({
@@ -456,6 +461,50 @@ describe('Career Context API Routes (P0-3)', () => {
     const res2 = await request(app).post('/api/career-context/bridges').send(reqBody);
     expect(res2.status).toBe(200);
     expect(res2.body.bridge.id).toBe(res1.body.bridge.id);
+  });
+
+  it('keeps only the selected conflict winner in immutable membership and replay identity', async () => {
+    const competingRoleId = '10000000-0000-0000-0000-000000000004';
+    mockItems.push({
+      ...mockItems[0],
+      id: competingRoleId,
+      label: 'Target Role: Security Engineer',
+      value: { type: 'text', text: 'Security Engineer' },
+      exact_excerpt: 'Security Engineer',
+      source_hash: 'h4',
+    });
+    const requestBody = {
+      purpose: 'resume_to_interview',
+      includedItemIds: [ITEM_ROLE_ID, competingRoleId],
+      excludedItemIds: [],
+      conflictSelections: { 'resume.target_role': ITEM_ROLE_ID },
+      consent: {
+        scope: 'one_time',
+        purpose: 'resume_to_interview',
+        includedItemIds: [ITEM_ROLE_ID, competingRoleId],
+        excludedItemIds: [],
+        sourceModules: ['resume'],
+        acknowledgedAt: new Date().toISOString(),
+      },
+      clientRequestId: 'snap_conflict_replay_001',
+    };
+
+    const created = await request(app).post('/api/career-context/snapshots').send(requestBody);
+    expect(created.status).toBe(200);
+    expect(created.body.snapshot.itemIds).toEqual([ITEM_ROLE_ID]);
+    expect(created.body.snapshot.groundingReferences.map((ref: any) => ref.contextItemId)).toEqual([ITEM_ROLE_ID]);
+    expect(JSON.stringify(created.body.snapshot)).not.toContain('Security Engineer');
+
+    const replay = await request(app).post('/api/career-context/snapshots').send(requestBody);
+    expect(replay.status).toBe(200);
+    expect(replay.body.snapshot.itemIds).toEqual([ITEM_ROLE_ID]);
+
+    const changedWinner = await request(app).post('/api/career-context/snapshots').send({
+      ...requestBody,
+      conflictSelections: { 'resume.target_role': competingRoleId },
+    });
+    expect(changedWinner.status).toBe(409);
+    expect(mockSnapshotMemberships.get(SNAPSHOT_ID)).toEqual([ITEM_ROLE_ID]);
   });
 
   it('6. denies browser-directed generic bridge consumption', async () => {

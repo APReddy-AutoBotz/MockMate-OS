@@ -6,7 +6,7 @@ import {
   CareerContextItem
 } from 'mockmate-shared';
 import { supabaseAdmin } from '../supabaseAdmin';
-import { projectCareerContext } from './careerContextProjectionService';
+import { projectCareerContext, resolveSnapshotConflictItems } from './careerContextProjectionService';
 import crypto from 'crypto';
 
 export interface CreateSnapshotInput {
@@ -50,7 +50,7 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
     contextVersion,
     includedItemIds: [...includedItemIds].sort(),
     excludedItemIds: [...excludedItemIds].sort(),
-    conflictSelections,
+    conflictSelections: Object.fromEntries(Object.entries(conflictSelections).sort(([a], [b]) => a.localeCompare(b))),
     scope,
     sourceModules: [...sourceModules].sort(),
   })).digest('hex');
@@ -152,21 +152,16 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
     }
   }
 
-  // 4. Project context & compute conflicts
-  const { projection, conflicts } = projectCareerContext(items, purpose, conflictSelections, personalizationEnabled);
-
-  // Reject unresolved conflicts
-  const unresolved = conflicts.find(c => c.requiresUserChoice && !conflictSelections[c.canonicalKey]);
-  if (unresolved) {
-    const err: any = new Error(`Unresolved conflict for key '${unresolved.canonicalKey}'. Explicit selection required.`);
-    err.status = 422;
-    throw err;
-  }
+  // 4. Resolve conflicts before projection and persistence. The same exact
+  // winner-only set is authoritative for consent, immutable membership,
+  // references, and every downstream grounded module.
+  const resolvedItems = resolveSnapshotConflictItems(items, conflictSelections);
+  const { projection, conflicts } = projectCareerContext(resolvedItems, purpose, {}, personalizationEnabled);
 
   const consent = {
     scope,
     purpose,
-    includedItemIds: items.map(i => i.id),
+    includedItemIds: resolvedItems.map(i => i.id),
     excludedItemIds,
     sourceModules,
     acknowledgedAt,
@@ -180,7 +175,7 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
     p_conflicts: conflicts,
     p_consent: consent,
     p_source_modules: sourceModules,
-    p_item_ids: items.map(i => i.id),
+    p_item_ids: resolvedItems.map(i => i.id),
     p_expected_context_version: expectedContextVersion ?? contextVersion,
     p_client_request_id: clientRequestId,
     p_request_hash: requestHash,
