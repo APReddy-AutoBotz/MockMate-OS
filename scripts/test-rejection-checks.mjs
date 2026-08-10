@@ -148,5 +148,7 @@ assertMatch(/resume_to_clearspeak'[\s\S]*p_source_module='resume'[\s\S]*resume_t
 assertMatch(/maxTurns',LEAST\(12,GREATEST\(v_question_count,CASE WHEN[\s\S]*difficulty}'='expert' THEN 10 ELSE 8 END\)\)/, provenanceBudgetMigration, 'grounded Interview budget matches ordinary expert and intermediate difficulty law');
 assertMatch(/resolveSnapshotConflictItems\(items, authoritativeConflictItems, conflictSelections\)[\s\S]*projectCareerContext\(resolvedItems[\s\S]*includedItemIds: resolvedItems\.map[\s\S]*p_item_ids: resolvedItems\.map/, 'backend/services/groundingSnapshotService.ts', 'winner-only UI requests resolve against authoritative conflicts and persist only winners');
 assertNoMatch(/alternativeTargetRoles = activeItems/, 'backend/services/careerContextProjectionService.ts', 'rejected target-role alternatives cannot leak into the resolved projection');
+assertNoMatch(/createResumeGroundedInterviewDraft\(\s*['"]{2}/, 'App.tsx', 'ungrounded Resume launches must not call the grounded draft constructor with blank authority');
+assertMatch(/await rebuildCareerContext\(\)[\s\S]*await fetchContext\(\)/, 'components/CareerContextPanel.tsx', 'Career Context rebuild mutation precedes persisted-state refresh');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

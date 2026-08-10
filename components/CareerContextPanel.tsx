@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CareerContextItem, CareerContextState } from 'mockmate-shared';
 import { Shield, Check, Trash2, AlertCircle, RefreshCw, ChevronLeft } from 'lucide-react';
-import { fetchCareerContext, applyItemDecision, setPersonalizationPreference } from '../services/careerContextService';
+import { fetchCareerContext, rebuildCareerContext, applyItemDecision, setPersonalizationPreference } from '../services/careerContextService';
 
 interface CareerContextPanelProps {
   onBack: () => void;
@@ -12,6 +12,7 @@ export const CareerContextPanel: React.FC<CareerContextPanelProps> = ({ onBack }
   const [state, setState] = useState<CareerContextState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRebuilding, setIsRebuilding] = useState(false);
+  const [rebuildError, setRebuildError] = useState<string | null>(null);
 
   const fetchContext = async () => {
     setIsLoading(true);
@@ -23,21 +24,26 @@ export const CareerContextPanel: React.FC<CareerContextPanelProps> = ({ onBack }
       }
     } catch (e) {
       console.error('Failed to load career context', e);
+      throw e;
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchContext();
+    void fetchContext().catch(() => undefined);
   }, []);
 
   const handleRebuild = async () => {
+    if (isRebuilding) return;
     setIsRebuilding(true);
+    setRebuildError(null);
     try {
+      await rebuildCareerContext();
       await fetchContext();
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to rebuild career context', e);
+      setRebuildError(e?.message || 'Career Context rebuild failed. Please retry.');
     } finally {
       setIsRebuilding(false);
     }
@@ -86,6 +92,13 @@ export const CareerContextPanel: React.FC<CareerContextPanelProps> = ({ onBack }
           {isRebuilding ? 'Rebuilding...' : 'Rebuild Context'}
         </button>
       </div>
+
+      {rebuildError && (
+        <div role="alert" className="flex items-center gap-2 rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-xs text-red-200">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>Rebuild failed: {rebuildError}</span>
+        </div>
+      )}
 
       {/* State & Preferences */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white/[0.02] border border-white/10 rounded-2xl p-6">

@@ -15,6 +15,7 @@ import SplashScreen from './components/SplashScreen';
 import SimplifiedReport from './components/SimplifiedReport';
 import InterviewOrbit from './components/InterviewOrbit';
 import { FinalReport, InterviewSessionContext as SessionContext, SessionControls, InterviewSetupDraft, ResumeData, createBlankInterviewSetupDraft, createResumeGroundedInterviewDraft, createClearSpeakGroundedInterviewDraft } from "mockmate-shared";
+import { createUngroundedResumeInterviewDraft } from './services/interviewSetupService';
 import { Logo } from './components/icons/Logo';
 import LandingPage from './components/LandingPage';
 import Login from './components/Login';
@@ -377,8 +378,7 @@ const App: React.FC = () => {
             },
             () => {
                 audioService.playStart();
-                const draft = createResumeGroundedInterviewDraft('', '', targetRole, intentText);
-                if (jdText) draft.jdText = jdText;
+                const draft = createUngroundedResumeInterviewDraft(targetRole, intentText, jdText);
                 setSetupDraft(draft);
                 setAppState('CONTEXT_UPLOAD');
             }

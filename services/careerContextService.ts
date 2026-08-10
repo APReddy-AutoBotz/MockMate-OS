@@ -2,6 +2,8 @@ import { apiClient } from './apiClient';
 import {
   CareerContextGetResponse,
   CareerContextGetResponseSchema,
+  CareerContextRebuildResponse,
+  CareerContextRebuildResponseSchema,
   CareerContextPreferenceResponse,
   CareerContextPreferenceResponseSchema,
   CareerContextItemDecisionResponse,
@@ -16,6 +18,14 @@ import {
 
 export async function fetchCareerContext(): Promise<CareerContextGetResponse> {
   return apiClient.get('/api/career-context', CareerContextGetResponseSchema);
+}
+
+export async function rebuildCareerContext(): Promise<CareerContextRebuildResponse> {
+  return apiClient.post(
+    '/api/career-context/rebuild',
+    CareerContextRebuildResponseSchema,
+    {}
+  );
 }
 
 export async function setPersonalizationPreference(

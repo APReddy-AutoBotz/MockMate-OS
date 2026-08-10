@@ -535,6 +535,8 @@ export const CareerContextRebuildResponseSchema = z.object({
   success: z.boolean(),
   state: CareerContextStateSchema,
   addedCount: z.number().int(),
+  supersededCount: z.number().int(),
+  unchangedCount: z.number().int(),
 }).strict();
 export type CareerContextRebuildResponse = z.infer<typeof CareerContextRebuildResponseSchema>;
 
