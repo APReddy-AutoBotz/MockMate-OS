@@ -150,5 +150,7 @@ assertMatch(/resolveSnapshotConflictItems\(items, authoritativeConflictItems, co
 assertNoMatch(/alternativeTargetRoles = activeItems/, 'backend/services/careerContextProjectionService.ts', 'rejected target-role alternatives cannot leak into the resolved projection');
 assertNoMatch(/createResumeGroundedInterviewDraft\(\s*['"]{2}/, 'App.tsx', 'ungrounded Resume launches must not call the grounded draft constructor with blank authority');
 assertMatch(/await rebuildCareerContext\(\)[\s\S]*await fetchContext\(\)/, 'components/CareerContextPanel.tsx', 'Career Context rebuild mutation precedes persisted-state refresh');
+assertMatch(/s\.status === 'completed'[\s\S]*FinalReportSchema\.safeParse\(s\.report_summary\)/, 'backend/routes/careerContextRoutes.ts', 'Interview rebuild reads only valid completed persisted report summaries');
+assertNoMatch(/s\.final_report/, 'backend/routes/careerContextRoutes.ts', 'Interview rebuild must not read the nonexistent final_report field');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

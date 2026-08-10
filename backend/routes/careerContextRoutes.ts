@@ -20,7 +20,8 @@ import {
   CareerContextItemDecisionRequestSchema,
   GroundingSnapshotCreateRequestSchema,
   ModuleBridgeCreateRequestSchema,
-  CareerContextPreferenceRequestSchema
+  CareerContextPreferenceRequestSchema,
+  FinalReportSchema
 } from 'mockmate-shared';
 
 const router = Router();
@@ -154,10 +155,13 @@ router.post('/rebuild', async (req, res) => {
 
     if (intSessions && intSessions.length > 0) {
       intSessions.forEach(s => {
-        if (s.final_report) {
+        const persistedReport = s.status === 'completed'
+          ? FinalReportSchema.safeParse(s.report_summary)
+          : null;
+        if (persistedReport?.success) {
           const items = buildInterviewContextItems({
             sessionId: s.id,
-            report: s.final_report,
+            report: persistedReport.data,
           });
           drafts.push(...items);
         }

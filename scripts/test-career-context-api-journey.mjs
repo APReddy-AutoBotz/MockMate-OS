@@ -51,6 +51,7 @@ function createAuthoritativePersistenceDouble() {
   };
   const calls = [];
   const sourceErrors = {};
+  const rebuiltSourceIdentities = new Set();
 
   class Query {
     constructor(table) { this.table = table; this.filters = []; this.operation = 'select'; this.payload = null; }
@@ -112,8 +113,11 @@ function createAuthoritativePersistenceDouble() {
       }
       if (name === 'rebuild_career_context_tx') {
         const state = tables.career_context_state.find(row => row.user_id === args.p_user_id);
-        state.context_version += 1; state.updated_at = now;
-        return { data: { addedCount: args.p_drafts.length, updatedCount: 0, unchangedCount: 0 }, error: null };
+        const identities = args.p_drafts.map(draft => [draft.source.module, draft.source.recordId, draft.source.fieldPath, draft.source.sourceRevision, draft.source.sourceHash].join(':'));
+        const addedCount = identities.filter(identity => !rebuiltSourceIdentities.has(identity)).length;
+        identities.forEach(identity => rebuiltSourceIdentities.add(identity));
+        if (addedCount > 0) { state.context_version += 1; state.updated_at = now; }
+        return { data: { addedCount, updatedCount: 0, unchangedCount: identities.length - addedCount }, error: null };
       }
       if (name === 'create_grounding_snapshot_tx') {
         const state = tables.career_context_state.find(row => row.user_id === args.p_user_id);
@@ -227,6 +231,27 @@ try {
   const authoritative = createAuthoritativePersistenceDouble();
   installSupabaseAdminForTest(authoritative.client);
 
+  const completedInterviewReport = {
+    overallSummary: 'Strong structured interview practice', evaluationModel: 'v1_dimensions',
+    readiness: { status: 'INTERVIEW_READY', reasoning: 'Consistent evidence' },
+    quantitativeAnalysis: { dimension_scores: [] }, advisoryPanel: [], questionPerformance: [],
+    biggestRiskArea: { title: 'Pacing', observation: 'Pause before answering', mitigation: 'Take a breath' },
+    coachPack: null, trajectoryReplay: [], auditLayer: [], simplifiedScore: null,
+    quickWins: [], prioritizedActions: [{ action: 'Pause before probes', impact: 'high' }],
+  };
+  authoritative.tables.resume_reviews.push({
+    id: 'resume-rebuild-1', user_id: USER_A, created_at: now,
+    resume_data: { basics: { name: 'Test User' }, skills: [{ category: 'Languages', items: ['TypeScript'] }], experience: [], projects: [] },
+  });
+  authoritative.tables.clearspeak_profiles.push({
+    user_id: USER_A, role: 'Engineer', level: 1, goal: 'Speak clearly', practice_duration: 5, created_at: now, updated_at: now,
+  });
+  authoritative.tables.interview_sessions.push(
+    { id: 'interview-completed-1', user_id: USER_A, status: 'completed', report_summary: completedInterviewReport, created_at: now },
+    { id: 'interview-incomplete-1', user_id: USER_A, status: 'active', report_summary: completedInterviewReport, created_at: now },
+    { id: 'interview-invalid-report-1', user_id: USER_A, status: 'completed', report_summary: { overallSummary: 'invalid' }, created_at: now },
+  );
+
   // 3. Every authoritative rebuild source fails closed before the rebuild mutation.
   for (const sourceTable of ['resume_reviews', 'clearspeak_profiles', 'clearspeak_sessions', 'interview_sessions']) {
     authoritative.sourceErrors[sourceTable] = `${sourceTable} unavailable`;
@@ -239,9 +264,26 @@ try {
     delete authoritative.sourceErrors[sourceTable];
   }
   const successfulRebuild = await fetch(`${baseUrl}/api/career-context/rebuild`, { method: 'POST', headers: headersUserA });
-  if (successfulRebuild.status !== 200 || authoritative.calls.filter(call => call.name === 'rebuild_career_context_tx').length !== 1) {
+  const successfulRebuildBody = await successfulRebuild.json();
+  const firstRebuildCall = authoritative.calls.find(call => call.name === 'rebuild_career_context_tx');
+  const interviewDrafts = firstRebuildCall?.args.p_drafts.filter(draft => draft.source.module === 'interview') || [];
+  if (successfulRebuild.status !== 200 || authoritative.calls.filter(call => call.name === 'rebuild_career_context_tx').length !== 1 ||
+      successfulRebuildBody.addedCount < 1 || interviewDrafts.length < 1 ||
+      interviewDrafts.some(draft => draft.source.recordId !== 'interview-completed-1') ||
+      !firstRebuildCall.args.p_drafts.some(draft => draft.source.module === 'resume') ||
+      !firstRebuildCall.args.p_drafts.some(draft => draft.source.module === 'clearspeak')) {
     throw new Error('All-source-success rebuild did not use exactly one authoritative atomic mutation');
   }
+  const versionAfterFirstRebuild = authoritative.tables.career_context_state[0].context_version;
+  const replayedRebuild = await fetch(`${baseUrl}/api/career-context/rebuild`, { method: 'POST', headers: headersUserA });
+  const replayedRebuildBody = await replayedRebuild.json();
+  if (replayedRebuild.status !== 200 || replayedRebuildBody.addedCount !== 0 || replayedRebuildBody.unchangedCount < 1 ||
+      authoritative.tables.career_context_state[0].context_version !== versionAfterFirstRebuild) {
+    throw new Error('Authoritative all-source rebuild replay was not idempotent');
+  }
+  // The remaining journey creates and counts a new canonical practice session.
+  // Source sessions above have already served their rebuild assertions.
+  authoritative.tables.interview_sessions.length = 0;
 
   // 4. GET /api/career-context for User A -> governed state and active item.
   const resGetA = await fetch(`${baseUrl}/api/career-context`, { headers: headersUserA });
@@ -253,7 +295,7 @@ try {
     throw new Error('GET /api/career-context response missing success or state');
   }
 
-  if (getBodyA.state.contextVersion !== 8 || getBodyA.activeItems[0]?.id !== ITEM_ID) {
+  if (getBodyA.state.contextVersion !== versionAfterFirstRebuild || getBodyA.activeItems[0]?.id !== ITEM_ID) {
     throw new Error('GET did not return authoritative versioned Career Context state');
   }
 
