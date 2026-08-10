@@ -37,6 +37,7 @@ describe('authoritative conflict-resolved snapshot membership', () => {
     [winnerB, winnerA],
   ])('keeps only selected winner %s in membership, references, and projection', (winner, loser) => {
     const resolved = resolveSnapshotConflictItems(
+      [winner, skill],
       [winnerA, winnerB, skill],
       { 'resume.target_role': winner.id }
     );
@@ -50,15 +51,18 @@ describe('authoritative conflict-resolved snapshot membership', () => {
   });
 
   it('rejects missing, foreign, cross-key, and unnecessary selections', () => {
-    expect(() => resolveSnapshotConflictItems([winnerA, winnerB], {})).toThrow('Explicit selection required');
-    expect(() => resolveSnapshotConflictItems([winnerA, winnerB], {
+    expect(() => resolveSnapshotConflictItems([winnerA], [winnerA, winnerB], {})).toThrow('Explicit selection required');
+    expect(() => resolveSnapshotConflictItems([winnerA], [winnerA, winnerB], {
       'resume.target_role': 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
-    })).toThrow('must be one of its requested eligible items');
-    expect(() => resolveSnapshotConflictItems([winnerA, winnerB, skill], {
+    })).toThrow('invalid for the authoritative context');
+    expect(() => resolveSnapshotConflictItems([skill], [winnerA, winnerB, skill], {
       'resume.target_role': skill.id,
-    })).toThrow('must be one of its requested eligible items');
-    expect(() => resolveSnapshotConflictItems([skill], {
+    })).toThrow('invalid for the authoritative context');
+    expect(() => resolveSnapshotConflictItems([skill], [skill], {
       'resume.skill.typescript': skill.id,
-    })).toThrow('does not identify a requested conflict');
+    })).toThrow('invalid for the authoritative context');
+    expect(() => resolveSnapshotConflictItems([winnerA, winnerB], [winnerA, winnerB], {
+      'resume.target_role': winnerA.id,
+    })).toThrow('only the selected authoritative winner');
   });
 });

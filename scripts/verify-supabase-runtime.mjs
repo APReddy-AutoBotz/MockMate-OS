@@ -719,6 +719,38 @@ async function runRuntimeVerification() {
     }
     console.log('  ✓ Supplemental concurrent snapshot idempotency assertion passed');
 
+    // The browser intentionally submits only the selected conflict winner.
+    // PostgreSQL validates that winner against the broader locked active set,
+    // while immutable membership contains the winner and never its competitor.
+    await setRole(client, 'service_role');
+    const winnerOnlyVersion = Number((await client.query(`SELECT context_version FROM public.career_context_state WHERE user_id='${userA}'`)).rows[0].context_version);
+    const winnerOnly = await client.query(`SELECT public.create_grounding_snapshot_tx(
+      '${userA}','manual_selection','{"skills":["A"]}','[]',
+      '{"scope":"one_time","includedItemIds":["${originalAId}"]}',ARRAY['resume'],ARRAY['${originalAId}']::uuid[],
+      'winner-only-conflict','winner-only-conflict-hash',${winnerOnlyVersion},'{"shared.skill":"${originalAId}"}'::jsonb
+    ) AS result;`);
+    const winnerOnlyReplay = await client.query(`SELECT public.create_grounding_snapshot_tx(
+      '${userA}','manual_selection','{"skills":["A"]}','[]',
+      '{"scope":"one_time","includedItemIds":["${originalAId}"]}',ARRAY['resume'],ARRAY['${originalAId}']::uuid[],
+      'winner-only-conflict','winner-only-conflict-hash',${winnerOnlyVersion},'{"shared.skill":"${originalAId}"}'::jsonb
+    ) AS result;`);
+    const winnerMembership = await client.query(`SELECT item_id FROM public.career_context_snapshot_items WHERE snapshot_id='${winnerOnly.rows[0].result.snapshotId}' ORDER BY position;`);
+    try {
+      await client.query(`SELECT public.create_grounding_snapshot_tx(
+        '${userA}','manual_selection','{}','[]','{"scope":"one_time","includedItemIds":["${originalAId}"]}',
+        ARRAY['resume'],ARRAY['${originalAId}']::uuid[],'missing-winner','missing-winner-hash',${winnerOnlyVersion},'{}'::jsonb
+      );`);
+      throw new Error('Winner-only conflict snapshot accepted a missing selection');
+    } catch (e) {
+      if (!e.message.includes('Unresolved or mismatched authoritative conflict selection')) throw e;
+    }
+    await resetRole(client);
+    if (winnerMembership.rows.length !== 1 || winnerMembership.rows[0].item_id !== originalAId ||
+        winnerOnly.rows[0].result.snapshotId !== winnerOnlyReplay.rows[0].result.snapshotId || !winnerOnlyReplay.rows[0].result.replayed) {
+      throw new Error('Winner-only conflict request did not preserve canonical winner-only membership and replay');
+    }
+    console.log('  ✓ Supplemental winner-only UI conflict authority assertion passed');
+
     // Additional adversarial state-machine evidence: one-time/future consent,
     // nullable bridge replay, successor convergence, and canonical session replay.
     await setRole(client, 'service_role');

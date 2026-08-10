@@ -53,8 +53,8 @@ const mockSupabaseClient: any = {
           const found = mockItems.find(i => i.id === targetVal || i.user_id === targetVal);
           return { data: found || null, error: found ? null : new Error('Not found') };
         },
-        in: (_col2: string, vals: string[]) => ({
-          data: mockItems.filter(i => vals.includes(i.id)),
+        in: (col2: string, vals: string[]) => ({
+          data: mockItems.filter(i => vals.includes(i[col2])),
           error: null,
         }),
       });
@@ -475,14 +475,14 @@ describe('Career Context API Routes (P0-3)', () => {
     });
     const requestBody = {
       purpose: 'resume_to_interview',
-      includedItemIds: [ITEM_ROLE_ID, competingRoleId],
-      excludedItemIds: [],
+      includedItemIds: [ITEM_ROLE_ID],
+      excludedItemIds: [competingRoleId],
       conflictSelections: { 'resume.target_role': ITEM_ROLE_ID },
       consent: {
         scope: 'one_time',
         purpose: 'resume_to_interview',
-        includedItemIds: [ITEM_ROLE_ID, competingRoleId],
-        excludedItemIds: [],
+        includedItemIds: [ITEM_ROLE_ID],
+        excludedItemIds: [competingRoleId],
         sourceModules: ['resume'],
         acknowledgedAt: new Date().toISOString(),
       },

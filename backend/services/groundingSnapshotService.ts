@@ -152,10 +152,33 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
     }
   }
 
+  // The UI intentionally submits winner-only membership. Resolve its selection
+  // against the user's broader current, eligible context so rejected competitors
+  // need not be consented to or persisted merely to prove that a conflict exists.
+  const authoritativeKeys = [...new Set([
+    ...items.map(item => item.canonicalKey),
+    ...Object.keys(conflictSelections),
+  ])];
+  let authoritativeConflictItems: CareerContextItem[] = [];
+  if (authoritativeKeys.length > 0) {
+    const { data: conflictRows, error: conflictError } = await supabaseAdmin
+      .from('career_context_items')
+      .select('*')
+      .eq('user_id', userId)
+      .in('canonical_key', authoritativeKeys);
+    if (conflictError) {
+      throw Object.assign(new Error(`Failed to load authoritative conflict context: ${conflictError.message}`), { status: 503 });
+    }
+    authoritativeConflictItems = (conflictRows || [])
+      .filter(row => sourceModules.includes(row.source_module))
+      .filter(row => row.item_status === 'active' && row.provenance !== 'inferred_pending' && row.sensitivity !== 'personal_contact')
+      .map(mapDbToCareerContextItem);
+  }
+
   // 4. Resolve conflicts before projection and persistence. The same exact
   // winner-only set is authoritative for consent, immutable membership,
   // references, and every downstream grounded module.
-  const resolvedItems = resolveSnapshotConflictItems(items, conflictSelections);
+  const resolvedItems = resolveSnapshotConflictItems(items, authoritativeConflictItems, conflictSelections);
   const { projection, conflicts } = projectCareerContext(resolvedItems, purpose, {}, personalizationEnabled);
 
   const consent = {
@@ -179,6 +202,7 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
     p_expected_context_version: expectedContextVersion ?? contextVersion,
     p_client_request_id: clientRequestId,
     p_request_hash: requestHash,
+    p_conflict_selections: conflictSelections,
   });
 
   if (rpcErr) {

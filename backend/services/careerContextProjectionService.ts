@@ -115,11 +115,13 @@ export function projectCareerContext(
  * different/non-conflicting canonical key.
  */
 export function resolveSnapshotConflictItems(
-  items: CareerContextItem[],
+  requestedItems: CareerContextItem[],
+  authoritativeItems: CareerContextItem[],
   conflictSelections: Record<string, string>
 ): CareerContextItem[] {
+  const requestedIds = new Set(requestedItems.map(item => item.id));
   const byCanonicalKey = new Map<string, CareerContextItem[]>();
-  for (const item of items) {
+  for (const item of authoritativeItems) {
     const competing = byCanonicalKey.get(item.canonicalKey) || [];
     competing.push(item);
     byCanonicalKey.set(item.canonicalKey, competing);
@@ -127,36 +129,40 @@ export function resolveSnapshotConflictItems(
 
   for (const selectedKey of Object.keys(conflictSelections)) {
     const competing = byCanonicalKey.get(selectedKey);
-    if (!competing || competing.length < 2) {
+    const selectedId = conflictSelections[selectedKey];
+    if (!competing || competing.length < 2 || !competing.some(item => item.id === selectedId) || !requestedIds.has(selectedId)) {
       throw Object.assign(
-        new Error(`Conflict selection for '${selectedKey}' does not identify a requested conflict.`),
+        new Error('Conflict selection is invalid for the authoritative context.'),
         { status: 422 }
       );
     }
   }
 
   const resolved: CareerContextItem[] = [];
-  for (const [canonicalKey, competing] of byCanonicalKey) {
-    if (competing.length === 1) {
-      resolved.push(competing[0]);
+  for (const requested of requestedItems) {
+    const competing = byCanonicalKey.get(requested.canonicalKey) || [];
+    if (competing.length <= 1) {
+      if (conflictSelections[requested.canonicalKey]) {
+        throw Object.assign(new Error('Conflict selection is invalid for the authoritative context.'), { status: 422 });
+      }
+      resolved.push(requested);
       continue;
     }
 
-    const selectedId = conflictSelections[canonicalKey];
+    const selectedId = conflictSelections[requested.canonicalKey];
     if (!selectedId) {
       throw Object.assign(
-        new Error(`Unresolved conflict for key '${canonicalKey}'. Explicit selection required.`),
+        new Error(`Unresolved conflict for key '${requested.canonicalKey}'. Explicit selection required.`),
         { status: 422 }
       );
     }
-    const winner = competing.find(item => item.id === selectedId);
-    if (!winner) {
+    if (requested.id !== selectedId) {
       throw Object.assign(
-        new Error(`Conflict winner for '${canonicalKey}' must be one of its requested eligible items.`),
+        new Error('Winner-only conflict requests may include only the selected authoritative winner.'),
         { status: 422 }
       );
     }
-    resolved.push(winner);
+    resolved.push(requested);
   }
 
   return resolved;
