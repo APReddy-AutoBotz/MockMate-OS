@@ -728,7 +728,7 @@ async function runRuntimeVerification() {
     const conflictWinnerB = '33333333-3333-4333-8333-333333333333';
     const conflictLoserB = '34343434-3434-4343-8343-343434343434';
     await client.query(`INSERT INTO public.career_context_items
-      (id,user_id,kind,canonical_key,label,value,source_module,source_record_id,source_path,source_revision,source_hash,exact_excerpt,provenance,item_status,sensitivity,user_confirmed_at)
+      (id,user_id,item_kind,canonical_key,label,value,source_module,source_record_id,source_path,source_revision,source_hash,exact_excerpt,provenance,item_status,sensitivity,user_confirmed_at)
       VALUES
       ('${conflictWinnerA}','${userA}','skill','runtime.conflict.a','Winner A','{"type":"text","text":"Winner A"}','resume','runtime-a1','skills.0','v1','runtime-a1','Winner A','user_confirmed','active','standard',now()),
       ('${conflictLoserA}','${userA}','skill','runtime.conflict.a','Loser A','{"type":"text","text":"Loser A"}','resume','runtime-a2','skills.0','v1','runtime-a2','Loser A','user_confirmed','active','standard',now()),
