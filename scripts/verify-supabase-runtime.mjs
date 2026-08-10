@@ -768,6 +768,33 @@ async function runRuntimeVerification() {
     const futureBridgeTwo = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','resume-a','future-bridge-2','future-bridge-hash-2') AS result;`);
     if (futureBridgeOne.rows[0].result.bridgeId === futureBridgeTwo.rows[0].result.bridgeId) throw new Error('Future-session consent did not permit distinct bridges');
 
+    // Mixed-source snapshots must still bind source -> purpose -> target canonically.
+    const clearSpeakItem = '17171717-1717-4717-8717-171717171717';
+    const mixedResumeSnapshot = '18181818-1818-4818-8818-181818181818';
+    const mixedClearSpeakSnapshot = '19191919-1919-4919-8919-191919191919';
+    await client.query(`
+      INSERT INTO public.career_context_items(id,user_id,item_kind,canonical_key,label,value,source_module,source_record_id,source_path,source_revision,source_hash,provenance,item_status,sensitivity)
+      VALUES ('${clearSpeakItem}','${userA}','practice_metric','clearspeak.delivery','ClearSpeak delivery','{"type":"text","text":"clear"}'::jsonb,'clearspeak','clear-a','delivery','v1','clear-hash','system_observed','active','standard');
+      INSERT INTO public.career_context_snapshots(id,user_id,purpose,context_version,projection,consent,source_modules,client_request_id,request_hash)
+      VALUES ('${mixedResumeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"future_sessions","includedItemIds":["${originalAId}","${clearSpeakItem}"]}',ARRAY['resume','clearspeak'],'mixed-resume','mixed-resume-hash'),
+             ('${mixedClearSpeakSnapshot}','${userA}','clearspeak_to_interview',1,'{}','{"scope":"future_sessions","includedItemIds":["${originalAId}","${clearSpeakItem}"]}',ARRAY['resume','clearspeak'],'mixed-clear','mixed-clear-hash');
+      INSERT INTO public.career_context_snapshot_items(snapshot_id,item_id,position) VALUES
+        ('${mixedResumeSnapshot}','${originalAId}',0),('${mixedResumeSnapshot}','${clearSpeakItem}',1),
+        ('${mixedClearSpeakSnapshot}','${originalAId}',0),('${mixedClearSpeakSnapshot}','${clearSpeakItem}',1);
+    `);
+    for (const invalid of [
+      [`SELECT public.create_module_bridge_tx('${userA}','clearspeak','interview','resume_to_interview','${mixedResumeSnapshot}','clear-a','mixed-invalid-1','mixed-invalid-hash-1');`],
+      [`SELECT public.create_module_bridge_tx('${userA}','resume','interview','clearspeak_to_interview','${mixedClearSpeakSnapshot}','resume-a','mixed-invalid-2','mixed-invalid-hash-2');`],
+    ]) {
+      try { await client.query(invalid[0]); throw new Error('Invalid source-purpose combination created a bridge'); }
+      catch (e) { if (!e.message.includes('canonical module transition')) throw e; }
+    }
+    const validResumeBridge = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${mixedResumeSnapshot}','resume-a','mixed-valid-resume','mixed-valid-resume-hash') AS result;`);
+    const validResumeReplay = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${mixedResumeSnapshot}','resume-a','mixed-valid-resume','mixed-valid-resume-hash') AS result;`);
+    const validClearBridge = await client.query(`SELECT public.create_module_bridge_tx('${userA}','clearspeak','interview','clearspeak_to_interview','${mixedClearSpeakSnapshot}','clear-a','mixed-valid-clear','mixed-valid-clear-hash') AS result;`);
+    if (!validResumeReplay.rows[0].result.replayed || validResumeReplay.rows[0].result.bridgeId !== validResumeBridge.rows[0].result.bridgeId || validResumeBridge.rows[0].result.bridgeId === validClearBridge.rows[0].result.bridgeId) throw new Error('Canonical mixed-source bridge creation or exact replay failed');
+    console.log('  ✓ Supplemental canonical source-purpose-target bridge assertions passed');
+
     const newestDraft = JSON.stringify([
       { kind: 'skill', canonicalKey: 'shared.skill', label: 'Shared skill A newest', value: { type: 'text', text: 'A3' }, source: { module: 'resume', recordId: 'resume-a', fieldPath: 'skills.0', sourceRevision: 'v3', sourceHash: 'newest-a' }, exactExcerpt: 'A3', provenance: 'direct_source', status: 'active', sensitivity: 'standard' },
     ]).replaceAll("'", "''");
@@ -833,32 +860,33 @@ async function runRuntimeVerification() {
     // the canonical adaptive policy; a direct table insert would prove neither
     // the persisted plan nor bridge/session binding contract.
     const policyModes = [
-      ['classic_technical','clarification'],
-      ['problem_framing','clarification'],
-      ['ai_collaboration_review','clarification'],
-      ['uncertainty_handling','clarification'],
-      ['classic_behavioral','framing'],
+      ['classic_technical','clarification','intermediate',8],
+      ['classic_technical','clarification','expert',10],
+      ['problem_framing','clarification','intermediate',8],
+      ['ai_collaboration_review','clarification','intermediate',8],
+      ['uncertainty_handling','clarification','intermediate',8],
+      ['classic_behavioral','framing','intermediate',8],
     ];
     await setRole(client, 'service_role');
-    for (const [index, [mode]] of policyModes.entries()) {
+    for (const [index, [mode,,difficulty]] of policyModes.entries()) {
       const policyBridge = (await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','resume-a','policy-bridge-${index}','policy-bridge-hash-${index}') AS result;`)).rows[0].result.bridgeId;
       const policyHash = String(index + 1).repeat(64);
       const policyPayload = {
-        meta: { controls: { reasoningMode: mode, difficulty: 'intermediate' } },
-        jdInsights: { role: 'Policy Role' },
+        meta: { controls: { reasoningMode: mode, difficulty } },
+        jdInsights: { role: `Policy Role ${index}` },
         questionSet: [{ id: `policy-q-${index}` }],
       };
       await resetRole(client);
       const policyPlan = (await client.query(
         `INSERT INTO public.interview_generated_plans(user_id,snapshot_id,bridge_id,plan_hash,plan_payload) VALUES('${userA}','${futureBridgeSnapshot}','${policyBridge}','${policyHash}','${JSON.stringify(policyPayload).replaceAll("'", "''")}'::jsonb) RETURNING id;`
       )).rows[0].id;
-      const setup = JSON.stringify({ candidateRole: 'Policy Role', interviewPlan: { ...policyPayload, authority: { planId: policyPlan, planHash: policyHash, bridgeId: policyBridge, snapshotId: futureBridgeSnapshot } } }).replaceAll("'", "''");
+      const setup = JSON.stringify({ candidateRole: `Policy Role ${index}`, interviewPlan: { ...policyPayload, authority: { planId: policyPlan, planHash: policyHash, bridgeId: policyBridge, snapshotId: futureBridgeSnapshot } } }).replaceAll("'", "''");
       await setRole(client, 'service_role');
       await client.query(`SELECT public.create_and_bind_interview_session_tx('${userA}','${policyPlan}','${policyHash}','${policyBridge}','${setup}'::jsonb);`);
     }
     await resetRole(client);
-    const policyStages = await client.query(`SELECT setup#>>'{interviewPlan,meta,controls,reasoningMode}' AS mode,current_stage,adaptive_policy FROM public.interview_sessions WHERE user_id='${userA}' AND role='Policy Role';`);
-    if (policyStages.rows.length!==policyModes.length || policyStages.rows.some(row=>row.current_stage!==policyModes.find(([mode])=>mode===row.mode)?.[1] || Number(row.adaptive_policy.maxProbesPerRoot)!==1 || Number(row.adaptive_policy.maxChallenges)!==2 || row.adaptive_policy.requireReflection!==true)) throw new Error('Atomic grounded session initialization did not persist the selected reasoning-mode stage and canonical adaptive policy');
+    const policyStages = await client.query(`SELECT setup#>>'{interviewPlan,meta,controls,reasoningMode}' AS mode,current_stage,adaptive_policy FROM public.interview_sessions WHERE user_id='${userA}' AND role LIKE 'Policy Role %';`);
+    if (policyStages.rows.length!==policyModes.length || policyStages.rows.some(row=>{ const policy=policyModes.find(([mode,,difficulty])=>mode===row.mode && difficulty===(row.adaptive_policy.maxTurns===10?'expert':'intermediate')); return !policy || row.current_stage!==policy[1] || Number(row.adaptive_policy.maxTurns)!==policy[3] || Number(row.adaptive_policy.maxProbesPerRoot)!==1 || Number(row.adaptive_policy.maxChallenges)!==2 || row.adaptive_policy.requireReflection!==true; })) throw new Error('Atomic grounded session initialization did not persist the selected reasoning-mode stage and canonical adaptive policy');
     console.log('  ✓ Supplemental reasoning-mode initial-stage assertions passed');
 
     // 41. protected_account_deletion

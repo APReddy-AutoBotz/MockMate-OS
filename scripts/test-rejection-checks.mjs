@@ -143,5 +143,8 @@ assertMatch(/IF NOT EXISTS \([\s\S]*career_context_snapshot_items[\s\S]*i\.sourc
 assertMatch(/classic_technical','problem_framing','ai_collaboration_review','uncertainty_handling'[\s\S]*THEN 'clarification'/, provenanceLeasePolicyMigration, 'atomic interview sessions derive clarification-first stage from authoritative mode policy');
 assertMatch(/timeout: 90_000[\s\S]*maxRetries: 0/, 'backend/clearspeak/scoringService.ts', 'ClearSpeak provider execution is bounded below the scoring takeover lease');
 assertMatch(/canonicalKey: 'clearspeak\.practiced_vocab'[\s\S]*provenance: 'user_edited'/, 'backend/services/careerContextAdapters/clearSpeakContextAdapter.ts', 'ordinary browser-supplied ClearSpeak vocabulary is never classified as system-observed');
+const provenanceBudgetMigration = 'supabase/migrations/20260810000000_p0_3_bridge_provenance_budget_parity.sql';
+assertMatch(/resume_to_clearspeak'[\s\S]*p_source_module='resume'[\s\S]*resume_to_interview'[\s\S]*p_source_module='resume'[\s\S]*clearspeak_to_interview'[\s\S]*p_source_module='clearspeak'[\s\S]*interview_personalization'[\s\S]*p_source_module='interview'/, provenanceBudgetMigration, 'bridge purpose binds canonical source and target modules');
+assertMatch(/maxTurns',LEAST\(12,GREATEST\(v_question_count,CASE WHEN[\s\S]*difficulty}'='expert' THEN 10 ELSE 8 END\)\)/, provenanceBudgetMigration, 'grounded Interview budget matches ordinary expert and intermediate difficulty law');
 
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');
