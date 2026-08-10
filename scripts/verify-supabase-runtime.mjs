@@ -724,12 +724,16 @@ async function runRuntimeVerification() {
     await setRole(client, 'service_role');
     const oneTimeBridgeSnapshot = '14141414-1414-4414-8414-141414141414';
     const futureBridgeSnapshot = '15151515-1515-4515-8515-151515151515';
+    const emptyDeclaredModuleSnapshot = '16161616-1616-4616-8616-161616161616';
     await client.query(`
       INSERT INTO public.career_context_snapshots(id,user_id,purpose,context_version,projection,consent,source_modules,client_request_id,request_hash)
       VALUES ('${oneTimeBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"one_time","includedItemIds":["${originalAId}"]}',ARRAY['resume'],'one-time-snapshot','one-time-snapshot-hash'),
-             ('${futureBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"future_sessions","includedItemIds":["${originalAId}"]}',ARRAY['resume'],'future-snapshot','future-snapshot-hash');
+             ('${futureBridgeSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"future_sessions","includedItemIds":["${originalAId}"]}',ARRAY['resume'],'future-snapshot','future-snapshot-hash'),
+             ('${emptyDeclaredModuleSnapshot}','${userA}','resume_to_interview',1,'{}','{"scope":"future_sessions","includedItemIds":["${originalAId}"]}',ARRAY['resume','clearspeak'],'empty-declared-module-snapshot','empty-declared-module-snapshot-hash');
       INSERT INTO public.career_context_snapshot_items(snapshot_id,item_id,position)
-      VALUES ('${oneTimeBridgeSnapshot}','${originalAId}',0),('${futureBridgeSnapshot}','${originalAId}',0);
+      VALUES ('${oneTimeBridgeSnapshot}','${originalAId}',0),
+             ('${futureBridgeSnapshot}','${originalAId}',0),
+             ('${emptyDeclaredModuleSnapshot}','${originalAId}',0);
     `);
     const replayBridgeRequest = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resume-a','bridge-response-loss','bridge-response-loss-hash') AS result;`);
     const replayBridgeAgain = await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${oneTimeBridgeSnapshot}','resume-a','bridge-response-loss','bridge-response-loss-hash') AS result;`);
@@ -748,11 +752,8 @@ async function runRuntimeVerification() {
     } catch (e) {
       if (!e.message.includes('source module or record does not belong to authoritative snapshot membership')) throw e;
     }
-    await resetRole(client);
-    await client.query(`UPDATE public.career_context_snapshots SET source_modules=ARRAY['resume','clearspeak'] WHERE id='${futureBridgeSnapshot}';`);
-    await setRole(client, 'service_role');
     try {
-      await client.query(`SELECT public.create_module_bridge_tx('${userA}','clearspeak','interview','resume_to_interview','${futureBridgeSnapshot}',NULL,'empty-module-bridge','empty-module-bridge-hash');`);
+      await client.query(`SELECT public.create_module_bridge_tx('${userA}','clearspeak','interview','resume_to_interview','${emptyDeclaredModuleSnapshot}',NULL,'empty-module-bridge','empty-module-bridge-hash');`);
       throw new Error('A declared source module with no selected snapshot members authorized a bridge');
     } catch (e) {
       if (!e.message.includes('source module or record does not belong to authoritative snapshot membership')) throw e;
