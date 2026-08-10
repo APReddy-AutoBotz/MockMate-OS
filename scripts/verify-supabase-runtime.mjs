@@ -742,9 +742,9 @@ async function runRuntimeVerification() {
     if (!replayBridgeAgain.rows[0].result.replayed || replayBridgeAgain.rows[0].result.bridgeId !== replayBridgeId || Number(replayBridgeRows.rows[0].count) !== 1) throw new Error('Nullable bridge exact replay did not reuse one row');
     try {
       await client.query(`SELECT public.create_module_bridge_tx('${userA}','clearspeak','interview','resume_to_interview','${futureBridgeSnapshot}','resume-a','contradictory-provenance','contradictory-provenance-hash');`);
-      throw new Error('Bridge persisted provenance contradicting its authoritative snapshot');
+      throw new Error('Bridge accepted a source module that contradicts its declared purpose');
     } catch (e) {
-      if (!e.message.includes('contradicts authoritative snapshot provenance')) throw e;
+      if (!e.message.includes('canonical module transition')) throw e;
     }
     try {
       await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','foreign-or-arbitrary-record','contradictory-record','contradictory-record-hash');`);
