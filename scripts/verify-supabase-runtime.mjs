@@ -828,15 +828,37 @@ async function runRuntimeVerification() {
     const canonicalSessionCount = await client.query(`SELECT count(*) FROM public.interview_sessions WHERE user_id='${userA}' AND id='${groundedSession}';`);
     if (firstBind.rows[0].result.replayed || !lostResponseReplay.rows[0].result.replayed || lostResponseReplay.rows[0].result.sessionId!==groundedSession || Number(usageAfterReplay.rows[0].used)!==20 || boundBridge.rows[0].status!=='consumed' || boundBridge.rows[0].target_session_id!==groundedSession || Number(canonicalSessionCount.rows[0].count)!==1) throw new Error('Atomic grounded session response-loss replay changed usage, bridge, or canonical session');
 
-    // Atomic session inserts use the authoritative reasoning-mode policy rather
-    // than the old behavioral framing default.
-    const clarificationModes = ['classic_technical','problem_framing','ai_collaboration_review','uncertainty_handling'];
-    for (const [index, mode] of clarificationModes.entries()) {
-      const setup = JSON.stringify({ controls: { reasoningMode: mode, difficulty: 'intermediate' }, interviewPlan: { questionSet: [{ id: `policy-q-${index}` }] } }).replaceAll("'", "''");
-      await client.query(`INSERT INTO public.interview_sessions(id,user_id,role,setup,status,pending_question) VALUES(gen_random_uuid(),'${userA}','Policy Role','${setup}'::jsonb,'active','{"id":"policy-q-${index}"}'::jsonb);`);
+    // Prove policy initialization through the real grounded authority path.
+    // The stage trigger aligns the selected mode while create-and-bind supplies
+    // the canonical adaptive policy; a direct table insert would prove neither
+    // the persisted plan nor bridge/session binding contract.
+    const policyModes = [
+      ['classic_technical','clarification'],
+      ['problem_framing','clarification'],
+      ['ai_collaboration_review','clarification'],
+      ['uncertainty_handling','clarification'],
+      ['classic_behavioral','framing'],
+    ];
+    await setRole(client, 'service_role');
+    for (const [index, [mode]] of policyModes.entries()) {
+      const policyBridge = (await client.query(`SELECT public.create_module_bridge_tx('${userA}','resume','interview','resume_to_interview','${futureBridgeSnapshot}','resume-a','policy-bridge-${index}','policy-bridge-hash-${index}') AS result;`)).rows[0].result.bridgeId;
+      const policyHash = String(index + 1).repeat(64);
+      const policyPayload = {
+        meta: { controls: { reasoningMode: mode, difficulty: 'intermediate' } },
+        jdInsights: { role: 'Policy Role' },
+        questionSet: [{ id: `policy-q-${index}` }],
+      };
+      await resetRole(client);
+      const policyPlan = (await client.query(
+        `INSERT INTO public.interview_generated_plans(user_id,snapshot_id,bridge_id,plan_hash,plan_payload) VALUES('${userA}','${futureBridgeSnapshot}','${policyBridge}','${policyHash}','${JSON.stringify(policyPayload).replaceAll("'", "''")}'::jsonb) RETURNING id;`
+      )).rows[0].id;
+      const setup = JSON.stringify({ candidateRole: 'Policy Role', interviewPlan: { ...policyPayload, authority: { planId: policyPlan, planHash: policyHash, bridgeId: policyBridge, snapshotId: futureBridgeSnapshot } } }).replaceAll("'", "''");
+      await setRole(client, 'service_role');
+      await client.query(`SELECT public.create_and_bind_interview_session_tx('${userA}','${policyPlan}','${policyHash}','${policyBridge}','${setup}'::jsonb);`);
     }
-    const policyStages = await client.query(`SELECT setup#>>'{controls,reasoningMode}' AS mode,current_stage,adaptive_policy FROM public.interview_sessions WHERE user_id='${userA}' AND role='Policy Role';`);
-    if (policyStages.rows.length!==4 || policyStages.rows.some(row=>row.current_stage!=='clarification' || Number(row.adaptive_policy.maxProbesPerRoot)!==1 || Number(row.adaptive_policy.maxChallenges)!==2)) throw new Error('Atomic grounded session initialization did not follow clarification-first reasoning-mode policy while preserving adaptive challenge semantics');
+    await resetRole(client);
+    const policyStages = await client.query(`SELECT setup#>>'{interviewPlan,meta,controls,reasoningMode}' AS mode,current_stage,adaptive_policy FROM public.interview_sessions WHERE user_id='${userA}' AND role='Policy Role';`);
+    if (policyStages.rows.length!==policyModes.length || policyStages.rows.some(row=>row.current_stage!==policyModes.find(([mode])=>mode===row.mode)?.[1] || Number(row.adaptive_policy.maxProbesPerRoot)!==1 || Number(row.adaptive_policy.maxChallenges)!==2 || row.adaptive_policy.requireReflection!==true)) throw new Error('Atomic grounded session initialization did not persist the selected reasoning-mode stage and canonical adaptive policy');
     console.log('  ✓ Supplemental reasoning-mode initial-stage assertions passed');
 
     // 41. protected_account_deletion
