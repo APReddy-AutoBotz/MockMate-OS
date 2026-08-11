@@ -35,8 +35,15 @@ import { getModuleBridgeById } from '../services/moduleBridgeService';
 import { getSnapshotById } from '../services/groundingSnapshotService';
 import crypto from 'crypto';
 import { canonicalJsonValue, hashArtifactContent } from './artifactAuthority';
+import { ACCENT_PROFILES } from './accentProfiles';
 
 const router = Router();
+
+// Catalog metadata contains no user data. Keeping the immutable supported
+// profiles server-owned prevents clients from inventing privileged policies.
+router.get('/accent-profiles', (_req: Request, res: Response) => {
+  res.json({ contractVersion: 'accent-profile-catalog.v1', profiles: ACCENT_PROFILES });
+});
 
 // ─── Rate Limiters ────────────────────────────────────────────────────────────
 // Re-uses the same in-memory token-bucket pattern as server.ts.

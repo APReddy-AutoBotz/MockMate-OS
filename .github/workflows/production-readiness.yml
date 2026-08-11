@@ -117,6 +117,9 @@ jobs:
         working-directory: backend
         run: npm test
 
+      - name: 12a. ClearSpeak V1 contract and synthetic scorer gate
+        run: npm run check:clearspeak-v1
+
       - name: 13. Production smoke checks
         run: npm run smoke:production
 
