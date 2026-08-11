@@ -1,6 +1,6 @@
 import { AccentDimensionV1Schema, AccentProfileV1Schema, AccentScoreV1Schema, PracticePromptV1Schema } from 'mockmate-shared';
 import { ACCENT_PROFILES } from '../clearspeak/accentProfiles';
-import { deterministicSyntheticAdapter, REAL_SPEECH_PROVIDER_NOT_AUTHORIZED } from '../clearspeak/scoringAdapter';
+import { deterministicSyntheticAdapter, REAL_SPEECH_PROVIDER_NOT_AUTHORIZED, unsupportedUserAudioResult } from '../clearspeak/scoringAdapter';
 import { ACCENT_V1_MIMES, accentCatalog, promptFor, rejectClientAuthority, validatePromptSelector } from '../clearspeak/accentV1Service';
 
 const prompt = PracticePromptV1Schema.parse({
@@ -57,5 +57,14 @@ describe('ClearSpeak accent V1 truth and authority', () => {
   it('keeps the upload allowlist bounded to browser audio containers', () => {
     expect([...ACCENT_V1_MIMES]).toEqual(['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg']);
     expect(ACCENT_V1_MIMES.has('audio/wav')).toBe(false);
+  });
+
+  it('never turns ordinary or corrupt user bytes into pronunciation evidence', () => {
+    const score = unsupportedUserAudioResult('10000000-0000-4000-a000-000000000099', prompt);
+    for (const dimension of Object.values(score.dimensions)) {
+      expect(dimension).toMatchObject({ score: null, confidence: 0, evidenceStatus: 'unsupported' });
+    }
+    expect(score.coaching[0].action).toContain('authorized speech scorer');
+    expect(AccentScoreV1Schema.parse(score)).toEqual(score);
   });
 });

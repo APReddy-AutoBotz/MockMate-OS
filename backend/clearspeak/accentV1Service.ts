@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import type { AccentProfileV1, AccentScoreV1, PracticePromptV1 } from 'mockmate-shared';
 import { ACCENT_PROFILES, getAccentProfile } from './accentProfiles';
-import { deterministicSyntheticAdapter, REAL_SPEECH_PROVIDER_NOT_AUTHORIZED } from './scoringAdapter';
+import { REAL_SPEECH_PROVIDER_NOT_AUTHORIZED, unsupportedUserAudioResult } from './scoringAdapter';
 import { supabaseAdmin } from '../supabaseAdmin';
 
 export const ACCENT_V1_MAX_BYTES = 5 * 1024 * 1024;
@@ -68,7 +68,9 @@ export async function submitAccentAttempt(userId: string, body: any, audio: Buff
     if (prior.data.request_hash !== requestHash) throw new Error('idempotency_conflict');
     return { score: prior.data.result, replayed: true };
   }
-  const score = await deterministicSyntheticAdapter.score({ attemptId: body.attemptId, prompt, audio, mimeType: normalizedMimeType as any });
+  // Ordinary user bytes are never synthetic evidence. Until a speech scorer is
+  // separately authorized, persist only a truthful null-score availability result.
+  const score = unsupportedUserAudioResult(body.attemptId, prompt);
   const inserted = await supabaseAdmin.from('clearspeak_accent_attempts').insert({ user_id: userId, attempt_id: body.attemptId, request_hash: requestHash,
     prompt_id: prompt.promptId, prompt_version: prompt.promptVersion, prompt_content_hash: prompt.contentHash, profile_id: prompt.profileId,
     profile_version: prompt.profileVersion, reference_set_version: prompt.referenceSetVersion, scoring_policy_version: score.scoringPolicyVersion,

@@ -182,13 +182,15 @@ router.post('/v1/accent/attempts', upload.single('audio'), handleMulterError, as
     let metadata: any;
     try { metadata = JSON.parse(String(req.body.metadata || '')); } catch { return res.status(400).json({ error: 'Malformed attempt metadata' }); }
     const result = await submitAccentAttempt(userId, metadata, req.file.buffer, req.file.mimetype);
-    req.file.buffer.fill(0);
     return res.status(result.replayed ? 200 : 201).json({ ...result, adapter: 'deterministic-synthetic-v1', retention: 'derived-results-only' });
   } catch (error: any) {
-    if (req.file?.buffer) req.file.buffer.fill(0);
     const status = error.message === 'idempotency_conflict' ? 409 : error.message === 'authoritative_persistence_unavailable' ? 503 : 422;
     const publicErrors = new Set(['idempotency_conflict', 'authoritative_persistence_unavailable', 'unsupported_audio_type', 'invalid_audio_evidence', 'invalid_attempt_id', 'stale_or_unknown_profile', 'unsupported_practice_mode', 'stale_or_mismatched_server_selector', 'client_authority_rejected', 'real_speech_provider_not_authorized']);
     return res.status(status).json({ error: publicErrors.has(error.message) ? error.message : 'accent_attempt_rejected' });
+  } finally {
+    // Memory-storage buffers are ephemeral evidence. Wipe them for every exit,
+    // including malformed metadata, validation returns, success and exceptions.
+    req.file?.buffer?.fill(0);
   }
 });
 

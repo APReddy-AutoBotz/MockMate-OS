@@ -42,16 +42,35 @@ export function useAudioRecorder(): UseAudioRecorderResult {
   const chunksRef = useRef<Blob[]>([]);
   const startTimeRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
+  const generationRef = useRef(0);
+
+  const releaseRecorder = useCallback(() => {
+    generationRef.current += 1;
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.onstop = null;
+      if (mediaRecorderRef.current.state === 'recording') mediaRecorderRef.current.stop();
+    }
+    mediaRecorderRef.current = null;
+    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current = null;
+    chunksRef.current = [];
+  }, []);
 
   const startRecording = useCallback(async () => {
+    releaseRecorder();
+    const generation = generationRef.current;
     setErrorMessage(null);
     chunksRef.current = [];
 
-    if (!navigator.onLine) { setState('offline'); setErrorMessage('You are offline. Recording cannot be submitted.'); return; }
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') { setState('unsupported'); setErrorMessage('Microphone recording is not supported in this browser.'); return; }
+    if (!navigator.onLine) { const message='You are offline. Recording cannot be submitted.'; setState('offline'); setErrorMessage(message); throw new Error(message); }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') { const message='Microphone recording is not supported in this browser.'; setState('unsupported'); setErrorMessage(message); throw new Error(message); }
     setState('requesting_permission');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      if (generation !== generationRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        throw new Error('Microphone request was canceled.');
+      }
       streamRef.current = stream;
       stream.getAudioTracks().forEach(track => { track.onended = () => { setState('device_lost'); setErrorMessage('Microphone access was revoked or the device was disconnected.'); }; });
 
@@ -85,6 +104,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       startTimeRef.current = Date.now();
       setState('recording');
     } catch (err: any) {
+      if (generation !== generationRef.current) throw err;
       setState(err?.name === 'NotAllowedError' ? 'permission_denied' : err?.name === 'NotFoundError' ? 'device_lost' : 'error');
       const msg = err?.name === 'NotAllowedError'
           ? 'Microphone access denied. Please allow microphone in your browser settings.'
@@ -92,7 +112,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       setErrorMessage(msg);
       throw new Error(msg);
     }
-  }, []);
+  }, [releaseRecorder]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current?.state === 'recording') {
@@ -101,32 +121,22 @@ export function useAudioRecorder(): UseAudioRecorderResult {
   }, []);
 
   const abortRecording = useCallback(() => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.onstop = null;
-      if (mediaRecorderRef.current.state === 'recording') {
-        mediaRecorderRef.current.stop();
-      }
-    }
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
+    releaseRecorder();
     setAudioBlob(null);
     chunksRef.current = [];
     setDurationMs(0);
     setState('canceled');
-  }, []);
+  }, [releaseRecorder]);
 
-  useEffect(() => () => {
-    if (mediaRecorderRef.current?.state === 'recording') { mediaRecorderRef.current.onstop = null; mediaRecorderRef.current.stop(); }
-    streamRef.current?.getTracks().forEach(track => track.stop());
-    chunksRef.current = [];
-  }, []);
+  useEffect(() => () => releaseRecorder(), [releaseRecorder]);
 
   const clearAudio = useCallback(() => {
+    releaseRecorder();
     setAudioBlob(null);
     chunksRef.current = [];
     setDurationMs(0);
     setState('idle');
-  }, []);
+  }, [releaseRecorder]);
 
   return {
     state,

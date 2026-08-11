@@ -16,6 +16,7 @@ export interface AccentScoringAdapter {
 }
 
 const dimension = (score: number, summary: string) => ({ score, confidence: 0.84, evidenceStatus: 'sufficient' as const, summary });
+const unsupportedDimension = (summary: string) => ({ score: null, confidence: 0, evidenceStatus: 'unsupported' as const, summary });
 const deterministicUuid = (value: string) => {
   const hex = crypto.createHash('sha256').update(value).digest('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
@@ -45,3 +46,28 @@ export const deterministicSyntheticAdapter: AccentScoringAdapter = {
     };
   },
 };
+
+/**
+ * Truthful result for ordinary microphone uploads while speech inference is not
+ * authorized. Container metadata proves neither speech presence nor quality,
+ * so this path deliberately does not inspect or derive claims from audio bytes.
+ */
+export function unsupportedUserAudioResult(attemptId: string, prompt: PracticePromptV1): AccentScoreV1 {
+  const unavailable = 'No authorized speech scorer is available for this recording. No pronunciation claim was made.';
+  return {
+    contractVersion: 'accent-score.v1', attemptId,
+    resultId: deterministicUuid(`unsupported:${attemptId}`),
+    promptId: prompt.promptId, promptVersion: prompt.promptVersion, promptContentHash: prompt.contentHash,
+    profileId: prompt.profileId, profileVersion: 1, referenceSetVersion: prompt.referenceSetVersion,
+    scoringPolicyVersion: 'synthetic-policy.v1', fixture: true,
+    dimensions: {
+      intelligibility: unsupportedDimension(unavailable),
+      pronunciation: unsupportedDimension(unavailable),
+      prosody: unsupportedDimension(unavailable),
+      fluency: unsupportedDimension(unavailable),
+      targetStyle: unsupportedDimension(unavailable),
+    },
+    coaching: [{ rank: 1, dimension: 'pronunciation', action: 'Try again when an authorized speech scorer is available; your recording was not retained.' }],
+    disclaimer: 'Synthetic scoring validates product behavior only; it is not real pronunciation validation.',
+  };
+}
