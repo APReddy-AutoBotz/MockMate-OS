@@ -1,3 +1,5 @@
+import { canUseMobileMockAuth, isMobileProductionLike } from './runtimeMode';
+
 const normalizeBase = (value: string | undefined, fallback: string) => {
   const base = (value || fallback).trim().replace(/\/+$/, '');
   return base || fallback;
@@ -5,14 +7,13 @@ const normalizeBase = (value: string | undefined, fallback: string) => {
 
 // On mobile, local server must use host IP or custom URL
 const configuredApiUrl = process.env.EXPO_PUBLIC_API_URL;
-const allowLocalFallback = process.env.EXPO_PUBLIC_ENABLE_MOCK_AUTH === 'true';
-const releaseLike = process.env.EXPO_PUBLIC_RUNTIME_MODE === 'preview' || process.env.EXPO_PUBLIC_RUNTIME_MODE === 'production';
+const allowLocalFallback = process.env.EXPO_PUBLIC_ENABLE_MOCK_AUTH === 'true' && canUseMobileMockAuth;
 
-if (releaseLike && allowLocalFallback) throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
+if (process.env.EXPO_PUBLIC_ENABLE_MOCK_AUTH === 'true' && !canUseMobileMockAuth) throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
 if (configuredApiUrl) {
   let parsed: URL;
   try { parsed = new URL(configuredApiUrl); } catch { throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).'); }
-  if (parsed.username || parsed.password || (releaseLike && parsed.protocol !== 'https:')) {
+  if (parsed.username || parsed.password || (isMobileProductionLike && parsed.protocol !== 'https:')) {
     throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
   }
 }

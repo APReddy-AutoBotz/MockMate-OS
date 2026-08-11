@@ -11,6 +11,15 @@ export interface RuntimeConfig {
   mode: 'development' | 'test' | 'preview' | 'production';
 }
 
+type RuntimeMode = RuntimeConfig['mode'];
+
+const parseRuntimeMode = (requested: string): RuntimeMode => {
+  if (requested === 'development' || requested === 'test' || requested === 'preview' || requested === 'production') {
+    return requested;
+  }
+  throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
+};
+
 // Direct statically replaceable references for Vite define / env replacement
 const VITE_API_URL = process.env.VITE_API_URL || '';
 const VITE_SUPABASE_URL = process.env.VITE_SUPABASE_URL || '';
@@ -45,7 +54,7 @@ export function normalizeApiOrigin(rawInput?: string, mode: { isProd?: boolean; 
 export function getRuntimeConfig(): RuntimeConfig {
   const envNodeEnv = process.env.NODE_ENV || NODE_ENV;
   const requestedMode = process.env.VITE_RUNTIME_MODE || VITE_RUNTIME_MODE || envNodeEnv;
-  const mode = requestedMode === 'production' || requestedMode === 'preview' || requestedMode === 'test' ? requestedMode : 'development';
+  const mode = parseRuntimeMode(requestedMode);
   const envApiUrl = process.env.VITE_API_URL !== undefined ? process.env.VITE_API_URL : VITE_API_URL;
   const envSupabaseUrl = process.env.VITE_SUPABASE_URL !== undefined ? process.env.VITE_SUPABASE_URL : VITE_SUPABASE_URL;
   const envSupabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY !== undefined ? process.env.VITE_SUPABASE_ANON_KEY : VITE_SUPABASE_ANON_KEY;

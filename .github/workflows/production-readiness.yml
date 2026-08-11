@@ -157,6 +157,9 @@ jobs:
       - name: 23. Production-preview adversarial security checks
         run: npm run test:preview-security
 
+      - name: 23a. Cross-surface runtime-mode authority
+        run: npm run test:runtime-mode-authority
+
       - name: 24. Target-agnostic disposable smoke contract
         run: npm run smoke:deployed
 

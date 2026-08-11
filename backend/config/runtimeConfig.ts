@@ -17,8 +17,10 @@ const validUrl = (value: string | undefined, httpsRequired: boolean) => {
 
 export function runtimeMode(env: NodeJS.ProcessEnv = process.env): RuntimeMode {
   const requested = env.MOCKMATE_RUNTIME_MODE || env.NODE_ENV || 'development';
-  return requested === 'production' || requested === 'preview' || requested === 'test'
-    ? requested : 'development';
+  if (requested === 'development' || requested === 'test' || requested === 'preview' || requested === 'production') {
+    return requested;
+  }
+  throw new ConfigurationError();
 }
 
 export function isProductionLike(env: NodeJS.ProcessEnv = process.env) {
