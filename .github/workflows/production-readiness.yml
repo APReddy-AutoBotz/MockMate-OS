@@ -162,7 +162,7 @@ jobs:
 
       - name: 25. Exact-head readiness manifest
         env:
-          GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: npm run manifest:readiness
 
       - name: 26. Publish source-only readiness evidence
