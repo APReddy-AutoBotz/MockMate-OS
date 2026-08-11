@@ -8,37 +8,17 @@ import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
 import { isSupabaseConfigured } from './supabaseAdmin';
+import { assertServerRuntimeConfig, ConfigurationError, isProductionLike } from './config/runtimeConfig';
 
 // ---- Phase 9: Production Env & CORS Guards ----
-if (process.env.NODE_ENV === 'production') {
-  const missing: string[] = [];
-  if (!process.env.SUPABASE_URL) missing.push('SUPABASE_URL');
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) missing.push('SUPABASE_SERVICE_ROLE_KEY');
-  if (!process.env.ALLOWED_ORIGINS || !process.env.ALLOWED_ORIGINS.trim()) missing.push('ALLOWED_ORIGINS');
-
-  if (process.env.ENABLE_DEV_AUTH === 'true') {
-    console.error('[CRITICAL] ENABLE_DEV_AUTH must not be enabled in production.');
-    process.exit(1);
-  }
-
-  const hasGemini = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
-  const hasGroq = Boolean(process.env.GROQ_API_KEY);
-  if (!hasGemini && !hasGroq) {
-    missing.push('GEMINI_API_KEY or GOOGLE_API_KEY or GROQ_API_KEY');
-  }
-
-  if (missing.length > 0) {
-    console.error(`[CRITICAL] Missing required production environment variables: ${missing.join(', ')}`);
-    process.exit(1);
-  }
-}
+const runtime = assertServerRuntimeConfig();
 
 // ---- rate limiter ----
 type Bucket = { tokens: number; ts: number };
 const buckets = new Map<string, Bucket>();
 function rateLimitSimple({ max = 20, windowMs = 60_000 }: { max?: number; windowMs?: number }) {
   return (req: Request, res: Response, next: NextFunction) => {
-    if (process.env.NODE_ENV === 'test') return next();
+    if (runtime.mode === 'test') return next();
     const key = req.ip || req.headers['x-forwarded-for']?.toString() || 'anon';
     const now = Date.now();
     const b = buckets.get(key) || { tokens: max, ts: now };
@@ -66,7 +46,7 @@ const configuredAllowedOrigins = process.env.ALLOWED_ORIGINS
 
 const allow = configuredAllowedOrigins?.length
   ? configuredAllowedOrigins
-  : (process.env.NODE_ENV === 'production'
+  : (isProductionLike()
       ? []
       : [
           'http://localhost:3000',
@@ -91,26 +71,22 @@ app.use(
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(compression());
 app.use(express.json({ limit: '2mb' }));
-app.use(morgan('dev'));
+app.use(morgan(':method :url :status :response-time ms'));
 
 // Health
 app.get('/api/health', (_req, res) => res.json({
   ok: true,
-  ts: new Date().toISOString(),
-  services: {
-    supabase: isSupabaseConfigured,
-    gemini: Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
-    groq: Boolean(process.env.GROQ_API_KEY),
-    devAuth: process.env.NODE_ENV === 'development' && process.env.ENABLE_DEV_AUTH === 'true',
-  },
+  mode: runtime.mode,
+  authority: isSupabaseConfigured ? 'configured' : 'unavailable',
 }));
 
 // Gemini Live Ephemeral Token
 const liveTokenLimiter = rateLimitSimple({ max: 20, windowMs: 60_000 });
-app.post('/ephemeral-token', liveTokenLimiter, async (_req: Request, res: Response) => {
+import { verifyAuthToken } from './middleware/authMiddleware';
+app.post('/ephemeral-token', liveTokenLimiter, verifyAuthToken, async (_req: Request, res: Response) => {
   try {
     const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
-    if (!apiKey) return res.status(500).send('missing GOOGLE_API_KEY');
+    if (!apiKey) return res.status(503).json({ error: 'Provider unavailable', code: 'PROVIDER_UNAVAILABLE' });
 
     const model = 'gemini-live-2.5-flash-preview-native-audio';
     const url = `https://generativelanguage.googleapis.com/v1beta/tokens:generate?key=${apiKey}`;
@@ -122,15 +98,13 @@ app.post('/ephemeral-token', liveTokenLimiter, async (_req: Request, res: Respon
 
     const j: any = await r.json();
     if (!r.ok || !j?.token) {
-      return res.status(500).json({ error: 'token fetch failed', details: j || null });
+      return res.status(502).json({ error: 'Provider request failed', code: 'PROVIDER_FAILED' });
     }
     res.type('text/plain').send(j.token);
   } catch (err) {
-    res.status(500).send('token error');
+    res.status(502).json({ error: 'Provider request failed', code: 'PROVIDER_FAILED' });
   }
 });
-
-import { verifyAuthToken } from './middleware/authMiddleware';
 
 app.get('/api/auth/test', verifyAuthToken, (req, res) => {
   res.json({ message: 'Authenticated successfully', user: (req as any).user });
@@ -163,8 +137,12 @@ try {
 
 app.use((_req, res) => res.status(404).json({ error: 'Not Found' }));
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(err);
-  res.status(500).json({ error: 'Server Error' });
+  const configError = err instanceof ConfigurationError;
+  console.error(configError ? '[CONFIGURATION_INVALID]' : '[REQUEST_FAILED]');
+  res.status(configError ? 503 : 500).json({
+    error: configError ? 'Service configuration unavailable' : 'Server Error',
+    code: configError ? 'CONFIGURATION_INVALID' : 'INTERNAL_ERROR',
+  });
 });
 
 export function startServer(port = PORT) {

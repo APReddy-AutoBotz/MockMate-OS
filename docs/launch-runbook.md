@@ -1,5 +1,11 @@
 # MockMate Production Launch Runbook
 
+## 0. Mandatory authorization stop
+
+P0-3 is merged at `b08250538b3efaf040f6fa6f33523bdf0164a7f7`. Draft PR #4 is source-only and must remain draft/unmerged while exact-head CI is evaluated. Its terminal state is `HOSTED_PREVIEW_NOT_AUTHORIZED`.
+
+The steps involving Vercel, Supabase, providers, real users, EAS, TestFlight, or Play Console below are **future procedures, not authorization**. AP must explicitly approve before anyone configures, inspects, or mutates a hosted project; sets/uses real credentials; calls a real provider; creates a real user; deploys/promotes; or starts store distribution.
+
 Use this before every production preview, public web launch, and Android internal test build.
 
 ## 1. Secret Safety
@@ -28,11 +34,14 @@ cd backend && npm ci --dry-run && cd ..
 npm run check:production
 npm run audit:production
 npm run check:mobile
+npm run test:preview-security
+npm run smoke:deployed
+npm run manifest:readiness
 ```
 
 All commands must pass before deploying.
 
-## 3. Supabase
+## 3. Supabase (future, AP approval required)
 
 1. Run `supabase/migrations/001_initial_schema.sql` in the target Supabase project.
 2. Enable email/password auth.
@@ -40,7 +49,7 @@ All commands must pass before deploying.
 4. Add deployed Vercel preview and production domains to Auth redirect URLs.
 5. Confirm RLS by testing two users cannot read each other's rows.
 
-## 4. Vercel
+## 4. Vercel (future, AP approval required)
 
 Set these environment variables:
 
@@ -76,7 +85,7 @@ On the deployed preview:
 - Chrome can install the app as a PWA.
 - Mobile landing and footer do not overflow.
 
-## 6. Android Internal Testing
+## 6. Android Internal Testing (future, AP approval required)
 
 Set these EAS or local env vars before building:
 

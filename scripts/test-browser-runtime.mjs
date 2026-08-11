@@ -110,6 +110,9 @@ console.log(`[Browser Runtime Test] 2. Started local Supabase Auth & API Stub se
 console.log('[Browser Runtime Test] 3. Building frontend dist with deterministic stub environment variables...');
 const buildEnv = {
   ...process.env,
+  // Vite production builds do not imply test authority. This disposable HTTP
+  // fixture must opt in to the canonical test runtime explicitly.
+  VITE_RUNTIME_MODE: 'test',
   VITE_SUPABASE_URL: `http://127.0.0.1:${stubPort}`,
   VITE_SUPABASE_ANON_KEY: 'test-anon-key',
   VITE_API_URL: `http://127.0.0.1:${stubPort}`,
@@ -244,56 +247,56 @@ try {
     throw new Error(`Detected direct root call missing /api prefix: ${JSON.stringify(rootLevelDirectCalls)}`);
   }
 
-  console.log('[Browser Runtime Test] 10. Verifying missing-configuration fail-closed behavior...');
-  const unconfigBuildEnv = {
-    ...process.env,
-    VITE_SUPABASE_URL: '',
-    VITE_SUPABASE_ANON_KEY: '',
-    VITE_API_URL: '',
-    VITE_ENABLE_DEV_AUTH: 'false',
-  };
+  console.log('[Browser Runtime Test] 10. Verifying loopback HTTP fails closed in production-like modes...');
+  for (const productionLikeMode of ['preview', 'production']) {
+    const invalidBuildEnv = {
+      ...buildEnv,
+      VITE_RUNTIME_MODE: productionLikeMode,
+    };
 
-  const testDistUnconfig = path.resolve(process.cwd(), 'dist_unconfig_test');
-  try {
-    execSync('npx vite build --outDir dist_unconfig_test', { stdio: 'pipe', cwd: process.cwd(), env: unconfigBuildEnv });
+    const invalidDistName = `dist_invalid_${productionLikeMode}_test`;
+    const invalidDist = path.resolve(process.cwd(), invalidDistName);
+    try {
+      execSync(`npx vite build --outDir ${invalidDistName}`, { stdio: 'pipe', cwd: process.cwd(), env: invalidBuildEnv });
 
-    const unconfigServer = http.createServer((req, res) => {
-      let filePath = path.join(testDistUnconfig, req.url === '/' ? 'index.html' : req.url);
-      if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-        filePath = path.join(testDistUnconfig, 'index.html');
+      const invalidServer = http.createServer((req, res) => {
+        let filePath = path.join(invalidDist, req.url === '/' ? 'index.html' : req.url);
+        if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+          filePath = path.join(invalidDist, 'index.html');
+        }
+        try {
+          const data = fs.readFileSync(filePath);
+          res.writeHead(200, { 'Content-Type': filePath.endsWith('.js') ? 'application/javascript' : 'text/html' });
+          res.end(data);
+        } catch (err) {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      const invalidPort = await listenOnAvailablePort(invalidServer, 4174);
+
+      const page2 = await context.newPage();
+      const invalidErrors = [];
+      page2.on('pageerror', (err) => invalidErrors.push(err.message));
+
+      await page2.goto(`http://127.0.0.1:${invalidPort}`, { waitUntil: 'domcontentloaded', timeout: 5000 });
+      await page2.waitForTimeout(1000);
+
+      invalidServer.close();
+      await page2.close();
+
+      const failedClosed = invalidErrors.some(e => e.includes('CONFIGURATION_INVALID'));
+      if (!failedClosed) {
+        throw new Error(`${productionLikeMode} accepted loopback HTTP configuration. Errors: ${JSON.stringify(invalidErrors)}`);
       }
-      try {
-        const data = fs.readFileSync(filePath);
-        res.writeHead(200, { 'Content-Type': filePath.endsWith('.js') ? 'application/javascript' : 'text/html' });
-        res.end(data);
-      } catch (err) {
-        res.writeHead(404);
-        res.end();
+      console.log(`   ${productionLikeMode} rejected loopback HTTP with bounded CONFIGURATION_INVALID`);
+    } finally {
+      if (fs.existsSync(invalidDist)) {
+        try {
+          fs.rmSync(invalidDist, { recursive: true, force: true });
+        } catch (_) {}
       }
-    });
-
-    const unconfigPort = await listenOnAvailablePort(unconfigServer, 4174);
-
-    const page2 = await context.newPage();
-    const unconfigErrors = [];
-    page2.on('pageerror', (err) => unconfigErrors.push(err.message));
-
-    await page2.goto(`http://127.0.0.1:${unconfigPort}`, { waitUntil: 'domcontentloaded', timeout: 5000 });
-    await page2.waitForTimeout(1000);
-
-    unconfigServer.close();
-    await page2.close();
-
-    const failedClosed = unconfigErrors.some(e => e.includes('Missing Supabase configuration'));
-    if (!failedClosed) {
-      throw new Error(`Unconfigured production build failed to produce fail-closed error. Errors: ${JSON.stringify(unconfigErrors)}`);
-    }
-    console.log('   Unconfigured build failed closed correctly with error: "Missing Supabase configuration"');
-  } finally {
-    if (fs.existsSync(testDistUnconfig)) {
-      try {
-        fs.rmSync(testDistUnconfig, { recursive: true, force: true });
-      } catch (_) {}
     }
   }
 

@@ -1,6 +1,69 @@
 import { z } from 'zod';
 
 // ============================================================================
+// RUNTIME URL AUTHORITY
+// ============================================================================
+
+export interface RuntimeUrlPolicy {
+  httpsRequired: boolean;
+  forbidLoopback?: boolean;
+  originOnly?: boolean;
+}
+
+const normalizedHostname = (hostname: string) => {
+  const withoutBrackets = hostname.startsWith('[') && hostname.endsWith(']')
+    ? hostname.slice(1, -1)
+    : hostname;
+  return withoutBrackets.toLowerCase().replace(/\.+$/, '');
+};
+
+const isIpv4Loopback = (hostname: string) => {
+  const octets = hostname.split('.');
+  return octets.length === 4 && octets.every(octet => /^\d+$/.test(octet)) && Number(octets[0]) === 127;
+};
+
+const expandIpv6 = (hostname: string): number[] | null => {
+  if (!hostname.includes(':') || hostname.includes('.')) return null;
+  const halves = hostname.split('::');
+  if (halves.length > 2) return null;
+  const parse = (part: string) => part ? part.split(':').map(value => {
+    if (!/^[0-9a-f]{1,4}$/.test(value)) return Number.NaN;
+    return Number.parseInt(value, 16);
+  }) : [];
+  const left = parse(halves[0]);
+  const right = parse(halves[1] || '');
+  if ([...left, ...right].some(Number.isNaN)) return null;
+  const missing = halves.length === 2 ? 8 - left.length - right.length : 0;
+  if (missing < (halves.length === 2 ? 1 : 0) || left.length + missing + right.length !== 8) return null;
+  return [...left, ...Array(missing).fill(0), ...right];
+};
+
+/** Identifies canonical localhost, the complete IPv4 127/8 range, IPv6 ::1, and IPv4-mapped 127/8. */
+export const isLoopbackHostname = (hostname: string): boolean => {
+  const normalized = normalizedHostname(hostname);
+  if (normalized === 'localhost' || normalized.endsWith('.localhost') || isIpv4Loopback(normalized)) return true;
+  const words = expandIpv6(normalized);
+  if (!words) return false;
+  const ipv6Loopback = words.slice(0, 7).every(word => word === 0) && words[7] === 1;
+  const mappedIpv4Loopback = words.slice(0, 5).every(word => word === 0) &&
+    words[5] === 0xffff && (words[6] >> 8) === 127;
+  return ipv6Loopback || mappedIpv4Loopback;
+};
+
+/** Applies the cross-surface URL contract without returning or embedding the rejected value. */
+export const isValidRuntimeUrl = (value: string | undefined, policy: RuntimeUrlPolicy): boolean => {
+  try {
+    const url = new URL(value || '');
+    const validScheme = url.protocol === 'https:' || (!policy.httpsRequired && url.protocol === 'http:');
+    return validScheme && Boolean(url.hostname) && !url.username && !url.password &&
+      (!policy.forbidLoopback || !isLoopbackHostname(url.hostname)) &&
+      (!policy.originOnly || (url.pathname === '/' && !url.search && !url.hash));
+  } catch {
+    return false;
+  }
+};
+
+// ============================================================================
 // COMMON CONTRACTS & ERROR CODES
 // ============================================================================
 

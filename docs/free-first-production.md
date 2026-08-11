@@ -1,5 +1,13 @@
 # MockMate Free-First Production Setup
 
+> Current authority (2026-08-11): P0-3 merged at `b08250538b3efaf040f6fa6f33523bdf0164a7f7`; Draft PR #4 proves source and disposable behavior only. `HOSTED_PREVIEW_NOT_AUTHORIZED` remains the controlling stop state.
+
+## Runtime authority contract
+
+`MOCKMATE_RUNTIME_MODE` is the server authority and `VITE_RUNTIME_MODE` / `EXPO_PUBLIC_RUNTIME_MODE` are its build-surface counterparts. The only values are `development`, `test`, `preview`, and `production`. Preview and production require valid HTTPS Supabase/API/origin configuration, server-only service-role and provider configuration, explicit non-wildcard origins, and disabled dev/mock auth. Invalid production-like configuration fails with bounded `CONFIGURATION_INVALID` responses and cannot fall back to in-memory usage or persistence.
+
+Only anon keys are public. Service-role keys, provider keys, admin allowlists, persistence and quota authority are server-only and cannot be selected by request fields or client environment values.
+
 MockMate is wired for Vercel + Supabase with a free-first launch posture: user-owned data in Postgres/RLS, Supabase Auth tokens on every protected API call, and friendly daily limits for AI-heavy features.
 
 ## 1. Supabase
@@ -116,7 +124,11 @@ The first mobile launch is the installable web app, not the native app store rel
 - `/api/admin/usage` is admin-only and summarizes usage counts without exposing resume text, audio, interview answers, or report content.
 - Set `ADMIN_EMAILS` in Vercel before production. Leave it empty only for local development.
 
-## 10. Launch Checks
+## 10. Evidence boundary and launch checks
+
+Locally/disposably proven by the exact-head gate: builds/types/tests, migration and RLS journeys, authentication rejection, quota/replay paths, deletion coverage, Career Context grounding, browser/PWA network authority, mobile source checks, secret rejection and a local smoke contract. The generated manifest records `SOURCE_AND_DISPOSABLE_PROOF_ONLY`.
+
+Not proven: a hosted Vercel/Supabase preview, real credentials/providers/users, operational monitoring, EAS builds, store distribution, production/security/compliance readiness, or real-user QA. AP approval is the next explicit gate before any such configuration, inspection, mutation, or execution.
 
 Before a public launch:
 

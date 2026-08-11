@@ -99,6 +99,7 @@ export default defineConfig(({ mode }) => {
         'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || ''),
         'process.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.VITE_SUPABASE_ANON_KEY || ''),
         'process.env.VITE_ENABLE_DEV_AUTH': JSON.stringify(env.VITE_ENABLE_DEV_AUTH || '')
+        ,'process.env.VITE_RUNTIME_MODE': JSON.stringify(env.VITE_RUNTIME_MODE || mode)
       },
       resolve: {
         alias: {

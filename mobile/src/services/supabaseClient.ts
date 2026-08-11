@@ -1,5 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { canUseMobileMockAuth, isMobileProductionLike } from './runtimeMode';
+import { isValidRuntimeUrl } from 'mockmate-shared';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -7,8 +9,13 @@ const allowMockAuth = process.env.EXPO_PUBLIC_ENABLE_MOCK_AUTH === 'true';
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
-const isDevelopmentMode = typeof __DEV__ !== 'undefined' && __DEV__;
-export const isUsingMockAuth = isDevelopmentMode && allowMockAuth;
+export const isUsingMockAuth = canUseMobileMockAuth && allowMockAuth;
+
+if (allowMockAuth && !canUseMobileMockAuth) throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
+if (supabaseUrl && !isValidRuntimeUrl(supabaseUrl, {
+  httpsRequired: true,
+  forbidLoopback: isMobileProductionLike,
+})) throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
 
 if (!isSupabaseConfigured && !isUsingMockAuth) {
   throw new Error("Missing Supabase configuration. Production must fail closed if Supabase configuration is missing.");

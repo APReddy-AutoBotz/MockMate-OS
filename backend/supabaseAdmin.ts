@@ -1,9 +1,12 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { isProductionLike, runtimeMode, validRuntimeUrl } from './config/runtimeConfig';
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
-export const isSupabaseConfigured = Boolean(supabaseUrl && serviceRoleKey);
+export const isSupabaseConfigured = Boolean(supabaseUrl && serviceRoleKey && validRuntimeUrl(supabaseUrl, {
+  httpsRequired: isProductionLike(),
+}));
 
 export let supabaseAdmin: SupabaseClient | null = isSupabaseConfigured
   ? createClient(supabaseUrl, serviceRoleKey, {
@@ -21,8 +24,8 @@ export let supabaseAdmin: SupabaseClient | null = isSupabaseConfigured
  * persistence fallback.
  */
 export function installSupabaseAdminForTest(client: SupabaseClient | null): void {
-  if (process.env.NODE_ENV !== 'test') {
-    throw new Error('Supabase test persistence can only be installed in NODE_ENV=test');
+  if (runtimeMode() !== 'test') {
+    throw new Error('Supabase test persistence can only be installed in canonical test mode');
   }
   supabaseAdmin = client;
 }
