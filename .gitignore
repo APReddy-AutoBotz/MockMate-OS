@@ -53,3 +53,4 @@ mobile/*.apk
 *.njsproj
 *.sln
 *.sw?
+artifacts/

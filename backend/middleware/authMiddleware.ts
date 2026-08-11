@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { isSupabaseConfigured, supabaseAdmin } from '../supabaseAdmin';
+import { runtimeMode } from '../config/runtimeConfig';
 
 export const verifyAuthToken = async (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers.authorization;
@@ -12,7 +13,7 @@ export const verifyAuthToken = async (req: Request, res: Response, next: NextFun
     }
 
     const devAuthEnabled =
-        process.env.NODE_ENV === 'development' &&
+        runtimeMode() === 'development' &&
         process.env.ENABLE_DEV_AUTH === 'true';
 
     if (token === 'test-token' && devAuthEnabled) {
@@ -48,7 +49,7 @@ export const verifyAuthToken = async (req: Request, res: Response, next: NextFun
         };
         next();
     } catch (error) {
-        console.error('Token verification failed', error);
+        console.error('[AUTH_TOKEN_REJECTED]');
         return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }
 };

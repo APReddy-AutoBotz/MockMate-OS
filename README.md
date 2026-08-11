@@ -12,6 +12,8 @@ The production direction is Vercel + Supabase:
 
 ## Current App Status
 
+P0-3 is merged on `main` at `b08250538b3efaf040f6fa6f33523bdf0164a7f7`. Draft PR #4 is a source-only production-preview-readiness change. It does not authorize or prove a hosted preview, provider execution, real-user validation, deployment, or native release.
+
 The browser app is the primary working product.
 
 The `mobile/` folder is an Android-first Expo app prepared for internal Play Store testing. It is not ready for public store release until EAS builds, Play Console metadata, privacy declarations, and real-user QA are completed. See `docs/mobile-production-plan.md` for the production mobile path.
@@ -93,15 +95,18 @@ Or run the combined production gate from the repo root:
 npm run check:production
 npm run audit:production
 npm run check:mobile
+npm run check:preview-readiness
 ```
 
-After deploying a Vercel preview:
+The smoke contract defaults to a disposable local server. A future remote run is fail-closed unless AP has separately authorized the hosted inspection and `AUTHORIZE_HOSTED_PREVIEW_SMOKE=true` is deliberately set:
 
 ```bash
 npm run smoke:deployed -- https://your-preview.vercel.app
 ```
 
 ## Production Deployment
+
+**STOP: `HOSTED_PREVIEW_NOT_AUTHORIZED`.** This repository is ready only for source/disposable validation. AP approval is required before configuring, inspecting, or mutating Vercel/Supabase; setting real credentials; calling providers; creating real users; deploying; or running EAS/store distribution.
 
 Use one Vercel project for the browser app and API functions. Set the variables listed in `.env.example`, with:
 

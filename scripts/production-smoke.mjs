@@ -51,10 +51,11 @@ async function run() {
       ...process.env,
       PORT: String(apiPort),
       NODE_ENV: 'production',
+      MOCKMATE_RUNTIME_MODE: 'production',
       ENABLE_DEV_AUTH: 'false',
       SUPABASE_URL: 'https://test.supabase.co',
       SUPABASE_SERVICE_ROLE_KEY: 'test-service-role-key',
-      ALLOWED_ORIGINS: 'http://localhost:3000,http://127.0.0.1:3055',
+      ALLOWED_ORIGINS: 'https://preview.invalid',
       GROQ_API_KEY: 'test-groq-key',
       GOOGLE_API_KEY: 'test-google-key'
     },
@@ -67,6 +68,8 @@ async function run() {
 
   try {
     await waitForHealth();
+    const health = await request('/api/health');
+    if (health.body?.mode !== 'production' || health.body?.authority !== 'configured') throw new Error('Health authority is not production-like');
 
     await expectStatus('GET /api/me/usage without auth', (await request('/api/me/usage')).status, 401);
     await expectStatus('GET /api/admin/usage without auth', (await request('/api/admin/usage')).status, 401);
@@ -81,6 +84,7 @@ async function run() {
     );
 
     await expectStatus('GET /api/interview/sessions without auth', (await request('/api/interview/sessions')).status, 401);
+    await expectStatus('POST /ephemeral-token without auth', (await request('/ephemeral-token',{method:'POST'})).status, 401);
     await expectStatus('POST /api/interview/plan without auth', (await request('/api/interview/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -30,6 +30,7 @@ export async function consumeUsage(userId: string, feature: UsageFeature): Promi
   }
 
   if (!supabaseAdmin) {
+    if (process.env.NODE_ENV !== 'development') throw new Error('USAGE_AUTHORITY_UNAVAILABLE');
     const key = memoryKey(userId, feature);
     const current = memoryUsage.get(key) || { used: 0, limit };
     if (current.used >= limit) return { allowed: false, used: current.used, limit };
@@ -38,33 +39,11 @@ export async function consumeUsage(userId: string, feature: UsageFeature): Promi
     return { allowed: true, ...next };
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('usage_ledger')
-    .select('used, limit_value')
-    .eq('user_id', userId)
-    .eq('usage_date', usageDate)
-    .eq('feature', feature)
-    .maybeSingle();
-
-  if (error) throw error;
-
-  const used = Number(data?.used || 0);
-  if (used >= limit) return { allowed: false, used, limit };
-
-  const nextUsed = used + 1;
-  const { error: upsertError } = await supabaseAdmin
-    .from('usage_ledger')
-    .upsert({
-      user_id: userId,
-      usage_date: usageDate,
-      feature,
-      used: nextUsed,
-      limit_value: limit,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'user_id,usage_date,feature' });
-
-  if (upsertError) throw upsertError;
-  return { allowed: true, used: nextUsed, limit };
+  const { data, error } = await supabaseAdmin.rpc('consume_daily_usage_tx', {
+    p_user_id: userId, p_feature: feature, p_limit: limit,
+  });
+  if (error || !data) throw error || new Error('USAGE_AUTHORITY_UNAVAILABLE');
+  return { allowed: Boolean(data.allowed), used: Number(data.used), limit: Number(data.limit) };
 }
 
 export function enforceUsageLimit(feature: UsageFeature) {

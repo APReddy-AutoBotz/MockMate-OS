@@ -1,8 +1,14 @@
 const rawTarget = process.env.DEPLOY_URL || process.argv[2];
 
 if (!rawTarget) {
-  console.error('Usage: npm run smoke:deployed -- https://your-preview.vercel.app');
-  process.exit(1);
+  console.log('No remote target supplied; running the target-agnostic contract against the disposable local server.');
+  const { spawnSync } = await import('node:child_process');
+  const result = spawnSync('npm',['run','smoke:production'],{stdio:'inherit',shell:process.platform==='win32'});
+  process.exit(result.status ?? 1);
+}
+if (!/^https:\/\//.test(rawTarget) || process.env.AUTHORIZE_HOSTED_PREVIEW_SMOKE !== 'true') {
+  console.error('Remote smoke is blocked: HTTPS target and explicit AP authorization are required.');
+  process.exit(2);
 }
 
 const target = rawTarget.replace(/\/+$/, '');
@@ -37,7 +43,7 @@ if (!manifest.body?.icons?.some(icon => String(icon.purpose || '').includes('mas
 const health = await request('/api/health');
 expectStatus('GET /api/health', health.status, 200);
 if (!health.body?.ok) throw new Error('/api/health did not return ok=true');
-if (health.body?.services?.devAuth) throw new Error('Production preview must not have dev auth enabled');
+if (!['preview','production'].includes(health.body?.mode)) throw new Error('Target is not reporting production-like mode');
 
 expectStatus('GET /api/me/usage without auth', (await request('/api/me/usage')).status, 401);
 expectStatus('GET /api/admin/usage without auth', (await request('/api/admin/usage')).status, 401);
