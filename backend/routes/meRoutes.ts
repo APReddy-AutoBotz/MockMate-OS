@@ -101,6 +101,7 @@ router.delete('/data', async (req, res) => {
       'clearspeak_profiles',
       'clearspeak_ledgers',
       'clearspeak_beta_feedback',
+      'clearspeak_accent_attempts',
       'usage_ledger',
       'profiles',
     ];

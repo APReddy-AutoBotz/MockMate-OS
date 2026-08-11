@@ -4,6 +4,7 @@ import { getProfile, getProgress } from '../../services/clearSpeakService';
 import ClearSpeakOnboarding from './ClearSpeakOnboarding';
 import ClearSpeakSession from './ClearSpeakSession';
 import type { CareerContextSnapshot, ModuleBridgeSession } from 'mockmate-shared';
+import AccentPracticeV1 from './AccentPracticeV1';
 
 interface ClearSpeakDashboardProps {
   onInterviewBridge: (payload: ClearSpeakBridgePayload) => void;
@@ -11,7 +12,7 @@ interface ClearSpeakDashboardProps {
   onGroundingConsumed?: (bridgeId: string) => void;
 }
 
-type DashboardView = 'loading' | 'onboarding' | 'dashboard' | 'session';
+type DashboardView = 'loading' | 'onboarding' | 'dashboard' | 'session' | 'accent';
 
 const clarityLabel = (score: number) => {
   if (score >= 85) return 'Very clear';
@@ -103,6 +104,8 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
     );
   }
 
+  if (view === 'accent') return <AccentPracticeV1 onExit={() => setView('dashboard')} />;
+
   const avgScore = progress && progress.clarityTrend.length > 0
     ? Math.round(progress.clarityTrend.reduce((a, b) => a + b, 0) / progress.clarityTrend.length)
     : 0;
@@ -139,6 +142,9 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
           className="relative z-10 w-full max-w-md bg-brand-primary hover:bg-brand-primary/90 text-brand-dark border-none py-5 mt-2 rounded-2xl shadow-xl active:scale-95 transition-all font-bold uppercase tracking-[0.12em] text-[11px]"
         >
           Start today's practice
+        </button>
+        <button onClick={() => setView('accent')} className="w-full max-w-md rounded-xl border border-brand-primary/50 px-6 py-3 font-semibold text-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary">
+          Try UK / US accent practice (synthetic V1)
         </button>
         <p className="text-xs text-brand-tint">Your practice stays private.</p>
       </section>

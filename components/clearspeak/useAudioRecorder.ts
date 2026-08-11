@@ -9,9 +9,9 @@
  * Source of truth: implementation_plan.md §14 — Audio Privacy Policy
  */
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 
-export type RecorderState = 'idle' | 'recording' | 'stopped' | 'error';
+export type RecorderState = 'preflight' | 'requesting_permission' | 'recording' | 'preview_ready' | 'scoring_uploading' | 'canceled' | 'permission_denied' | 'permission_revoked' | 'device_lost' | 'offline' | 'unsupported' | 'error' | 'result' | 'idle' | 'stopped';
 
 export interface UseAudioRecorderResult {
   state: RecorderState;
@@ -47,9 +47,13 @@ export function useAudioRecorder(): UseAudioRecorderResult {
     setErrorMessage(null);
     chunksRef.current = [];
 
+    if (!navigator.onLine) { setState('offline'); setErrorMessage('You are offline. Recording cannot be submitted.'); return; }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') { setState('unsupported'); setErrorMessage('Microphone recording is not supported in this browser.'); return; }
+    setState('requesting_permission');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       streamRef.current = stream;
+      stream.getAudioTracks().forEach(track => { track.onended = () => { setState('device_lost'); setErrorMessage('Microphone access was revoked or the device was disconnected.'); }; });
 
       const mimeType = PREFERRED_MIME_TYPES.find(t => MediaRecorder.isTypeSupported(t)) ?? '';
 
@@ -64,7 +68,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
         const blob = new Blob(chunksRef.current, { type: mimeType || 'audio/webm' });
         setAudioBlob(blob);
         setDurationMs(Date.now() - startTimeRef.current);
-        setState('stopped');
+        setState('preview_ready');
 
         // Stop microphone tracks to release hardware indicator
         streamRef.current?.getTracks().forEach(t => t.stop());
@@ -81,7 +85,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       startTimeRef.current = Date.now();
       setState('recording');
     } catch (err: any) {
-      setState('error');
+      setState(err?.name === 'NotAllowedError' ? 'permission_denied' : err?.name === 'NotFoundError' ? 'device_lost' : 'error');
       const msg = err?.name === 'NotAllowedError'
           ? 'Microphone access denied. Please allow microphone in your browser settings.'
           : 'Could not access microphone. Please try again.';
@@ -108,7 +112,13 @@ export function useAudioRecorder(): UseAudioRecorderResult {
     setAudioBlob(null);
     chunksRef.current = [];
     setDurationMs(0);
-    setState('idle');
+    setState('canceled');
+  }, []);
+
+  useEffect(() => () => {
+    if (mediaRecorderRef.current?.state === 'recording') { mediaRecorderRef.current.onstop = null; mediaRecorderRef.current.stop(); }
+    streamRef.current?.getTracks().forEach(track => track.stop());
+    chunksRef.current = [];
   }, []);
 
   const clearAudio = useCallback(() => {

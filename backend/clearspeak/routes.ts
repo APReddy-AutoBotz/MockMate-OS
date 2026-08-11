@@ -36,6 +36,8 @@ import { getSnapshotById } from '../services/groundingSnapshotService';
 import crypto from 'crypto';
 import { canonicalJsonValue, hashArtifactContent } from './artifactAuthority';
 import { ACCENT_PROFILES } from './accentProfiles';
+import { accentCatalog, promptFor, rejectClientAuthority, submitAccentAttempt } from './accentV1Service';
+import { getAccentProfile } from './accentProfiles';
 
 const router = Router();
 
@@ -157,6 +159,55 @@ function handleMulterError(
 
 // All ClearSpeak routes require auth
 router.use(verifyAuthToken);
+
+// Accent Practice V1 is deliberately separate from legacy /score. Its policy,
+// references and deterministic adapter are selected exclusively by the server.
+router.get('/v1/accent/catalog', (_req, res) => res.json(accentCatalog()));
+
+router.post('/v1/accent/prompts', (req, res) => {
+  try {
+    rejectClientAuthority(req.body);
+    const profile = getAccentProfile(req.body?.profileId);
+    if (!profile || (req.body?.profileVersion != null && req.body.profileVersion !== profile.profileVersion)) return res.status(409).json({ error: 'stale_or_unknown_profile' });
+    if (!['word', 'phrase', 'sentence_reading', 'free_response'].includes(req.body?.mode)) return res.status(422).json({ error: 'unsupported_practice_mode' });
+    return res.json({ prompt: promptFor(profile, req.body.mode), scoringPolicyVersion: profile.scoringPolicyVersion, fixture: true });
+  } catch (error: any) { return res.status(422).json({ error: error.message }); }
+});
+
+router.post('/v1/accent/attempts', upload.single('audio'), handleMulterError, async (req, res) => {
+  try {
+    const userId = (req as any).user?.uid;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!req.file || req.file.size > 5 * 1024 * 1024) return res.status(413).json({ error: 'Audio must be non-empty and no larger than 5 MB' });
+    let metadata: any;
+    try { metadata = JSON.parse(String(req.body.metadata || '')); } catch { return res.status(400).json({ error: 'Malformed attempt metadata' }); }
+    const result = await submitAccentAttempt(userId, metadata, req.file.buffer, req.file.mimetype);
+    req.file.buffer.fill(0);
+    return res.status(result.replayed ? 200 : 201).json({ ...result, adapter: 'deterministic-synthetic-v1', retention: 'derived-results-only' });
+  } catch (error: any) {
+    if (req.file?.buffer) req.file.buffer.fill(0);
+    const status = error.message === 'idempotency_conflict' ? 409 : error.message === 'authoritative_persistence_unavailable' ? 503 : 422;
+    return res.status(status).json({ error: error.message });
+  }
+});
+
+router.get('/v1/accent/attempts', async (req, res) => {
+  const userId = (req as any).user?.uid;
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Authoritative persistence unavailable' });
+  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+  const { data, error } = await supabaseAdmin.from('clearspeak_accent_attempts').select('attempt_id,result,duration_ms,mime_type,created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(limit);
+  if (error) return res.status(500).json({ error: 'History unavailable' });
+  return res.json({ attempts: data || [], fixture: true });
+});
+
+router.delete('/v1/accent/attempts/:attemptId', async (req, res) => {
+  const userId = (req as any).user?.uid;
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Authoritative persistence unavailable' });
+  // Owner predicate is intentionally non-disclosing: absent and foreign IDs are identical.
+  const { error } = await supabaseAdmin.from('clearspeak_accent_attempts').delete().eq('user_id', userId).eq('attempt_id', req.params.attemptId);
+  if (error) return res.status(500).json({ error: 'Delete unavailable' });
+  return res.status(204).send();
+});
 
 // ─── POST /api/clearspeak/profile ─────────────────────────────────────────────
 

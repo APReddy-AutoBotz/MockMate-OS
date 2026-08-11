@@ -234,9 +234,9 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
 
   // Handle successful recording completion safely
   useEffect(() => {
-    if (state.phase === 'recording' && recorder.state === 'stopped' && recorder.audioBlob) {
+    if (state.phase === 'recording' && recorder.state === 'preview_ready' && recorder.audioBlob) {
       handleSubmitRecording(false);
-    } else if (state.phase === 'retry' && recorder.state === 'stopped' && recorder.audioBlob) {
+    } else if (state.phase === 'retry' && recorder.state === 'preview_ready' && recorder.audioBlob) {
       handleSubmitRecording(true);
     }
   }, [state.phase, recorder.state, recorder.audioBlob, handleSubmitRecording]);
