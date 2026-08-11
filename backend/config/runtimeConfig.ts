@@ -1,3 +1,5 @@
+import { isValidRuntimeUrl } from 'mockmate-shared';
+
 export type RuntimeMode = 'development' | 'test' | 'preview' | 'production';
 
 export class ConfigurationError extends Error {
@@ -8,21 +10,10 @@ export class ConfigurationError extends Error {
   }
 }
 
-const isLocalHostname = (hostname: string) => hostname === 'localhost' ||
-  hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
-
 export const validRuntimeUrl = (
   value: string | undefined,
   { httpsRequired, originOnly = false }: { httpsRequired: boolean; originOnly?: boolean },
-) => {
-  try {
-    const url = new URL(value || '');
-    const validScheme = url.protocol === 'https:' || (!httpsRequired && url.protocol === 'http:');
-    return validScheme && Boolean(url.hostname) && !url.username && !url.password &&
-      (!httpsRequired || !isLocalHostname(url.hostname)) &&
-      (!originOnly || (url.pathname === '/' && !url.search && !url.hash));
-  } catch { return false; }
-};
+) => isValidRuntimeUrl(value, { httpsRequired, forbidLoopback: httpsRequired, originOnly });
 
 export function runtimeMode(env: NodeJS.ProcessEnv = process.env): RuntimeMode {
   const requested = env.MOCKMATE_RUNTIME_MODE || env.NODE_ENV || 'development';

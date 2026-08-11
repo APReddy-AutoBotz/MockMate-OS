@@ -16,7 +16,13 @@ for (const file of ['backend/server.ts', 'backend/middleware/authMiddleware.ts',
   if (source.includes('process.env.NODE_ENV')) fail(`${file} bypasses canonical runtime authority`);
 }
 if (!text.includes("mode !== 'development'")) fail('Quota fallback is not canonical-development-only');
-if (!/parsed\.username \|\| parsed\.password/.test(text)) fail('Client URL validators must reject both userinfo fields');
+const sharedRuntimeAuthority = await readFile('shared/src/index.ts', 'utf8');
+if (!/!url\.username && !url\.password/.test(sharedRuntimeAuthority)) fail('Canonical URL validator must reject both userinfo fields');
+for (const file of ['backend/config/runtimeConfig.ts', 'services/runtimeConfig.ts', 'mobile/src/services/apiBase.ts', 'mobile/src/services/supabaseClient.ts']) {
+  const source = await readFile(file, 'utf8');
+  if (!source.includes('isValidRuntimeUrl')) fail(`${file} bypasses canonical URL authority`);
+  if (/hostname === ['"](?:localhost|127\.0\.0\.1|::1|\[::1\])['"]/.test(source)) fail(`${file} duplicates a literal loopback predicate`);
+}
 
 const contradictoryAuth = spawnSync(process.execPath, ['-e', `
   const { verifyAuthToken } = require('./backend/dist/middleware/authMiddleware.js');

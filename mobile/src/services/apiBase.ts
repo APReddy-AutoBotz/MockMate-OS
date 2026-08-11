@@ -1,4 +1,5 @@
 import { canUseMobileMockAuth, isMobileProductionLike } from './runtimeMode';
+import { isValidRuntimeUrl } from 'mockmate-shared';
 
 const normalizeBase = (value: string | undefined, fallback: string) => {
   const base = (value || fallback).trim().replace(/\/+$/, '');
@@ -11,13 +12,10 @@ const allowLocalFallback = process.env.EXPO_PUBLIC_ENABLE_MOCK_AUTH === 'true' &
 
 if (process.env.EXPO_PUBLIC_ENABLE_MOCK_AUTH === 'true' && !canUseMobileMockAuth) throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
 if (configuredApiUrl) {
-  let parsed: URL;
-  try { parsed = new URL(configuredApiUrl); } catch { throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).'); }
-  const local = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' ||
-    parsed.hostname === '::1' || parsed.hostname === '[::1]';
-  if (!parsed.hostname || parsed.username || parsed.password ||
-      (isMobileProductionLike && (parsed.protocol !== 'https:' || local)) ||
-      (!isMobileProductionLike && parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) {
+  if (!isValidRuntimeUrl(configuredApiUrl, {
+    httpsRequired: isMobileProductionLike,
+    forbidLoopback: isMobileProductionLike,
+  })) {
     throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
   }
 }

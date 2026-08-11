@@ -1,3 +1,5 @@
+import { isValidRuntimeUrl } from 'mockmate-shared';
+
 export interface RuntimeConfig {
   apiOrigin: string;
   apiBase: string;
@@ -20,14 +22,8 @@ const parseRuntimeMode = (requested: string): RuntimeMode => {
   throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
 };
 
-const isLocalHostname = (hostname: string) => hostname === 'localhost' ||
-  hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
-
 const validClientUrl = (value: string, productionLike: boolean) => {
-  const url = new URL(value);
-  return Boolean(url.hostname) && !url.username && !url.password &&
-    (url.protocol === 'https:' || (!productionLike && url.protocol === 'http:')) &&
-    (!productionLike || !isLocalHostname(url.hostname));
+  return isValidRuntimeUrl(value, { httpsRequired: productionLike, forbidLoopback: productionLike });
 };
 
 // Direct statically replaceable references for Vite define / env replacement

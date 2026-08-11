@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [backend, backendAuth, backendUsage, backendPersistence, browser, mobileMode, mobileApi, mobileAuth, eas] = await Promise.all([
+const [backend, backendAuth, backendUsage, backendPersistence, browser, mobileMode, mobileApi, mobileAuth, shared, eas] = await Promise.all([
   readFile('backend/config/runtimeConfig.ts', 'utf8'),
   readFile('backend/middleware/authMiddleware.ts', 'utf8'),
   readFile('backend/services/usageService.ts', 'utf8'),
@@ -10,6 +10,7 @@ const [backend, backendAuth, backendUsage, backendPersistence, browser, mobileMo
   readFile('mobile/src/services/runtimeMode.ts', 'utf8'),
   readFile('mobile/src/services/apiBase.ts', 'utf8'),
   readFile('mobile/src/services/supabaseClient.ts', 'utf8'),
+  readFile('shared/src/index.ts', 'utf8'),
   readFile('mobile/eas.json', 'utf8').then(JSON.parse),
 ]);
 
@@ -30,16 +31,17 @@ assert.match(mobileMode, /if \(isDevelopmentBuild\) return 'development';[\s\S]*
   'missing mobile mode may infer development only in a development build');
 assert.match(mobileMode, /mobileRuntimeMode === 'development' && isMobileDevelopmentBuild/,
   'mobile mock auth must require canonical development in a development build');
-assert.match(mobileApi, /isMobileProductionLike && parsed\.protocol !== 'https:'/,
-  'mobile release-like API traffic must require HTTPS');
+for (const [surface, source] of [['backend', backend], ['browser', browser], ['mobile API', mobileApi], ['mobile Supabase', mobileAuth]]) {
+  assert.match(source, /isValidRuntimeUrl/, `${surface} must consume canonical URL authority`);
+  assert.doesNotMatch(source, /hostname === ['"](?:localhost|127\.0\.0\.1|::1|\[::1\])['"]/, `${surface} must not duplicate a literal loopback predicate`);
+}
+assert.match(shared, /export const isLoopbackHostname/, 'shared contracts must own canonical hostname semantics');
+assert.match(mobileApi, /httpsRequired: isMobileProductionLike/,
+  'mobile release-like API traffic must require HTTPS through canonical URL authority');
 assert.match(mobileAuth, /allowMockAuth && !canUseMobileMockAuth/,
   'mobile mock auth must fail outside trusted development authority');
-assert.match(mobileAuth, /parsed\.username \|\| parsed\.password/,
-  'mobile Supabase URL must reject username- and password-bearing userinfo');
-assert.match(browser, /!url\.username && !url\.password/,
-  'browser URL validation must reject username- and password-bearing userinfo');
-assert.match(backend, /!url\.username && !url\.password/,
-  'backend URL validation must reject username- and password-bearing userinfo');
+assert.match(shared, /!url\.username && !url\.password/,
+  'canonical URL validation must reject username- and password-bearing userinfo');
 
 for (const mode of ['preview', 'production']) {
   assert.equal(eas.build[mode].env.EXPO_PUBLIC_RUNTIME_MODE, mode);
