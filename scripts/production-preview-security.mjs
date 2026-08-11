@@ -9,9 +9,25 @@ if (!/VITE_RUNTIME_MODE:\s*['"]test['"]/.test(browserRuntimeFixture)) fail('Brow
 if (!/\['preview',\s*'production'\]/.test(browserRuntimeFixture) || !browserRuntimeFixture.includes('CONFIGURATION_INVALID')) fail('Browser runtime fixture must reject loopback HTTP in preview and production');
 if (/SUPABASE_SERVICE_ROLE_KEY['"]\s*:\s*JSON\.stringify|EXPO_PUBLIC_(?:.*SERVICE|.*PROVIDER|.*ADMIN)|VITE_(?:.*SERVICE_ROLE|.*PROVIDER_KEY)/.test(text)) fail('Server authority may enter a public bundle');
 if (/NODE_ENV\s*===\s*['"]production['"][\s\S]{0,300}ENABLE_DEV_AUTH/.test(text)) fail('Mode policy must use canonical production-like authority');
-if (!text.includes("runtimeMode() === 'development'")) fail('Dev auth is not bound to canonical development mode');
+if (!text.includes("mode === 'development'")) fail('Dev auth is not bound to canonical development mode');
 if (!text.includes("handler: 'NetworkOnly'")) fail('PWA API traffic is not network authoritative');
-if (!text.includes("process.env.NODE_ENV !== 'development'")) fail('Quota fallback is not development-only');
+for (const file of ['backend/server.ts', 'backend/middleware/authMiddleware.ts', 'backend/services/usageService.ts', 'backend/supabaseAdmin.ts']) {
+  const source = await readFile(file, 'utf8');
+  if (source.includes('process.env.NODE_ENV')) fail(`${file} bypasses canonical runtime authority`);
+}
+if (!text.includes("mode !== 'development'")) fail('Quota fallback is not canonical-development-only');
+if (!/parsed\.username \|\| parsed\.password/.test(text)) fail('Client URL validators must reject both userinfo fields');
+
+const contradictoryAuth = spawnSync(process.execPath, ['-e', `
+  const { verifyAuthToken } = require('./backend/dist/middleware/authMiddleware.js');
+  let status = 0; let body;
+  const res = { status(value) { status = value; return this; }, json(value) { body = value; } };
+  verifyAuthToken({ headers: { authorization: 'Bearer test-token-release-bypass' } }, res, () => process.exit(91))
+    .then(() => { if (status !== 503 || !body) process.exit(92); });
+`], { encoding: 'utf8', env: {
+  ...process.env, NODE_ENV: 'test', MOCKMATE_RUNTIME_MODE: 'preview', ENABLE_DEV_AUTH: 'false',
+}});
+if (contradictoryAuth.status !== 0) fail('Release-like canonical mode accepted test-token authority under contradictory NODE_ENV');
 
 const secret = 'never-print-this-service-role';
 const rejected = spawnSync(process.execPath, ['backend/dist/localServer.js'], { encoding:'utf8', env:{

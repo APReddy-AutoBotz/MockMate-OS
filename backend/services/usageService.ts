@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../supabaseAdmin';
+import { runtimeMode } from '../config/runtimeConfig';
 
 export const USAGE_LIMITS = {
   resume_review: 3,
@@ -25,12 +26,13 @@ export async function consumeUsage(userId: string, feature: UsageFeature): Promi
   const limit = USAGE_LIMITS[feature];
   const usageDate = todayISO();
 
-  if (process.env.NODE_ENV === 'test') {
+  const mode = runtimeMode();
+  if (mode === 'test') {
     return { allowed: true, used: 1, limit };
   }
 
   if (!supabaseAdmin) {
-    if (process.env.NODE_ENV !== 'development') throw new Error('USAGE_AUTHORITY_UNAVAILABLE');
+    if (mode !== 'development') throw new Error('USAGE_AUTHORITY_UNAVAILABLE');
     const key = memoryKey(userId, feature);
     const current = memoryUsage.get(key) || { used: 0, limit };
     if (current.used >= limit) return { allowed: false, used: current.used, limit };
@@ -77,6 +79,7 @@ export async function getUsageSummary(userId: string) {
   );
 
   if (!supabaseAdmin) {
+    if (runtimeMode() !== 'development') throw new Error('USAGE_AUTHORITY_UNAVAILABLE');
     for (const feature of Object.keys(USAGE_LIMITS) as UsageFeature[]) {
       const value = memoryUsage.get(memoryKey(userId, feature));
       if (value) defaults[feature] = value;

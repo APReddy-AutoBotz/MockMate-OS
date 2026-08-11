@@ -12,8 +12,9 @@ export const verifyAuthToken = async (req: Request, res: Response, next: NextFun
         return res.status(401).json({ error: 'Unauthorized: No token provided' });
     }
 
+    const mode = runtimeMode();
     const devAuthEnabled =
-        runtimeMode() === 'development' &&
+        mode === 'development' &&
         process.env.ENABLE_DEV_AUTH === 'true';
 
     if (token === 'test-token' && devAuthEnabled) {
@@ -21,7 +22,7 @@ export const verifyAuthToken = async (req: Request, res: Response, next: NextFun
         return next();
     }
 
-    if (process.env.NODE_ENV === 'test' && (token.startsWith('test-token') || token.startsWith('dev_user'))) {
+    if (mode === 'test' && (token.startsWith('test-token') || token.startsWith('dev_user'))) {
         let userId = '11111111-1111-1111-1111-111111111111';
         if (token === 'test-token') {
             userId = 'test-user-id';

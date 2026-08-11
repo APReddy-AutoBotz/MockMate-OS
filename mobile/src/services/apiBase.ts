@@ -13,7 +13,11 @@ if (process.env.EXPO_PUBLIC_ENABLE_MOCK_AUTH === 'true' && !canUseMobileMockAuth
 if (configuredApiUrl) {
   let parsed: URL;
   try { parsed = new URL(configuredApiUrl); } catch { throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).'); }
-  if (parsed.username || parsed.password || (isMobileProductionLike && parsed.protocol !== 'https:')) {
+  const local = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' ||
+    parsed.hostname === '::1' || parsed.hostname === '[::1]';
+  if (!parsed.hostname || parsed.username || parsed.password ||
+      (isMobileProductionLike && (parsed.protocol !== 'https:' || local)) ||
+      (!isMobileProductionLike && parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) {
     throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
   }
 }

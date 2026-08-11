@@ -20,6 +20,16 @@ const parseRuntimeMode = (requested: string): RuntimeMode => {
   throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
 };
 
+const isLocalHostname = (hostname: string) => hostname === 'localhost' ||
+  hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+
+const validClientUrl = (value: string, productionLike: boolean) => {
+  const url = new URL(value);
+  return Boolean(url.hostname) && !url.username && !url.password &&
+    (url.protocol === 'https:' || (!productionLike && url.protocol === 'http:')) &&
+    (!productionLike || !isLocalHostname(url.hostname));
+};
+
 // Direct statically replaceable references for Vite define / env replacement
 const VITE_API_URL = process.env.VITE_API_URL || '';
 const VITE_SUPABASE_URL = process.env.VITE_SUPABASE_URL || '';
@@ -101,11 +111,9 @@ export function validateRuntimeConfig(): { valid: boolean; error?: string } {
     return { valid: false, error: 'Runtime configuration is invalid (CONFIGURATION_INVALID).' };
   }
   try {
-    const supabase = new URL(config.supabaseUrl);
-    if (supabase.protocol !== 'https:' || supabase.username || supabase.password) throw new Error();
+    if (!validClientUrl(config.supabaseUrl, true)) throw new Error();
     if (config.apiOrigin) {
-      const api = new URL(config.apiOrigin);
-      if (config.isProduction && api.protocol !== 'https:') throw new Error();
+      if (!validClientUrl(config.apiOrigin, config.isProduction)) throw new Error();
     }
   } catch {
     return { valid: false, error: 'Runtime configuration is invalid (CONFIGURATION_INVALID).' };

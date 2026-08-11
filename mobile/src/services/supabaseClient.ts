@@ -1,6 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { canUseMobileMockAuth } from './runtimeMode';
+import { canUseMobileMockAuth, isMobileProductionLike } from './runtimeMode';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -12,7 +12,13 @@ export const isUsingMockAuth = canUseMobileMockAuth && allowMockAuth;
 
 if (allowMockAuth && !canUseMobileMockAuth) throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).');
 try {
-  if (supabaseUrl && (new URL(supabaseUrl).protocol !== 'https:' || new URL(supabaseUrl).username)) throw new Error();
+  if (supabaseUrl) {
+    const parsed = new URL(supabaseUrl);
+    const local = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' ||
+      parsed.hostname === '::1' || parsed.hostname === '[::1]';
+    if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password ||
+        (isMobileProductionLike && local)) throw new Error();
+  }
 } catch { throw new Error('Runtime configuration is invalid (CONFIGURATION_INVALID).'); }
 
 if (!isSupabaseConfigured && !isUsingMockAuth) {

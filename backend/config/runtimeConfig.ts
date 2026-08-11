@@ -8,10 +8,19 @@ export class ConfigurationError extends Error {
   }
 }
 
-const validUrl = (value: string | undefined, httpsRequired: boolean) => {
+const isLocalHostname = (hostname: string) => hostname === 'localhost' ||
+  hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+
+export const validRuntimeUrl = (
+  value: string | undefined,
+  { httpsRequired, originOnly = false }: { httpsRequired: boolean; originOnly?: boolean },
+) => {
   try {
     const url = new URL(value || '');
-    return (url.protocol === 'https:' || (!httpsRequired && url.protocol === 'http:')) && !url.username && !url.password;
+    const validScheme = url.protocol === 'https:' || (!httpsRequired && url.protocol === 'http:');
+    return validScheme && Boolean(url.hostname) && !url.username && !url.password &&
+      (!httpsRequired || !isLocalHostname(url.hostname)) &&
+      (!originOnly || (url.pathname === '/' && !url.search && !url.hash));
   } catch { return false; }
 };
 
@@ -33,10 +42,11 @@ export function assertServerRuntimeConfig(env: NodeJS.ProcessEnv = process.env) 
   const mode = runtimeMode(env);
   if (mode === 'test' || mode === 'development') return { mode, productionLike: false } as const;
   const origins = (env.ALLOWED_ORIGINS || '').split(',').map(v => v.trim()).filter(Boolean);
-  const validOrigins = origins.length > 0 && origins.every(origin => origin !== '*' && validUrl(origin, true));
+  const validOrigins = origins.length > 0 && origins.every(origin => origin !== '*' &&
+    validRuntimeUrl(origin, { httpsRequired: true, originOnly: true }));
   const providerConfigured = Boolean(env.GEMINI_API_KEY || env.GOOGLE_API_KEY || env.GROQ_API_KEY);
   const invalid = env.ENABLE_DEV_AUTH === 'true' || env.VITE_ENABLE_DEV_AUTH === 'true' ||
-    !validUrl(env.SUPABASE_URL, true) || !env.SUPABASE_SERVICE_ROLE_KEY || !validOrigins ||
+    !validRuntimeUrl(env.SUPABASE_URL, { httpsRequired: true }) || !env.SUPABASE_SERVICE_ROLE_KEY || !validOrigins ||
     !providerConfigured || Boolean(env.SUPABASE_SERVICE_ROLE_KEY && env.SUPABASE_SERVICE_ROLE_KEY === env.VITE_SUPABASE_ANON_KEY);
   if (invalid) throw new ConfigurationError();
   return { mode, productionLike: true } as const;
