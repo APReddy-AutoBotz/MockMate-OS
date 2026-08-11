@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 const head = execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
-const expected = process.env.GITHUB_SHA || head;
+const expected = process.env.EXPECTED_HEAD_SHA || head;
 if (head !== expected) throw new Error('Readiness evidence is not bound to the checked-out exact head');
 const ci = Boolean(process.env.GITHUB_ACTIONS);
 const manifest = {
