@@ -187,7 +187,8 @@ router.post('/v1/accent/attempts', upload.single('audio'), handleMulterError, as
   } catch (error: any) {
     if (req.file?.buffer) req.file.buffer.fill(0);
     const status = error.message === 'idempotency_conflict' ? 409 : error.message === 'authoritative_persistence_unavailable' ? 503 : 422;
-    return res.status(status).json({ error: error.message });
+    const publicErrors = new Set(['idempotency_conflict', 'authoritative_persistence_unavailable', 'unsupported_audio_type', 'invalid_audio_evidence', 'invalid_attempt_id', 'stale_or_unknown_profile', 'unsupported_practice_mode', 'stale_or_mismatched_server_selector', 'client_authority_rejected', 'real_speech_provider_not_authorized']);
+    return res.status(status).json({ error: publicErrors.has(error.message) ? error.message : 'accent_attempt_rejected' });
   }
 });
 

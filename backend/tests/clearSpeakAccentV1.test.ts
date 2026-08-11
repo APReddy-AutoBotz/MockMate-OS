@@ -1,7 +1,7 @@
 import { AccentDimensionV1Schema, AccentProfileV1Schema, AccentScoreV1Schema, PracticePromptV1Schema } from 'mockmate-shared';
 import { ACCENT_PROFILES } from '../clearspeak/accentProfiles';
 import { deterministicSyntheticAdapter, REAL_SPEECH_PROVIDER_NOT_AUTHORIZED } from '../clearspeak/scoringAdapter';
-import { accentCatalog, promptFor, rejectClientAuthority, validatePromptSelector } from '../clearspeak/accentV1Service';
+import { ACCENT_V1_MIMES, accentCatalog, promptFor, rejectClientAuthority, validatePromptSelector } from '../clearspeak/accentV1Service';
 
 const prompt = PracticePromptV1Schema.parse({
   contractVersion: 'practice-prompt.v1', promptId: '8bb701a7-1901-4ef0-b72f-86b93331ee5e', promptVersion: 1,
@@ -52,5 +52,10 @@ describe('ClearSpeak accent V1 truth and authority', () => {
     for (const patch of [{ promptVersion: 2 }, { profileVersion: 2 }, { referenceSetVersion: 'stale' }, { scoringPolicyVersion: 'stale' }]) {
       expect(() => validatePromptSelector({ ...valid, ...patch })).toThrow();
     }
+  });
+
+  it('keeps the upload allowlist bounded to browser audio containers', () => {
+    expect([...ACCENT_V1_MIMES]).toEqual(['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg']);
+    expect(ACCENT_V1_MIMES.has('audio/wav')).toBe(false);
   });
 });

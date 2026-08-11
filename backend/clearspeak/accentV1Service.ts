@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import type { AccentProfileV1, AccentScoreV1, PracticePromptV1 } from 'mockmate-shared';
 import { ACCENT_PROFILES, getAccentProfile } from './accentProfiles';
-import { deterministicSyntheticAdapter } from './scoringAdapter';
+import { deterministicSyntheticAdapter, REAL_SPEECH_PROVIDER_NOT_AUTHORIZED } from './scoringAdapter';
 import { supabaseAdmin } from '../supabaseAdmin';
 
 export const ACCENT_V1_MAX_BYTES = 5 * 1024 * 1024;
@@ -51,24 +51,37 @@ export function rejectClientAuthority(body: any): void {
 
 export async function submitAccentAttempt(userId: string, body: any, audio: Buffer, mimeType: string): Promise<{ score: AccentScoreV1; replayed: boolean }> {
   rejectClientAuthority(body);
+  // This is a deliberate stop gate, not a provider fallback. V1 must remain
+  // unavailable rather than silently invoking legacy/real speech scoring.
+  if (!REAL_SPEECH_PROVIDER_NOT_AUTHORIZED) throw new Error('real_speech_provider_not_authorized');
   if (!supabaseAdmin) throw new Error('authoritative_persistence_unavailable');
-  if (!ACCENT_V1_MIMES.has(mimeType)) throw new Error('unsupported_audio_type');
+  const normalizedMimeType = mimeType.split(';', 1)[0].trim().toLowerCase();
+  if (!ACCENT_V1_MIMES.has(normalizedMimeType)) throw new Error('unsupported_audio_type');
   if (!audio.length || audio.length > ACCENT_V1_MAX_BYTES || !Number.isInteger(body.durationMs) || body.durationMs < 250 || body.durationMs > 120000) throw new Error('invalid_audio_evidence');
   if (typeof body.attemptId !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.attemptId)) throw new Error('invalid_attempt_id');
   const prompt = validatePromptSelector(body);
-  const requestHash = crypto.createHash('sha256').update(JSON.stringify({ ...body, mimeType, audioHash: crypto.createHash('sha256').update(audio).digest('hex') })).digest('hex');
+  if (body.durationMs > prompt.maxDurationMs) throw new Error('invalid_audio_evidence');
+  const requestHash = crypto.createHash('sha256').update(JSON.stringify({ ...body, mimeType: normalizedMimeType, audioHash: crypto.createHash('sha256').update(audio).digest('hex') })).digest('hex');
   const prior = await supabaseAdmin.from('clearspeak_accent_attempts').select('*').eq('user_id', userId).eq('attempt_id', body.attemptId).maybeSingle();
   if (prior.error) throw prior.error;
   if (prior.data) {
     if (prior.data.request_hash !== requestHash) throw new Error('idempotency_conflict');
     return { score: prior.data.result, replayed: true };
   }
-  const score = await deterministicSyntheticAdapter.score({ attemptId: body.attemptId, prompt, audio, mimeType: mimeType as any });
+  const score = await deterministicSyntheticAdapter.score({ attemptId: body.attemptId, prompt, audio, mimeType: normalizedMimeType as any });
   const inserted = await supabaseAdmin.from('clearspeak_accent_attempts').insert({ user_id: userId, attempt_id: body.attemptId, request_hash: requestHash,
     prompt_id: prompt.promptId, prompt_version: prompt.promptVersion, prompt_content_hash: prompt.contentHash, profile_id: prompt.profileId,
     profile_version: prompt.profileVersion, reference_set_version: prompt.referenceSetVersion, scoring_policy_version: score.scoringPolicyVersion,
     scoring_contract_version: score.contractVersion, fixture: true, dimensions: score.dimensions, coaching: score.coaching,
-    duration_ms: body.durationMs, mime_type: mimeType, result: score }).select('*').single();
-  if (inserted.error) throw inserted.error;
+    duration_ms: body.durationMs, mime_type: normalizedMimeType, result: score }).select('*').single();
+  // Concurrent identical submissions can both observe no prior row. Resolve a
+  // uniqueness race as an idempotent replay, but never accept changed content.
+  if (inserted.error && inserted.error.code === '23505') {
+    const raced = await supabaseAdmin.from('clearspeak_accent_attempts').select('request_hash,result').eq('user_id', userId).eq('attempt_id', body.attemptId).maybeSingle();
+    if (raced.error || !raced.data) throw new Error('authoritative_persistence_unavailable');
+    if (raced.data.request_hash !== requestHash) throw new Error('idempotency_conflict');
+    return { score: raced.data.result, replayed: true };
+  }
+  if (inserted.error) throw new Error('authoritative_persistence_unavailable');
   return { score, replayed: false };
 }
