@@ -1,11 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { ClearSpeakBridgePayload, ClearSpeakProfile, ClearSpeakProgress } from './types';
 import { getProfile, getProgress } from '../../services/clearSpeakService';
 import ClearSpeakOnboarding from './ClearSpeakOnboarding';
 import ClearSpeakSession from './ClearSpeakSession';
+import type { CareerContextSnapshot, ModuleBridgeSession } from 'mockmate-shared';
 
 interface ClearSpeakDashboardProps {
   onInterviewBridge: (payload: ClearSpeakBridgePayload) => void;
+  grounding?: { snapshot: CareerContextSnapshot; bridge: ModuleBridgeSession };
+  onGroundingConsumed?: (bridgeId: string) => void;
 }
 
 type DashboardView = 'loading' | 'onboarding' | 'dashboard' | 'session';
@@ -17,12 +20,19 @@ const clarityLabel = (score: number) => {
   return 'Keep practicing';
 };
 
-const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBridge }) => {
+const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBridge, grounding, onGroundingConsumed }) => {
   const [view, setView] = useState<DashboardView>('loading');
   const [profile, setProfile] = useState<ClearSpeakProfile | null>(null);
   const [progress, setProgress] = useState<ClearSpeakProgress | null>(null);
   const [recentTopics, setRecentTopics] = useState<string[]>([]);
   const [sessionAttemptLength, setSessionAttemptLength] = useState<number>(0);
+  const notifiedGroundingBridge = useRef<string | null>(null);
+
+  const notifyGroundingConsumed = useCallback((bridgeId: string) => {
+    if (notifiedGroundingBridge.current === bridgeId) return;
+    notifiedGroundingBridge.current = bridgeId;
+    onGroundingConsumed?.(bridgeId);
+  }, [onGroundingConsumed]);
 
   useEffect(() => {
     (async () => {
@@ -52,7 +62,16 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
       });
       setSessionAttemptLength(prev => prev + 1);
     } catch {}
+    if (grounding) notifyGroundingConsumed(grounding.bridge.id);
     setView('dashboard');
+  };
+
+  const handleInterviewBridge = (payload: ClearSpeakBridgePayload) => {
+    // Accepting the post-session bridge is also a canonical exit from the
+    // completed grounded ClearSpeak attempt. Release its one-time handoff
+    // before navigating so a later ordinary practice does not reuse it.
+    if (grounding) notifyGroundingConsumed(grounding.bridge.id);
+    onInterviewBridge(payload);
   };
 
   if (view === 'loading') {
@@ -73,11 +92,13 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
   if (view === 'session') {
     return (
       <ClearSpeakSession
-        onInterviewBridge={onInterviewBridge}
+        onInterviewBridge={handleInterviewBridge}
         onComplete={handleSessionComplete}
+        onCanonicalGroundedScore={notifyGroundingConsumed}
         recentTopics={recentTopics}
         sessionAttemptLength={sessionAttemptLength}
         profileRole={profile?.role ?? 'general_corporate'}
+        grounding={grounding}
       />
     );
   }

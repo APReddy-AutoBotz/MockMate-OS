@@ -16,7 +16,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import multer, { MulterError } from 'multer';
 import { verifyAuthToken } from '../middleware/authMiddleware';
-import { enforceUsageLimit } from '../services/usageService';
+import { consumeUsage } from '../services/usageService';
 import { supabaseAdmin } from '../supabaseAdmin';
 import { generateSession } from './generateService';
 import { scoreSession } from './scoringService';
@@ -31,6 +31,10 @@ import {
   getProfileFromStore,
 } from './supabaseStoreService';
 import type { ClearSpeakProfile } from 'mockmate-shared';
+import { getModuleBridgeById } from '../services/moduleBridgeService';
+import { getSnapshotById } from '../services/groundingSnapshotService';
+import crypto from 'crypto';
+import { canonicalJsonValue, hashArtifactContent } from './artifactAuthority';
 
 const router = Router();
 
@@ -219,8 +223,45 @@ router.post('/generate', async (req: Request, res: Response) => {
       });
     }
 
-    const { recentTopics = [], sessionAttemptLength = 0 } = req.body as { recentTopics?: string[], sessionAttemptLength?: number };
-    const content = await generateSession(profile, recentTopics, sessionAttemptLength);
+    const { recentTopics = [], sessionAttemptLength = 0, grounding } = req.body as { recentTopics?: string[], sessionAttemptLength?: number, grounding?: { snapshotId?: string, bridgeSessionId?: string } };
+    let snapshot: Awaited<ReturnType<typeof getSnapshotById>> = null;
+    let existingArtifact: any = null;
+    if (grounding) {
+      if (!grounding.snapshotId || !grounding.bridgeSessionId) return res.status(422).json({ error: 'Grounded ClearSpeak generation requires snapshotId and bridgeSessionId' });
+      const bridge = await getModuleBridgeById(userId, grounding.bridgeSessionId);
+      snapshot = await getSnapshotById(userId, grounding.snapshotId);
+      if (!bridge || !snapshot || bridge.status !== 'confirmed' || bridge.targetModule !== 'clearspeak' || bridge.purpose !== 'resume_to_clearspeak' || bridge.snapshotId !== snapshot.id) {
+        return res.status(409).json({ error: 'Grounded ClearSpeak authority is missing, mismatched, or already consumed' });
+      }
+      if (!supabaseAdmin) return res.status(503).json({ error: 'Authoritative persistence unavailable for grounded ClearSpeak practice' });
+      const artifactRead = await supabaseAdmin.from('clearspeak_generated_artifacts').select('*').eq('user_id', userId).eq('bridge_id', grounding.bridgeSessionId).maybeSingle();
+      if (artifactRead.error) throw artifactRead.error;
+      existingArtifact = artifactRead.data;
+      if (existingArtifact) return res.json({ content: { ...existingArtifact.content, generationArtifactId: existingArtifact.id, generationArtifactHash: existingArtifact.content_hash } });
+    }
+    const references = snapshot?.groundingReferences || [];
+    const groundingInput = snapshot ? {
+      summary: references.map((r: any) => `${r.label}: ${r.exactExcerpt || ''}`).join('\n'),
+      vocabulary: references.flatMap((r: any) => String(r.label || '').split(/\s+/)).filter(Boolean).slice(0, 3),
+    } : undefined;
+    const content = await generateSession(profile, recentTopics, sessionAttemptLength, groundingInput);
+
+    if (grounding && snapshot && supabaseAdmin) {
+      const canonical = canonicalJsonValue(content);
+      const contentHash = hashArtifactContent(canonical);
+      const artifactId = crypto.randomUUID();
+      const inserted = await supabaseAdmin.from('clearspeak_generated_artifacts').insert({
+        id: artifactId, user_id: userId, bridge_id: grounding.bridgeSessionId,
+        snapshot_id: grounding.snapshotId, content: canonical, content_hash: contentHash,
+        grounding_references: references,
+      }).select('*').single();
+      if (inserted.error) {
+        const replay = await supabaseAdmin.from('clearspeak_generated_artifacts').select('*').eq('user_id', userId).eq('bridge_id', grounding.bridgeSessionId).maybeSingle();
+        if (!replay.data) throw inserted.error;
+        return res.json({ content: { ...replay.data.content, generationArtifactId: replay.data.id, generationArtifactHash: replay.data.content_hash } });
+      }
+      return res.json({ content: { ...canonical, generationArtifactId: artifactId, generationArtifactHash: contentHash } });
+    }
 
     return res.json({ content });
   } catch (err: any) {
@@ -235,7 +276,7 @@ router.post('/generate', async (req: Request, res: Response) => {
 //   content        (JSON string of ClearSpeakSessionContent, required)
 //   retryAttempted (JSON boolean string, optional, default false)
 
-router.post('/score', enforceUsageLimit('clearspeak_session'), upload.single('audio'), async (req: Request, res: Response) => {
+router.post('/score', upload.single('audio'), async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -250,6 +291,17 @@ router.post('/score', enforceUsageLimit('clearspeak_session'), upload.single('au
       return res.status(400).json({ error: 'content field is required' });
     }
 
+    const bridgeSessionId = req.body.bridgeSessionId as string | undefined;
+    const snapshotId = req.body.snapshotId as string | undefined;
+    if ((bridgeSessionId && !snapshotId) || (!bridgeSessionId && snapshotId)) {
+      return res.status(422).json({ error: 'Grounded ClearSpeak scoring requires both snapshotId and bridgeSessionId' });
+    }
+
+    if (!bridgeSessionId) {
+      const usage = await consumeUsage(userId, 'clearspeak_session');
+      if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached' });
+    }
+
     const profile = await getProfileFromStore(userId);
     if (!profile) return res.status(400).json({ error: 'Profile not found. Complete onboarding.' });
 
@@ -261,6 +313,28 @@ router.post('/score', enforceUsageLimit('clearspeak_session'), upload.single('au
       return res.status(400).json({ error: 'content must be valid JSON' });
     }
 
+    let reservedArtifact: any = null;
+    if (bridgeSessionId && snapshotId) {
+      if (!supabaseAdmin) return res.status(503).json({ error: 'Authoritative persistence unavailable for grounded ClearSpeak practice' });
+      const artifactId = content.generationArtifactId;
+      const artifactHash = content.generationArtifactHash;
+      if (!artifactId || !artifactHash) return res.status(422).json({ error: 'Grounded scoring requires the authoritative generated-content selector' });
+      const canonicalContent = { ...content };
+      delete canonicalContent.generationArtifactId;
+      delete canonicalContent.generationArtifactHash;
+      const submittedHash = hashArtifactContent(canonicalContent);
+      const reservation = await supabaseAdmin.rpc('reserve_clearspeak_grounded_score_tx', {
+        p_user_id: userId, p_bridge_id: bridgeSessionId, p_snapshot_id: snapshotId,
+        p_artifact_id: artifactId, p_content_hash: artifactHash, p_submitted_hash: submittedHash,
+      });
+      if (reservation.error || !reservation.data) return res.status(409).json({ error: reservation.error?.message || 'Grounded ClearSpeak authority could not be reserved' });
+      reservedArtifact = reservation.data;
+      if (reservedArtifact.replayed) {
+        return res.json({ ...reservedArtifact.response, groundingReplayed: true });
+      }
+      content = reservedArtifact.content;
+    }
+
     const retryAttempted = req.body.retryAttempted === 'true' || req.body.retryAttempted === true;
 
     // Audio buffer lives in req.file.buffer (in-memory only)
@@ -268,13 +342,23 @@ router.post('/score', enforceUsageLimit('clearspeak_session'), upload.single('au
 
     const ledger = await getOrCreateLedger(userId);
 
-    const score = await scoreSession({
-      audioBuffer,
-      content,
-      userLevel: profile.level,
-      hardWords: ledger.entries.filter(e => !e.resolved),
-      retryAttempted,
-    });
+    let score;
+    try {
+      score = await scoreSession({
+        audioBuffer,
+        content,
+        userLevel: profile.level,
+        hardWords: ledger.entries.filter(e => !e.resolved),
+        retryAttempted,
+      });
+    } catch (error) {
+      if (reservedArtifact && supabaseAdmin) {
+        await supabaseAdmin.from('clearspeak_generated_artifacts').update({ status: 'generated', reservation_token: null, scoring_lease_expires_at: null, updated_at: new Date().toISOString() })
+          .eq('id', reservedArtifact.artifactId).eq('user_id', userId).eq('status', 'scoring')
+          .eq('reservation_token', reservedArtifact.reservationToken);
+      }
+      throw error;
+    }
 
     // Explicitly clear buffer reference — privacy policy (raw audio never persisted)
     audioBuffer = Buffer.alloc(0);
@@ -285,6 +369,11 @@ router.post('/score', enforceUsageLimit('clearspeak_session'), upload.single('au
     // failed (inaudible audio, mic disconnect, etc.). Return a 422 with a
     // user-readable message so the frontend can surface a retry prompt.
     if (score.composite <= 15 && score.clarity === 0) {
+      if (reservedArtifact && supabaseAdmin) {
+        await supabaseAdmin.from('clearspeak_generated_artifacts').update({ status: 'generated', reservation_token: null, scoring_lease_expires_at: null, updated_at: new Date().toISOString() })
+          .eq('id', reservedArtifact.artifactId).eq('user_id', userId).eq('status', 'scoring')
+          .eq('reservation_token', reservedArtifact.reservationToken);
+      }
       return res.status(422).json({
         error: 'low_confidence_transcription',
         message: "We couldn't clearly hear your recording. Please check your microphone and try again.",
@@ -292,23 +381,49 @@ router.post('/score', enforceUsageLimit('clearspeak_session'), upload.single('au
       });
     }
 
-    if (supabaseAdmin) {
-      await supabaseAdmin.from('clearspeak_sessions').insert({
+    let persistedSessionId: string | undefined;
+    let groundingReplayed = false;
+    let canonicalGroundedTrigger: any = null;
+    let canonicalGroundedProgress: any = null;
+    if (bridgeSessionId && snapshotId) {
+      if (!supabaseAdmin) return res.status(503).json({ error: 'Authoritative persistence unavailable for grounded ClearSpeak practice' });
+      const { data, error } = await supabaseAdmin.rpc('finalize_clearspeak_grounded_score_tx', {
+        p_user_id: userId, p_bridge_id: bridgeSessionId, p_snapshot_id: snapshotId,
+        p_artifact_id: reservedArtifact.artifactId, p_score: score,
+        p_bridge_trigger: { bridgeReadyFlag: Boolean(content.bridgeReady) },
+        p_reservation_token: reservedArtifact.reservationToken,
+        p_topic_tag: content.topicTag,
+        p_practiced_words: Array.isArray(content.keyVocab) ? content.keyVocab : [],
+      });
+      if (error || !data) return res.status(error?.message?.includes('already') ? 409 : 503).json({ error: error?.message || 'Grounded ClearSpeak session could not be created' });
+      persistedSessionId = (data as any).sessionId;
+      groundingReplayed = Boolean((data as any).replayed);
+      canonicalGroundedTrigger = (data as any).response?.bridgeTrigger;
+      canonicalGroundedProgress = (data as any).response?.progress;
+      if (groundingReplayed) {
+        return res.json({ ...(data as any).response, groundingReplayed: true });
+      }
+    } else if (supabaseAdmin) {
+      const { data, error } = await supabaseAdmin.from('clearspeak_sessions').insert({
         user_id: userId,
         topic_tag: content.topicTag,
         score,
         practiced_words: Array.isArray(content.keyVocab) ? content.keyVocab : [],
         created_at: new Date().toISOString(),
-      });
+      }).select('id').single();
+      if (error) throw error;
+      persistedSessionId = data?.id;
     }
 
     // Update Supabase progress. Only score JSON is stored; raw audio is never persisted.
-    const updatedProgress = await recordSessionResult(userId, score, content.topicTag);
+    const updatedProgress = bridgeSessionId && snapshotId
+      ? canonicalGroundedProgress
+      : await recordSessionResult(userId, score, content.topicTag);
 
     // Evaluate bridge trigger against persisted data
-    const bridgeTrigger = await evaluateBridgeTrigger(userId, score, content.bridgeReady);
+    const bridgeTrigger = canonicalGroundedTrigger ?? await evaluateBridgeTrigger(userId, score, content.bridgeReady);
 
-    return res.json({ score, progress: updatedProgress, bridgeTrigger });
+    return res.json({ score, progress: updatedProgress, bridgeTrigger, sessionId: persistedSessionId, groundingReplayed });
   } catch (err: any) {
     console.error('[ClearSpeak] POST /score error:', err);
     return res.status(500).json({ error: err.message || 'Scoring failed' });

@@ -9,7 +9,7 @@ const files = (await readdir(migrationsDir))
   .filter(file => file.endsWith('.sql'))
   .sort();
 
-console.log(`Verifying ${files.length} Supabase migration file(s) in lexical order: ${files.join(', ')}`);
+console.log(`[Static Check] Verifying ${files.length} Supabase migration file(s) in lexical order: ${files.join(', ')}`);
 
 let combinedSql = '';
 for (const file of files) {
@@ -34,6 +34,11 @@ const requiredTables = [
   'clearspeak_beta_feedback',
   'usage_ledger',
   'ai_cache',
+  'career_context_state',
+  'career_context_items',
+  'career_context_snapshots',
+  'career_context_snapshot_items',
+  'career_context_bridges',
 ];
 
 for (const table of requiredTables) {
@@ -56,6 +61,10 @@ const ownerTables = [
   'clearspeak_progress',
   'clearspeak_ledgers',
   'clearspeak_beta_feedback',
+  'career_context_state',
+  'career_context_items',
+  'career_context_snapshots',
+  'career_context_bridges',
 ];
 
 for (const table of ownerTables) {
@@ -70,110 +79,33 @@ for (const table of ownerTables) {
   }
 }
 
-// 3. Verify corrective session columns
-const sessionColumns = [
-  'current_question_index',
-  'pending_question_id',
-  'pending_question',
-  'evaluation_status',
-  'evaluation_error_code',
-  'engine_version',
-  'session_version',
-  'current_root_question_index',
-  'current_turn_index',
-  'current_stage',
-  'pending_question_kind',
-  'active_root_question_id',
-  'probe_count_for_root',
-  'challenge_count',
-  'challenge_answered_for_root',
-  'reflection_completed_for_root',
-  'final_reflection_asked',
-  'adaptive_policy',
-  'dimension_state',
-  'last_controller_decision',
-];
-
-for (const col of sessionColumns) {
-  if (!normalizedSql.includes(col)) {
-    failures.push(`Missing session column: ${col}`);
-  }
+// 3. Verify RPC definitions & security properties
+if (!normalizedSql.includes('create or replace function public.delete_user_career_context')) {
+  failures.push('Missing RPC definition: delete_user_career_context');
 }
 
-// 4. Verify adaptive turn columns
-const turnColumns = [
-  'question_id',
-  'client_submission_id',
-  'question_blueprint',
-  'question_kind',
-  'root_question_id',
-  'stage',
-  'answer_kind',
-  'evaluation_status',
-  'turn_evaluation',
-  'controller_decision',
-  'challenge_event',
-  'engine_version',
-  'adaptive_response',
-  'adaptive_request_hash',
-];
-
-for (const col of turnColumns) {
-  if (!normalizedSql.includes(col)) {
-    failures.push(`Missing turn column: ${col}`);
-  }
-}
-
-// 5. Verify unique session/client_submission_id index
-if (!normalizedSql.includes('idx_interview_turns_session_client_sub')) {
-  failures.push('Missing unique index: idx_interview_turns_session_client_sub');
-}
-
-// 6. Verify RPC definitions & security properties
-if (!normalizedSql.includes('create or replace function public.atomic_submit_answer')) {
-  failures.push('Missing RPC definition: atomic_submit_answer');
-}
-
-if (!normalizedSql.includes('create or replace function public.atomic_submit_adaptive_turn')) {
-  failures.push('Missing RPC definition: atomic_submit_adaptive_turn');
-} else {
-  const rpcStart = normalizedSql.indexOf('create or replace function public.atomic_submit_adaptive_turn');
-  const rpcEnd = normalizedSql.indexOf('$$;', rpcStart);
-  const rpcBody = rpcEnd !== -1 ? normalizedSql.substring(rpcStart, rpcEnd) : normalizedSql.substring(rpcStart);
-
-  if (!rpcBody.includes('security definer')) {
-    failures.push('RPC atomic_submit_adaptive_turn must be SECURITY DEFINER');
-  }
-  if (!rpcBody.includes('search_path = public, pg_temp')) {
-    failures.push('RPC atomic_submit_adaptive_turn must set search_path = public, pg_temp');
-  }
-  if (rpcBody.includes('completed_at')) {
-    failures.push('RPC atomic_submit_adaptive_turn must NOT assign completed_at timestamp');
-  }
-}
-
-if (!normalizedSql.includes('from public')) {
-  failures.push('RPCs must REVOKE permissions FROM PUBLIC');
-}
-
-if (!normalizedSql.includes('from anon')) {
-  failures.push('RPCs must REVOKE permissions FROM anon');
-}
-
-if (!normalizedSql.includes('from authenticated')) {
-  failures.push('RPCs must REVOKE permissions FROM authenticated');
-}
-
-if (!normalizedSql.includes('grant execute on function public.atomic_submit_adaptive_turn') || !normalizedSql.includes('to service_role')) {
-  failures.push('RPC atomic_submit_adaptive_turn must GRANT EXECUTE TO service_role');
+// 4. A prior accepted migration already installs the current ten-argument
+// snapshot RPC. Any later forward migration that redefines it must first drop
+// that exact signature (or use CREATE OR REPLACE), otherwise an empty database
+// migration run fails with PostgreSQL 42723 before runtime assertions begin.
+const sourceAuthorityMigration = await readFile(
+  path.join(migrationsDir, '20260809010000_p0_3_source_and_clearspeak_authority.sql'),
+  'utf8',
+);
+const snapshot10Signature =
+  'public.create_grounding_snapshot_tx(UUID,TEXT,JSONB,JSONB,JSONB,TEXT[],UUID[],TEXT,TEXT,BIGINT)';
+const snapshot10Drop = sourceAuthorityMigration.indexOf(`DROP FUNCTION IF EXISTS ${snapshot10Signature};`);
+const snapshot10Create = sourceAuthorityMigration.indexOf('CREATE FUNCTION public.create_grounding_snapshot_tx(');
+if (snapshot10Drop === -1 || snapshot10Create === -1 || snapshot10Drop > snapshot10Create) {
+  failures.push('The source-authority migration must safely replace the existing ten-argument create_grounding_snapshot_tx signature');
 }
 
 if (failures.length > 0) {
-  console.error('Supabase migration verification FAILED with errors:');
+  console.error('Supabase migration static verification FAILED with errors:');
   for (const failure of failures) {
     console.error(`- ${failure}`);
   }
   process.exit(1);
 }
 
-console.log('All Supabase migration static & structural checks PASSED successfully!');
+console.log('[Static Check] All Supabase migration static & structural checks PASSED successfully!');

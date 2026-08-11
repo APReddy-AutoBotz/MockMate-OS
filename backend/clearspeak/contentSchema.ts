@@ -46,6 +46,7 @@ export const ROLE_LABELS: Record<ClearSpeakProfile['role'], string> = {
 export function buildSystemPrompt(
   profile: ClearSpeakProfile,
   recentTopics: string[],
+  groundingContext?: string,
 ): string {
   const role = ROLE_LABELS[profile.role];
   const { min, max } = PASSAGE_WORD_COUNTS[profile.level];
@@ -61,6 +62,7 @@ USER CONTEXT:
 - Main Struggle: ${profile.mainStruggle}
 - Audience: ${profile.audienceContext}
 - Goal: ${profile.goal}
+${groundingContext ? `\nAUTHORITATIVE RESUME CONTEXT (use these facts in the passage, topic, and vocabulary):\n${groundingContext}` : ''}
 
 CONTENT RULES (mandatory, no exceptions):
 1. The passage must be ${min}–${max} words and feel like REAL workplace speech, not a textbook.

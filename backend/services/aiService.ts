@@ -206,12 +206,23 @@ export const buildDeterministicInterviewPlan = (
   role: string,
   intentText: string,
   sessionControls: SessionControls,
-  selectedPanelIDs: string[] = ['p1', 'p3']
+  selectedPanelIDs: string[] = ['p1', 'p3'],
+  groundingSnapshot?: CareerContextSnapshot
 ): InterviewPlan => {
   const safePanelIDs = selectedPanelIDs.length ? selectedPanelIDs : ['p1', 'p3'];
   const total = Math.max(1, Math.min(sessionControls.totalQuestions || 5, 10));
   const candidateRole = role || intentText || 'Candidate';
   const isTechRole = /engineer|developer|software|coding|backend|frontend|fullstack|devops|data scientist|programmer/i.test(candidateRole);
+
+  const authoritativeReferences = groundingSnapshot?.groundingReferences || [];
+  const usableGroundingReferences = authoritativeReferences.flatMap(reference => {
+    const fact = sanitizePromptText(reference.exactExcerpt || '');
+    return fact ? [{ reference, fact }] : [];
+  });
+
+  if (authoritativeReferences.length > 0 && usableGroundingReferences.length === 0) {
+    throw new Error('Grounded deterministic plan requires authoritative snapshot facts');
+  }
 
   const bank = [
     {
@@ -246,13 +257,22 @@ export const buildDeterministicInterviewPlan = (
   const questionSet = Array.from({ length: total }, (_, i) => {
     const template = bank[i % bank.length];
     const personaFocus = safePanelIDs[i % safePanelIDs.length];
+
+    const grounded = usableGroundingReferences.length > 0
+      ? usableGroundingReferences[i % usableGroundingReferences.length]
+      : undefined;
+    const question = grounded
+      ? `Using your selected experience, "${grounded.fact}", ${template.question.charAt(0).toLowerCase()}${template.question.slice(1)}`
+      : template.question;
+
     return {
-      id: createDeterministicQuestionId(candidateRole, sessionControls.reasoningMode || 'classic_behavioral', template.question, i + 1),
+      id: createDeterministicQuestionId(candidateRole, sessionControls.reasoningMode || 'classic_behavioral', question, i + 1),
       phase: template.phase,
       difficulty: sessionControls.difficulty,
-      question: template.question,
+      question,
       expectedSignals: template.expectedSignals,
       personaFocus,
+      groundingReferences: grounded ? [grounded.reference] : undefined,
     };
   });
 
@@ -284,13 +304,17 @@ export const buildDeterministicInterviewPlan = (
   });
 };
 
+import { buildGroundingPromptSection, sanitizePromptText } from './groundingPromptBuilder';
+import { CareerContextSnapshot } from 'mockmate-shared';
+
 export const generateInterviewPlan = async (
   role: string,
   intentText: string,
   sessionControls: SessionControls,
   jdText?: string,
   resumeText?: string,
-  selectedPanelIDs: string[] = ['p1', 'p3']
+  selectedPanelIDs: string[] = ['p1', 'p3'],
+  groundingSnapshot?: CareerContextSnapshot
 ): Promise<InterviewPlan> => {
   if (!intentText || intentText.trim().length < 2) throw new Error('Goal too short');
 
@@ -307,6 +331,12 @@ export const generateInterviewPlan = async (
   const activeDimensions = ACTIVE_DIMENSIONS_BY_MODE[sessionMode] || ACTIVE_DIMENSIONS_BY_MODE['classic_behavioral'];
   const dimensionWeights = DEFAULT_WEIGHTS_BY_MODE[sessionMode] || DEFAULT_WEIGHTS_BY_MODE['classic_behavioral'];
 
+  const groundingPromptSection = groundingSnapshot ? buildGroundingPromptSection({
+    purpose: groundingSnapshot.purpose,
+    projection: groundingSnapshot.projection,
+    targetModule: 'interview',
+  }) : '';
+
   const masterPrompt = `You are an expert interview strategist. Create a comprehensive interview plan.
   
   CONTEXT:
@@ -315,6 +345,8 @@ export const generateInterviewPlan = async (
   Difficulty: ${sessionControls.difficulty}
   Session Mode: ${sessionMode}
   Total Questions Requested: ${sessionControls.totalQuestions}
+
+  ${groundingPromptSection}
   
   SELECTED INTERVIEW PANEL PERSONAS (personaFocus MUST be one of these IDs):
   ${panelSummary}
@@ -359,7 +391,15 @@ export const generateInterviewPlan = async (
     const rawParsed = RawInterviewPlanSchema.parse(rawData);
 
     if (!rawParsed.questionSet || rawParsed.questionSet.length === 0) {
-      return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs);
+      return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs, groundingSnapshot);
+    }
+
+    const providerQuestionsAreGrounded = !groundingSnapshot?.groundingReferences?.length || rawParsed.questionSet.every((q, idx) => {
+      const fact = sanitizePromptText(groundingSnapshot.groundingReferences![idx % groundingSnapshot.groundingReferences!.length].exactExcerpt || '');
+      return fact.length > 0 && q.question.toLocaleLowerCase().includes(fact.toLocaleLowerCase());
+    });
+    if (!providerQuestionsAreGrounded) {
+      return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs, groundingSnapshot);
     }
 
     const normalizedQuestions = rawParsed.questionSet.map((q, idx) => {
@@ -380,7 +420,10 @@ export const generateInterviewPlan = async (
         rubric: q.rubric,
         sourceBullets: q.sourceBullets,
         language: q.language,
-        timeAllocation: q.timeAllocation
+        timeAllocation: q.timeAllocation,
+        groundingReferences: groundingSnapshot?.groundingReferences?.length
+          ? [groundingSnapshot.groundingReferences[idx % groundingSnapshot.groundingReferences.length]]
+          : undefined,
       };
     });
 
@@ -411,7 +454,7 @@ export const generateInterviewPlan = async (
 
     return InterviewPlanSchema.parse(normalizedPlan);
   } catch (err) {
-    return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs);
+    return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs, groundingSnapshot);
   }
 };
 
@@ -743,6 +786,19 @@ REQUIRED OUTPUT SCHEMA (JSON):
     quickWins,
     prioritizedActions,
     challengeRecoveryTimeline: challengeRecoveryTimeline.length > 0 ? challengeRecoveryTimeline : undefined,
+    contextAudit: (context?.groundingSnapshot?.id || (context as any)?.groundingSnapshotId) ? {
+      snapshotId: context.groundingSnapshot?.id || (context as any).groundingSnapshotId,
+      bridgeId: context.bridgeSessionId || undefined,
+      purpose: context.groundingSnapshot?.purpose || (context as any).purpose || 'resume_to_interview',
+      sourceModules: context.groundingSnapshot?.sourceModules || (context as any).sourceModules || ['resume'],
+      groundedQuestions: (history || []).map((t: any, idx: number) => ({
+        questionId: t.id || `q_${idx}`,
+        questionText: t.question || '',
+        // Adaptive history indices do not align with root questionSet indices.
+        // Only audit lineage persisted on the exact question that was asked.
+        groundingReferences: t.questionBlueprint?.groundingReferences || [],
+      })).filter((g: any) => g.groundingReferences && g.groundingReferences.length > 0),
+    } : undefined,
   };
 
   return FinalReportSchema.parse(normalizedReport);

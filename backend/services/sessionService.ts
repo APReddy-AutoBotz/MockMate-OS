@@ -100,6 +100,18 @@ export const toSession = async (row: any): Promise<any> => {
   };
 };
 
+export const deleteSession = async (userId: string, sessionId: string): Promise<void> => {
+  if (supabaseAdmin) {
+    const { error: turnError } = await supabaseAdmin.from('interview_turns').delete().eq('session_id', sessionId);
+    if (turnError) throw Object.assign(new Error(`Failed to delete session turns: ${turnError.message}`), { status: 503 });
+    const { error: sessionError, count } = await supabaseAdmin.from('interview_sessions')
+      .delete({ count: 'exact' }).eq('id', sessionId).eq('user_id', userId);
+    if (sessionError) throw Object.assign(new Error(`Failed to delete owned session: ${sessionError.message}`), { status: 503 });
+    if (count !== 1) throw Object.assign(new Error('Owned session cleanup was not confirmed'), { status: 503 });
+  }
+  fallbackSessions.delete(sessionId);
+};
+
 export const createSession = async (
   userId: string,
   context: InterviewSessionContext

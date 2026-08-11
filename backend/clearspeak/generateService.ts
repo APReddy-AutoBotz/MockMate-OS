@@ -43,9 +43,9 @@ const circuitBreaker = {
 
 const passageCache = new Map<string, { content: ClearSpeakSessionContent; ts: number }>();
 
-function getCacheKey(p: ClearSpeakProfile, recentTopics: string[]): string {
+function getCacheKey(p: ClearSpeakProfile, recentTopics: string[], groundingContext = ''): string {
   const t = recentTopics.join(',').slice(-30);
-  return `${p.role}:${p.level}:${p.goal.slice(0, 20)}:${t}`;
+  return `${p.role}:${p.level}:${p.goal.slice(0, 20)}:${t}:${groundingContext}`;
 }
 
 // ─── Gemini Adapter (Primary) ─────────────────────────────────────────────────
@@ -182,13 +182,14 @@ const adapters: Record<string, ClearSpeakAdapter> = {
 async function generateWithResilience(
   profile: ClearSpeakProfile,
   systemPrompt: string,
-  recentTopics: string[]
+  recentTopics: string[],
+  grounding?: { summary: string; vocabulary: string[] },
 ): Promise<ClearSpeakSessionContent | null> {
   const primaryId = process.env.AI_GEN_PRIMARY || 'gemini';
   const fallbackId = process.env.AI_GEN_FALLBACK || 'groq';
 
   // 1. Caching Check
-  const cacheKey = getCacheKey(profile, recentTopics);
+  const cacheKey = getCacheKey(profile, recentTopics, grounding?.summary);
   const cached = passageCache.get(cacheKey);
   const ttl = parseInt(process.env.AI_GEN_CACHE_TTL_SEC || '300') * 1000;
   if (cached && Date.now() - cached.ts < ttl) {
@@ -230,11 +231,19 @@ async function generateWithResilience(
       if (isValid && result.content) {
         // Reset failure counter on success
         circuitBreaker.failures.set(providerId, 0);
+
+        // A schema-valid provider response is not, by itself, evidence that the
+        // provider used the consented snapshot. Ground every accepted provider
+        // response with the same deterministic transformation as the safety
+        // fallback before it can be cached or persisted as snapshot-bound.
+        const acceptedContent = grounding?.summary
+          ? applyAuthoritativeGrounding(result.content, profile, grounding)
+          : result.content;
         
         // Populate Cache
-        passageCache.set(cacheKey, { content: result.content, ts: Date.now() });
+        passageCache.set(cacheKey, { content: acceptedContent, ts: Date.now() });
         
-        return result.content;
+        return acceptedContent;
       }
 
       // Handle Failure / Bad Schema
@@ -258,20 +267,48 @@ export async function generateSession(
   profile: ClearSpeakProfile,
   recentTopics: string[] = [],
   sessionAttemptLength: number = 0,
+  grounding?: { summary: string; vocabulary: string[] },
 ): Promise<ClearSpeakSessionContent> {
   // FAST PATH: Force exactly 5 hardcoded passages per session to protect API usage
   if (sessionAttemptLength < 5) {
-    return selectFallback(profile.level, recentTopics);
+    const fallback = selectFallback(profile.level, recentTopics);
+    if (!grounding?.summary) return fallback;
+    return applyAuthoritativeGrounding(fallback, profile, grounding);
   }
 
-  const systemPrompt = buildSystemPrompt(profile, recentTopics);
+  const systemPrompt = buildSystemPrompt(profile, recentTopics, grounding?.summary);
 
-  const result = await generateWithResilience(profile, systemPrompt, recentTopics);
+  const result = await generateWithResilience(profile, systemPrompt, recentTopics, grounding);
   if (result) return result;
 
   // Final Safety net: Use static bank if both providers fail
   console.warn('[ClearSpeak/Resilience] All AI providers failed. Falling back to static content bank.');
-  return selectFallback(profile.level, recentTopics);
+  const fallback = selectFallback(profile.level, recentTopics);
+  if (!grounding?.summary) return fallback;
+  return applyAuthoritativeGrounding(fallback, profile, grounding);
+}
+
+/**
+ * Makes the authoritative snapshot facts materially affect every grounded
+ * ClearSpeak artifact, regardless of whether its base content came from a
+ * provider or the static safety bank. Keeping this transformation shared is a
+ * server-side guarantee: schema-valid but generic provider output cannot be
+ * accepted as grounded merely because the prompt contained snapshot facts.
+ */
+export function applyAuthoritativeGrounding(
+  content: ClearSpeakSessionContent,
+  profile: ClearSpeakProfile,
+  grounding: { summary: string; vocabulary: string[] },
+): ClearSpeakSessionContent {
+  const words = grounding.summary.trim().split(/\s+/).slice(0, 55);
+  return {
+    ...content,
+    topicTag: `Resume practice: ${grounding.vocabulary.slice(0, 2).join(' / ') || profile.role}`,
+    keyVocab: [...new Set([...grounding.vocabulary, ...content.keyVocab])].slice(0, 3),
+    passageData: [{ text: words.join(' '), isStressed: false, pauseType: 'stop' }],
+    repeatPhrase: words.slice(0, 12).join(' '),
+    retrySentence: words.slice(0, 18).join(' '),
+  };
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────

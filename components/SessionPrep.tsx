@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { InterviewSessionContext, InterviewPlan, SessionControls } from 'mockmate-shared';
+import { InterviewSessionContext, InterviewPlan, SessionControls, InterviewSetupDraft, completeInterviewSessionContext } from 'mockmate-shared';
 import * as mockGeminiService from '../services/mockGeminiService';
 import PanelSelector from './PanelSelector';
 import SessionBuilder from './SessionBuilder';
@@ -9,7 +9,7 @@ import { audioService } from '../services/audioService';
 
 interface SessionPrepProps {
   onContextReady: (context: InterviewSessionContext) => void;
-  context: InterviewSessionContext;
+  draft: InterviewSetupDraft;
   onGoBack: () => void;
 }
 
@@ -95,12 +95,12 @@ const buildFallbackInterviewPlan = (
   };
 };
 
-const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, context, onGoBack }) => {
-  const [currentContext, setCurrentContext] = useState<InterviewSessionContext>(context);
-  const [selectedPanelIDs, setSelectedPanelIDs] = useState<string[]>(context.selectedPanelIDs || DEFAULT_PANEL_IDS);
-  const [sessionControls, setSessionControls] = useState<SessionControls>(context.controls || defaultControls);
-  const [jdText, setJdText] = useState<string>('');
-  const [plan, setPlan] = useState<InterviewPlan | null>(context.interviewPlan || null);
+const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, draft, onGoBack }) => {
+  const [currentDraft, setCurrentDraft] = useState<InterviewSetupDraft>(draft);
+  const [selectedPanelIDs, setSelectedPanelIDs] = useState<string[]>(draft.selectedPanelIDs?.length ? draft.selectedPanelIDs : DEFAULT_PANEL_IDS);
+  const [sessionControls, setSessionControls] = useState<SessionControls>(draft.controls || defaultControls);
+  const [jdText, setJdText] = useState<string>(draft.jdText || '');
+  const [plan, setPlan] = useState<InterviewPlan | null>(null);
   const [isPlanReady, setIsPlanReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [matchReasons, setMatchReasons] = useState<Record<string, string>>({});
@@ -113,7 +113,7 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, context, onGo
 
       try {
         const res = await withSetupTimeout(
-          mockGeminiService.calibrateIntent(context.intentText),
+          mockGeminiService.calibrateIntent(draft.intentText),
           CALIBRATION_TIMEOUT_MS,
           'Interview setup took too long'
         );
@@ -123,9 +123,9 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, context, onGo
         const panelIDs = res.recommendedPanelIDs?.length ? res.recommendedPanelIDs : DEFAULT_PANEL_IDS;
         setSelectedPanelIDs(panelIDs);
         setMatchReasons(res.matchReasons || {});
-        setCurrentContext(prev => ({
+        setCurrentDraft(prev => ({
           ...prev,
-          candidateRole: res.recommendedRole || prev.candidateRole || context.intentText,
+          candidateRole: res.recommendedRole || prev.candidateRole || draft.intentText,
           selectedPanelIDs: panelIDs,
         }));
       } catch (error) {
@@ -133,9 +133,9 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, context, onGo
 
         setSelectedPanelIDs(DEFAULT_PANEL_IDS);
         setMatchReasons({});
-        setCurrentContext(prev => ({
+        setCurrentDraft(prev => ({
           ...prev,
-          candidateRole: prev.candidateRole || context.intentText,
+          candidateRole: prev.candidateRole || draft.intentText,
           selectedPanelIDs: DEFAULT_PANEL_IDS,
         }));
       } finally {
@@ -148,28 +148,29 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, context, onGo
     return () => {
       isActive = false;
     };
-  }, [context.intentText]);
+  }, [draft.intentText]);
 
   const handleGeneratePlan = async () => {
     setIsLoading(true);
     audioService.playStart();
     try {
-      const interviewPlan = await mockGeminiService.generateInterviewPlan(
-        currentContext.candidateRole || context.intentText,
-        context.intentText,
-        sessionControls,
-        jdText || undefined,
-        undefined,
-        selectedPanelIDs
-      );
+      const interviewPlan = await mockGeminiService.generateInterviewPlan({
+        role: currentDraft.candidateRole || draft.intentText,
+        intentText: draft.intentText,
+        controls: sessionControls,
+        jdText: jdText || undefined,
+        selectedPanelIDs,
+        snapshotId: currentDraft.groundingRequest?.snapshotId,
+        bridgeId: currentDraft.groundingRequest?.bridgeId,
+      });
       setPlan(interviewPlan);
       setIsPlanReady(true);
     } catch (err) {
       const fallbackPlan = buildFallbackInterviewPlan(
-        context.intentText,
+        draft.intentText,
         sessionControls,
         selectedPanelIDs,
-        currentContext.candidateRole,
+        currentDraft.candidateRole,
       );
       setPlan(fallbackPlan);
       setIsPlanReady(true);
@@ -181,14 +182,14 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, context, onGo
   const handleStartSession = () => {
     if (!plan) return;
     audioService.playConfirm();
-    onContextReady({
-      ...currentContext,
+    const finalDraft: InterviewSetupDraft = {
+      ...currentDraft,
       controls: sessionControls,
       selectedPanelIDs,
-      interviewPlan: plan,
-      competencyWeights: Object.entries(plan.jdInsights?.competencyWeights || {}),
-      jdInsights: plan.jdInsights,
-    });
+      jdText: jdText || undefined,
+    };
+    const context = completeInterviewSessionContext(finalDraft, plan);
+    onContextReady(context);
   };
 
   if (isPlanReady && plan) {

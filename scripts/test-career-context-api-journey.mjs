@@ -1,0 +1,478 @@
+process.env.NODE_ENV = 'test';
+
+import http from 'node:http';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { installSupabaseAdminForTest } = require('../backend/dist/supabaseAdmin.js');
+const serverModule = require('../backend/dist/server.js');
+const app = serverModule.default || serverModule.app || serverModule;
+
+console.log('[API Journey] Starting Real HTTP Server for Career Context API tests...');
+
+const server = http.createServer(app);
+await new Promise(resolve => server.listen(0, resolve));
+const port = server.address().port;
+const baseUrl = `http://localhost:${port}`;
+
+const headersUserA = {
+  'Content-Type': 'application/json',
+  'Authorization': 'Bearer dev_user_a',
+};
+
+const headersUserB = {
+  'Content-Type': 'application/json',
+  'Authorization': 'Bearer dev_user_b',
+};
+
+const USER_A = '11111111-1111-1111-1111-111111111111';
+const ITEM_ID = '55555555-5555-5555-5555-555555555555';
+const now = new Date().toISOString();
+
+function createAuthoritativePersistenceDouble() {
+  const tables = {
+    career_context_state: [{ user_id: USER_A, context_version: 7, personalization_enabled: false, updated_at: now }],
+    career_context_items: [{
+      id: ITEM_ID, user_id: USER_A, item_kind: 'skill', canonical_key: 'skill:typescript',
+      label: 'TypeScript', value: { type: 'string_list', values: ['TypeScript'] }, source_module: 'resume',
+      source_record_id: 'resume-record-1', source_path: 'skills[0]', source_revision: '1',
+      source_hash: 'authoritative-source-hash', exact_excerpt: 'Built production TypeScript services',
+      provenance: 'user_confirmed', item_status: 'active', sensitivity: 'standard',
+      created_at: now, updated_at: now, user_confirmed_at: now,
+    }],
+    career_context_snapshots: [],
+    career_context_snapshot_items: [],
+    career_context_bridges: [],
+    interview_sessions: [], interview_turns: [],
+    interview_generated_plans: [],
+    interview_plan_generation_reservations: [],
+    usage_ledger: [],
+    resume_reviews: [], clearspeak_profiles: [], clearspeak_sessions: [],
+  };
+  const calls = [];
+  const sourceErrors = {};
+  const rebuiltSourceIdentities = new Set();
+
+  class Query {
+    constructor(table) { this.table = table; this.filters = []; this.operation = 'select'; this.payload = null; }
+    select() { return this; }
+    eq(column, value) { this.filters.push(row => row[column] === value); return this; }
+    in(column, values) { this.filters.push(row => values.includes(row[column])); return this; }
+    order() { return this; }
+    insert(payload) { this.operation = 'insert'; this.payload = payload; return this; }
+    upsert(payload) { this.operation = 'upsert'; this.payload = payload; return this; }
+    rows() { return (tables[this.table] || []).filter(row => this.filters.every(filter => filter(row))); }
+    async execute(single = false, maybe = false) {
+      if (sourceErrors[this.table]) return { data: null, error: { message: sourceErrors[this.table] } };
+      let writtenRows = null;
+      if (this.operation === 'insert' || this.operation === 'upsert') {
+        const rows = (Array.isArray(this.payload) ? this.payload : [this.payload]).map(row => ({
+          ...(this.table === 'interview_sessions' && !row.id ? { id: '77777777-7777-4777-8777-777777777777' } : {}),
+          ...(this.table === 'interview_generated_plans' && !row.id ? { id: '66666666-6666-4666-8666-666666666666', plan_version: 1 } : {}),
+          ...row,
+        }));
+        for (const row of rows) {
+          const index = (tables[this.table] || []).findIndex(existing => existing.user_id && existing.user_id === row.user_id);
+          if (this.operation === 'upsert' && index >= 0) tables[this.table][index] = { ...tables[this.table][index], ...row };
+          else tables[this.table].push({ ...row });
+        }
+        writtenRows = rows;
+      }
+      let rows = writtenRows || this.rows();
+      if (this.table === 'career_context_snapshot_items') {
+        rows = rows.map(row => ({
+          ...row,
+          career_context_items: tables.career_context_items.find(item => item.id === row.item_id),
+        }));
+      }
+      if (single || maybe) return { data: rows[0] || null, error: single && rows.length !== 1 ? { message: 'Row not found' } : null };
+      return { data: rows, error: null };
+    }
+    single() { return this.execute(true, false); }
+    maybeSingle() { return this.execute(false, true); }
+    then(resolve, reject) { return this.execute().then(resolve, reject); }
+  }
+
+  const client = {
+    from(table) {
+      if (!(table in tables)) throw new Error(`Unexpected authoritative table: ${table}`);
+      return new Query(table);
+    },
+    async rpc(name, args) {
+      calls.push({ name, args });
+      if (name === 'set_personalization_preference_tx') {
+        const state = tables.career_context_state.find(row => row.user_id === args.p_user_id);
+        if (!state) return { data: null, error: { message: 'Career Context state not found' } };
+        if (args.p_expected_context_version != null && state.context_version !== args.p_expected_context_version) {
+          return { data: null, error: { message: 'Stale or mismatched context version' } };
+        }
+        state.context_version += 1;
+        state.personalization_enabled = args.p_enabled;
+        state.updated_at = now;
+        return { data: { userId: state.user_id, contextVersion: state.context_version, personalizationEnabled: state.personalization_enabled, updatedAt: state.updated_at }, error: null };
+      }
+      if (name === 'rebuild_career_context_tx') {
+        const state = tables.career_context_state.find(row => row.user_id === args.p_user_id);
+        const identities = args.p_drafts.map(draft => [draft.source.module, draft.source.recordId, draft.source.fieldPath, draft.source.sourceRevision, draft.source.sourceHash].join(':'));
+        const addedCount = identities.filter(identity => !rebuiltSourceIdentities.has(identity)).length;
+        identities.forEach(identity => rebuiltSourceIdentities.add(identity));
+        if (addedCount > 0) { state.context_version += 1; state.updated_at = now; }
+        return { data: { addedCount, updatedCount: 0, unchangedCount: identities.length - addedCount }, error: null };
+      }
+      if (name === 'create_grounding_snapshot_tx') {
+        const state = tables.career_context_state.find(row => row.user_id === args.p_user_id);
+        if (!state || state.context_version !== args.p_expected_context_version) return { data: null, error: { message: 'Stale or mismatched context version' } };
+        const items = tables.career_context_items.filter(item => args.p_item_ids.includes(item.id) && item.user_id === args.p_user_id);
+        if (items.length !== args.p_item_ids.length || items.some(item => item.item_status !== 'active' || item.provenance !== 'user_confirmed' || item.sensitivity === 'personal_contact')) {
+          return { data: null, error: { message: 'Snapshot item is not transactionally eligible' } };
+        }
+        const snapshotId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+        tables.career_context_snapshots.push({
+          id: snapshotId, user_id: args.p_user_id, purpose: args.p_purpose,
+          context_version: state.context_version, projection: args.p_projection,
+          conflicts: args.p_conflicts, consent: args.p_consent,
+          source_modules: args.p_source_modules, created_at: now,
+        });
+        items.forEach((item, position) => tables.career_context_snapshot_items.push({ snapshot_id: snapshotId, item_id: item.id, position }));
+        return { data: { snapshotId }, error: null };
+      }
+      if (name === 'create_module_bridge_tx') {
+        const snapshot = tables.career_context_snapshots.find(row => row.id === args.p_snapshot_id && row.user_id === args.p_user_id);
+        if (!snapshot || snapshot.purpose !== args.p_purpose) return { data: null, error: { message: 'Bridge snapshot ownership mismatch' } };
+        const existing = tables.career_context_bridges.find(row => row.user_id === args.p_user_id && row.client_request_id === args.p_client_request_id);
+        if (existing) return { data: { bridgeId: existing.id, status: existing.status, replayed: true }, error: null };
+        const bridgeId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+        tables.career_context_bridges.push({
+          id: bridgeId, user_id: args.p_user_id, source_module: args.p_source_module,
+          target_module: args.p_target_module, purpose: args.p_purpose,
+          snapshot_id: args.p_snapshot_id, source_record_id: args.p_source_record_id,
+          client_request_id: args.p_client_request_id, status: 'confirmed',
+          created_at: now, updated_at: now, confirmed_at: now,
+        });
+        return { data: { bridgeId }, error: null };
+      }
+      if (name === 'reserve_interview_plan_generation_tx') {
+        const existingPlan = tables.interview_generated_plans.find(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id);
+        if (existingPlan) return { data: { generate: false, plan: existingPlan }, error: null };
+        const existingReservation = tables.interview_plan_generation_reservations.find(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id);
+        if (existingReservation) return { data: { generate: false }, error: null };
+        const reservationToken = '99999999-9999-4999-8999-999999999999';
+        tables.interview_plan_generation_reservations.push({ user_id: args.p_user_id, bridge_id: args.p_bridge_id, snapshot_id: args.p_snapshot_id, reservation_token: reservationToken });
+        const usage = tables.usage_ledger.find(row => row.user_id === args.p_user_id && row.feature === 'interview_question');
+        if (usage) usage.used += 1;
+        else tables.usage_ledger.push({ user_id: args.p_user_id, feature: 'interview_question', used: 1 });
+        return { data: { generate: true, reservationToken, usageCharged: true }, error: null };
+      }
+      if (name === 'finalize_interview_plan_generation_tx') {
+        const existing = tables.interview_generated_plans.find(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id);
+        if (existing) return { data: existing, error: null };
+        const reservationIndex = tables.interview_plan_generation_reservations.findIndex(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id && row.reservation_token === args.p_reservation_token);
+        if (reservationIndex < 0) return { data: null, error: { message: 'stale reservation token' } };
+        const row = { id: '66666666-6666-4666-8666-666666666666', user_id: args.p_user_id, snapshot_id: args.p_snapshot_id, bridge_id: args.p_bridge_id, plan_hash: args.p_plan_hash, plan_version: 1, plan_payload: args.p_plan_payload };
+        tables.interview_generated_plans.push(row);
+        tables.interview_plan_generation_reservations.splice(reservationIndex, 1);
+        return { data: row, error: null };
+      }
+      if (name === 'renew_interview_plan_generation_tx') {
+        const reservation = tables.interview_plan_generation_reservations.find(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id && row.reservation_token === args.p_reservation_token);
+        return { data: reservation ? { renewed: true } : { renewed: false, stale: true }, error: null };
+      }
+      if (name === 'release_interview_plan_generation_tx') {
+        const reservationIndex = tables.interview_plan_generation_reservations.findIndex(row => row.user_id === args.p_user_id && row.bridge_id === args.p_bridge_id && row.reservation_token === args.p_reservation_token);
+        if (reservationIndex < 0) return { data: { released: false }, error: null };
+        tables.interview_plan_generation_reservations.splice(reservationIndex, 1);
+        const usage = tables.usage_ledger.find(row => row.user_id === args.p_user_id && row.feature === 'interview_question');
+        if (usage) usage.used = Math.max(usage.used - 1, 0);
+        return { data: { released: true, refunded: true }, error: null };
+      }
+      if (name === 'create_and_bind_interview_session_tx') {
+        const plan = tables.interview_generated_plans.find(row => row.id === args.p_plan_id && row.user_id === args.p_user_id);
+        const bridge = tables.career_context_bridges.find(row => row.id === args.p_bridge_id && row.user_id === args.p_user_id);
+        if (!plan || !bridge || plan.plan_hash !== args.p_plan_hash || plan.bridge_id !== bridge.id || plan.snapshot_id !== bridge.snapshot_id) return { data: null, error: { message: 'Plan lineage mismatch' } };
+        if (plan.session_id) return { data: { sessionId: plan.session_id, replayed: true }, error: null };
+        if (bridge.status !== 'confirmed') return { data: null, error: { message: 'Bridge already consumed' } };
+        const session = { id: '77777777-7777-4777-8777-777777777777', user_id: args.p_user_id, role: plan.plan_payload.jdInsights.role, setup: args.p_setup, status: 'active' };
+        tables.interview_sessions.push(session);
+        Object.assign(plan, { session_id: session.id, consumed_at: now });
+        Object.assign(bridge, { status: 'consumed', target_session_id: session.id, consumed_at: now, updated_at: now });
+        return { data: { sessionId: session.id, replayed: false }, error: null };
+      }
+      if (name === 'consume_module_bridge_tx') {
+        const bridge = tables.career_context_bridges.find(row => row.id === args.p_bridge_id);
+        if (!bridge) return { data: null, error: { message: 'Bridge not found' } };
+        if (bridge.user_id !== args.p_user_id) return { data: null, error: { message: 'Bridge not owned or access denied' } };
+        if (bridge.status !== 'confirmed') return { data: null, error: { message: 'Bridge has already been consumed' } };
+        const session = tables.interview_sessions.find(row => row.id === args.p_target_session_id && row.user_id === args.p_user_id);
+        if (!session) return { data: null, error: { message: 'Target session not found or access denied' } };
+        Object.assign(bridge, { status: 'consumed', target_session_id: session.id, consumed_at: now, updated_at: now });
+        return { data: { bridgeId: bridge.id }, error: null };
+      }
+      return { data: null, error: { message: `Unexpected authoritative RPC: ${name}` } };
+    },
+  };
+  return { client, calls, tables, sourceErrors };
+}
+
+try {
+  // 1. Unauthenticated Request -> 401
+  const resUnauth = await fetch(`${baseUrl}/api/career-context`);
+  if (resUnauth.status !== 401) {
+    throw new Error(`Expected 401 for unauthenticated request, got ${resUnauth.status}`);
+  }
+
+  // 2. Fail closed before authoritative persistence is installed.
+  const resUnavailable = await fetch(`${baseUrl}/api/career-context`, { headers: headersUserA });
+  if (resUnavailable.status !== 503) {
+    throw new Error(`Expected retryable 503 without authoritative persistence, got ${resUnavailable.status}`);
+  }
+
+  // The positive journey uses a stateful server-authoritative contract double; it is
+  // deliberately installed after the negative assertion and is never a product fallback.
+  const authoritative = createAuthoritativePersistenceDouble();
+  installSupabaseAdminForTest(authoritative.client);
+
+  const completedInterviewReport = {
+    overallSummary: 'Strong structured interview practice', evaluationModel: 'v1_dimensions',
+    readiness: { status: 'INTERVIEW_READY', reasoning: 'Consistent evidence' },
+    quantitativeAnalysis: { dimension_scores: [] }, advisoryPanel: [], questionPerformance: [],
+    biggestRiskArea: { title: 'Pacing', observation: 'Pause before answering', mitigation: 'Take a breath' },
+    coachPack: null, trajectoryReplay: [], auditLayer: [], simplifiedScore: null,
+    quickWins: [], prioritizedActions: [{ action: 'Pause before probes', impact: 'high' }],
+  };
+  authoritative.tables.resume_reviews.push({
+    id: 'resume-rebuild-1', user_id: USER_A, created_at: now,
+    resume_data: { basics: { name: 'Test User' }, skills: [{ category: 'Languages', items: ['TypeScript'] }], experience: [], projects: [] },
+  });
+  authoritative.tables.clearspeak_profiles.push({
+    user_id: USER_A, role: 'Engineer', level: 1, goal: 'Speak clearly', practice_duration: 5, created_at: now, updated_at: now,
+  });
+  authoritative.tables.interview_sessions.push(
+    { id: 'interview-completed-1', user_id: USER_A, status: 'completed', report_summary: completedInterviewReport, created_at: now },
+    { id: 'interview-incomplete-1', user_id: USER_A, status: 'active', report_summary: completedInterviewReport, created_at: now },
+    { id: 'interview-invalid-report-1', user_id: USER_A, status: 'completed', report_summary: { overallSummary: 'invalid' }, created_at: now },
+  );
+
+  // 3. Every authoritative rebuild source fails closed before the rebuild mutation.
+  for (const sourceTable of ['resume_reviews', 'clearspeak_profiles', 'clearspeak_sessions', 'interview_sessions']) {
+    authoritative.sourceErrors[sourceTable] = `${sourceTable} unavailable`;
+    const callsBefore = authoritative.calls.filter(call => call.name === 'rebuild_career_context_tx').length;
+    const versionBefore = authoritative.tables.career_context_state[0].context_version;
+    const failedRebuild = await fetch(`${baseUrl}/api/career-context/rebuild`, { method: 'POST', headers: headersUserA });
+    if (failedRebuild.status !== 503 || authoritative.calls.filter(call => call.name === 'rebuild_career_context_tx').length !== callsBefore || authoritative.tables.career_context_state[0].context_version !== versionBefore) {
+      throw new Error(`${sourceTable} failure did not abort rebuild with zero writes/version delta`);
+    }
+    delete authoritative.sourceErrors[sourceTable];
+  }
+  const successfulRebuild = await fetch(`${baseUrl}/api/career-context/rebuild`, { method: 'POST', headers: headersUserA });
+  const successfulRebuildBody = await successfulRebuild.json();
+  const firstRebuildCall = authoritative.calls.find(call => call.name === 'rebuild_career_context_tx');
+  const interviewDrafts = firstRebuildCall?.args.p_drafts.filter(draft => draft.source.module === 'interview') || [];
+  if (successfulRebuild.status !== 200 || authoritative.calls.filter(call => call.name === 'rebuild_career_context_tx').length !== 1 ||
+      successfulRebuildBody.addedCount < 1 || interviewDrafts.length < 1 ||
+      interviewDrafts.some(draft => draft.source.recordId !== 'interview-completed-1') ||
+      !firstRebuildCall.args.p_drafts.some(draft => draft.source.module === 'resume') ||
+      !firstRebuildCall.args.p_drafts.some(draft => draft.source.module === 'clearspeak')) {
+    throw new Error('All-source-success rebuild did not use exactly one authoritative atomic mutation');
+  }
+  const versionAfterFirstRebuild = authoritative.tables.career_context_state[0].context_version;
+  const replayedRebuild = await fetch(`${baseUrl}/api/career-context/rebuild`, { method: 'POST', headers: headersUserA });
+  const replayedRebuildBody = await replayedRebuild.json();
+  if (replayedRebuild.status !== 200 || replayedRebuildBody.addedCount !== 0 || replayedRebuildBody.unchangedCount < 1 ||
+      authoritative.tables.career_context_state[0].context_version !== versionAfterFirstRebuild) {
+    throw new Error('Authoritative all-source rebuild replay was not idempotent');
+  }
+  // The remaining journey creates and counts a new canonical practice session.
+  // Source sessions above have already served their rebuild assertions.
+  authoritative.tables.interview_sessions.length = 0;
+
+  // 4. GET /api/career-context for User A -> governed state and active item.
+  const resGetA = await fetch(`${baseUrl}/api/career-context`, { headers: headersUserA });
+  if (resGetA.status !== 200) {
+    throw new Error(`Expected 200 for GET /api/career-context, got ${resGetA.status}`);
+  }
+  const getBodyA = await resGetA.json();
+  if (!getBodyA.success || !getBodyA.state) {
+    throw new Error('GET /api/career-context response missing success or state');
+  }
+
+  if (getBodyA.state.contextVersion !== versionAfterFirstRebuild || getBodyA.activeItems[0]?.id !== ITEM_ID) {
+    throw new Error('GET did not return authoritative versioned Career Context state');
+  }
+
+  // 4. Advance the authoritative context version through the preference API.
+  const resPref = await fetch(`${baseUrl}/api/career-context/preference`, {
+    method: 'POST',
+    headers: headersUserA,
+    body: JSON.stringify({ personalizationEnabled: true, expectedContextVersion: getBodyA.state.contextVersion }),
+  });
+  if (resPref.status !== 200) throw new Error(`Expected 200 for authoritative preference update, got ${resPref.status}`);
+  const prefBody = await resPref.json();
+  if (prefBody.state.contextVersion !== 9) throw new Error('Preference update did not advance context version');
+
+  // 5. Create a transactionally validated consent snapshot at the new version.
+  const clientReqId = '33333333-3333-3333-3333-333333333333';
+  const resSnap = await fetch(`${baseUrl}/api/career-context/snapshots`, {
+    method: 'POST',
+    headers: headersUserA,
+    body: JSON.stringify({
+      purpose: 'resume_to_interview',
+      includedItemIds: [ITEM_ID],
+      excludedItemIds: [],
+      conflictSelections: {},
+      consent: {
+        scope: 'one_time',
+        purpose: 'resume_to_interview',
+        includedItemIds: [ITEM_ID],
+        excludedItemIds: [],
+        sourceModules: ['resume'],
+        acknowledgedAt: new Date().toISOString(),
+      },
+      expectedContextVersion: prefBody.state.contextVersion,
+      clientRequestId: clientReqId,
+    }),
+  });
+
+  if (resSnap.status !== 200) {
+    const snapErr = await resSnap.text();
+    throw new Error(`Expected 200 for authoritative snapshot creation, got ${resSnap.status}: ${snapErr}`);
+  }
+
+  const snapBody = await resSnap.json();
+  const snapshotId = snapBody.snapshot.id;
+  const reference = snapBody.snapshot.groundingReferences?.[0];
+  if (snapBody.snapshot.contextVersion !== 9 || snapBody.snapshot.consent.includedItemIds[0] !== ITEM_ID ||
+      reference?.contextItemId !== ITEM_ID || reference?.exactExcerpt !== 'Built production TypeScript services') {
+    throw new Error('Snapshot did not preserve authoritative version, consent, and grounding-reference lineage');
+  }
+
+  // 6. Create an authoritative bridge bound to that snapshot.
+  const bridgeReqId = '44444444-4444-4444-4444-444444444444';
+  const resBridge = await fetch(`${baseUrl}/api/career-context/bridges`, {
+    method: 'POST',
+    headers: headersUserA,
+    body: JSON.stringify({
+      sourceModule: 'resume',
+      targetModule: 'interview',
+      purpose: 'resume_to_interview',
+      snapshotId,
+      clientRequestId: bridgeReqId,
+    }),
+  });
+  if (resBridge.status !== 200) {
+    const bridgeErr = await resBridge.text();
+    throw new Error(`Expected 200 for bridge creation, got ${resBridge.status}: ${bridgeErr}`);
+  }
+  const bridgeBody = await resBridge.json();
+  const bridgeId = bridgeBody.bridge.id;
+  const bridgeReplay = await fetch(`${baseUrl}/api/career-context/bridges`, {
+    method: 'POST', headers: headersUserA, body: JSON.stringify({
+      sourceModule: 'resume', targetModule: 'interview', purpose: 'resume_to_interview', snapshotId, clientRequestId: bridgeReqId,
+    }),
+  });
+  const bridgeReplayBody = await bridgeReplay.json();
+  if (bridgeReplay.status !== 200 || bridgeReplayBody.bridge.id !== bridgeId || authoritative.tables.career_context_bridges.length !== 1) {
+    throw new Error('Exact bridge-create response-loss replay did not reuse one canonical bridge row');
+  }
+
+  // 7. Cross-user isolation rejects User B before any bridge mutation.
+  const resConsumeB = await fetch(`${baseUrl}/api/career-context/bridges/${bridgeId}/consume`, {
+    method: 'POST',
+    headers: headersUserB,
+    body: JSON.stringify({ targetSessionId: '77777777-7777-4777-8777-777777777777' }),
+  });
+  if (resConsumeB.status !== 404) {
+    throw new Error(`Expected generic bridge consumption to be unavailable, got ${resConsumeB.status}`);
+  }
+
+  // 8. Starting a real API session reconstructs question references from the
+  // authoritative snapshot, persists that context, and consumes the bridge.
+  const controls = {
+    difficulty: 'intermediate', totalQuestions: 1, includeBehavioral: true,
+    includeCoding: false, timePerQuestion: '90s', deliveryMode: 'exam',
+    reasoningMode: 'classic_behavioral', sourceMode: 'job_description',
+  };
+  const planRequest = () => fetch(`${baseUrl}/api/interview/plan`, { method: 'POST', headers: headersUserA, body: JSON.stringify({
+    role: 'Backend Engineer', intent: 'Practice grounded examples', controls, selectedPanelIDs: ['p1'], snapshotId, bridgeId,
+  }) });
+  const [planResponse, concurrentPlanResponse] = await Promise.all([planRequest(), planRequest()]);
+  if (planResponse.status !== 200 || concurrentPlanResponse.status !== 200) throw new Error(`Expected concurrent authoritative plans, got ${planResponse.status}/${concurrentPlanResponse.status}`);
+  const authoritativePlan = await planResponse.json();
+  const concurrentAuthoritativePlan = await concurrentPlanResponse.json();
+  const finalizeCalls = authoritative.calls.filter(call => call.name === 'finalize_interview_plan_generation_tx');
+  if (authoritativePlan.authority.planId !== concurrentAuthoritativePlan.authority.planId || authoritative.tables.interview_generated_plans.length !== 1 || finalizeCalls.length !== 1 || authoritative.tables.interview_plan_generation_reservations.length !== 0 || authoritative.tables.usage_ledger[0]?.used !== 1) {
+    throw new Error('Concurrent grounded plan creation did not converge on one charged provider worker and canonical artifact');
+  }
+  const tamperedPlan = structuredClone(authoritativePlan);
+  tamperedPlan.questionSet[0].question = 'Browser fabricated question';
+  const tampered = await fetch(`${baseUrl}/api/interview/sessions`, { method: 'POST', headers: headersUserA, body: JSON.stringify({ context: {
+    candidateRole: 'Backend Engineer', intentText: 'Practice grounded examples', selectedPanelIDs: ['p1'], sessionType: 'structured', controls,
+    interviewPlan: tamperedPlan, groundingSnapshot: snapBody.snapshot, bridgeSessionId: bridgeId,
+  } }) });
+  if (tampered.status !== 422 || authoritative.tables.interview_sessions.length !== 0 || authoritative.tables.career_context_bridges[0].status !== 'confirmed') throw new Error('Tampered plan reached session creation or consumed bridge');
+
+  const effectsBeforeMissingBridge = authoritative.tables.interview_sessions.length;
+  const missingBridge = await fetch(`${baseUrl}/api/interview/sessions`, { method: 'POST', headers: headersUserA, body: JSON.stringify({ context: {
+    candidateRole: 'Fabricated Role', intentText: 'Practice grounded examples', selectedPanelIDs: ['p1'], sessionType: 'structured', controls,
+    interviewPlan: authoritativePlan, groundingSnapshot: snapBody.snapshot,
+  } }) });
+  if (missingBridge.status !== 422 || authoritative.tables.interview_sessions.length !== effectsBeforeMissingBridge || authoritative.tables.career_context_bridges[0].status !== 'confirmed') {
+    throw new Error('Grounding selectors without a bridge caused session or bridge effects');
+  }
+
+  const resSession = await fetch(`${baseUrl}/api/interview/sessions`, {
+    method: 'POST', headers: headersUserA, body: JSON.stringify({
+      context: {
+        candidateRole: 'Browser Tampered Role', intentText: 'Practice grounded examples',
+        selectedPanelIDs: ['p1'], sessionType: 'structured', controls,
+        interviewPlan: authoritativePlan,
+        groundingSnapshot: snapBody.snapshot,
+        bridgeSessionId: bridgeId,
+      },
+    }),
+  });
+  if (resSession.status !== 200) {
+    throw new Error(`Expected 200 for grounded authoritative session start, got ${resSession.status}: ${await resSession.text()}`);
+  }
+  const session = await resSession.json();
+  const persistedSession = authoritative.tables.interview_sessions.find(row => row.id === session.sessionId);
+  if (persistedSession?.role !== authoritativePlan.jdInsights.role || persistedSession?.setup?.candidateRole !== authoritativePlan.jdInsights.role) {
+    throw new Error('Browser role tampering altered the grounded session/report role authority');
+  }
+  const persistedRef = persistedSession?.setup?.interviewPlan?.questionSet?.[0]?.groundingReferences?.[0];
+  if (persistedRef?.contextItemId !== ITEM_ID || persistedRef?.exactExcerpt !== 'Built production TypeScript services') {
+    throw new Error('Session did not persist authoritative snapshot grounding-reference lineage');
+  }
+  const consumedBridge = authoritative.tables.career_context_bridges[0];
+  if (consumedBridge.status !== 'consumed' || consumedBridge.target_session_id !== session.sessionId) {
+    throw new Error('Grounded session did not atomically bind the consumed bridge to its real session ID');
+  }
+
+  // 9. Exact response-loss replay returns the one canonical session without another write or bridge consumption.
+  const exactReplay = await fetch(`${baseUrl}/api/interview/sessions`, { method: 'POST', headers: headersUserA, body: JSON.stringify({ context: {
+    candidateRole: 'Backend Engineer', intentText: 'Practice grounded examples', selectedPanelIDs: ['p1'], sessionType: 'structured', controls,
+    interviewPlan: authoritativePlan, groundingSnapshot: snapBody.snapshot, bridgeSessionId: bridgeId,
+  } }) });
+  const exactReplayBody = await exactReplay.json();
+  if (exactReplay.status !== 200 || exactReplayBody.sessionId !== session.sessionId || authoritative.tables.interview_sessions.length !== 1) {
+    throw new Error('Exact response-loss replay did not return one canonical session');
+  }
+
+  // Generic browser-directed consumption is unavailable, even to the owner.
+  const replay = await fetch(`${baseUrl}/api/career-context/bridges/${bridgeId}/consume`, {
+    method: 'POST', headers: headersUserA, body: JSON.stringify({ targetSessionId: session.sessionId }),
+  });
+  if (replay.status !== 404) throw new Error(`Expected 404 for generic bridge consumption, got ${replay.status}`);
+  if (authoritative.tables.career_context_bridges[0].target_session_id !== session.sessionId) {
+    throw new Error('Consumed bridge target session was overwritten');
+  }
+
+  const rpcNames = authoritative.calls.map(call => call.name);
+  for (const required of ['create_grounding_snapshot_tx', 'create_module_bridge_tx', 'create_and_bind_interview_session_tx']) {
+    if (!rpcNames.includes(required)) throw new Error(`Positive journey bypassed authoritative RPC ${required}`);
+  }
+
+  console.log('[API Journey] PASSED: Real HTTP Server and Career Context API verified 100%!');
+} finally {
+  installSupabaseAdminForTest(null);
+  server.close();
+}

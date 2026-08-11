@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { verifyAuthToken } from '../middleware/authMiddleware';
-import { enforceUsageLimit } from '../services/usageService';
+import { consumeUsage, enforceUsageLimit } from '../services/usageService';
 import * as aiService from '../services/aiService';
 import * as sessionService from '../services/sessionService';
+import { createAndBindAuthoritativeSession, finalizeAuthoritativePlanGeneration, getAuthoritativePlan, getAuthoritativePlanForBridge, hashInterviewPlan, releaseAuthoritativePlanGeneration, reserveAuthoritativePlanGeneration, waitForAuthoritativePlan, withAuthoritativePlanLease } from '../services/interviewPlanService';
 import { 
   InterviewSessionStartRequestSchema, 
   AnswerSubmissionRequestSchema,
@@ -14,7 +15,8 @@ import {
   HintRequestSchema,
   IdealResponseRequestSchema,
   CodeAnalysisRequestSchema,
-  CodeSimulationRequestSchema
+  CodeSimulationRequestSchema,
+  CareerContextSnapshot
 } from 'mockmate-shared';
 
 const router = Router();
@@ -39,18 +41,94 @@ router.post('/calibrate', enforceUsageLimit('interview_question'), async (req: a
   }
 });
 
-router.post('/plan', enforceUsageLimit('interview_question'), async (req: any, res) => {
+router.post('/plan', async (req: any, res) => {
+  let failedReservation: { userId: string; bridgeId: string; token: string } | undefined;
   try {
     const parsed = PlanGenerationRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(422).json({ error: 'Invalid plan generation payload', details: parsed.error.issues });
     }
-    const { role, intent, controls, jdText, resumeText, selectedPanelIDs } = parsed.data;
-    const result = await aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText, selectedPanelIDs);
-    res.json(InterviewPlanSchema.parse(result));
+    const { role, intent, controls, jdText, resumeText, selectedPanelIDs, snapshotId, bridgeId } = parsed.data;
+    const userId = req.user?.uid;
+    let groundingSnapshot: CareerContextSnapshot | undefined = undefined;
+    let planReservationToken: string | undefined;
+
+    if (Boolean(snapshotId) !== Boolean(bridgeId)) {
+      return res.status(422).json({ error: 'Grounded plan generation requires both snapshotId and bridgeId.' });
+    }
+
+    if (snapshotId) {
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+      const { getSnapshotById } = require('../services/groundingSnapshotService');
+      const snap = await getSnapshotById(userId, snapshotId);
+      if (!snap) {
+        return res.status(404).json({ error: `Grounding snapshot '${snapshotId}' not found or access denied.` });
+      }
+      if (!['resume_to_interview', 'clearspeak_to_interview', 'interview_personalization'].includes(snap.purpose)) {
+        return res.status(422).json({ error: `Snapshot purpose '${snap.purpose}' is incompatible with Interview practice.` });
+      }
+      groundingSnapshot = snap;
+    }
+
+    if (bridgeId) {
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+      const { getModuleBridgeById } = require('../services/moduleBridgeService');
+      const bridge = await getModuleBridgeById(userId, bridgeId);
+      if (!bridge) {
+        return res.status(404).json({ error: `Module bridge '${bridgeId}' not found or access denied.` });
+      }
+      if (snapshotId && bridge.snapshotId !== snapshotId) {
+        return res.status(422).json({ error: `Bridge snapshotId '${bridge.snapshotId}' does not match requested snapshotId '${snapshotId}'.` });
+      }
+      if (bridge.status !== 'confirmed') {
+        return res.status(409).json({ error: `Bridge status is '${bridge.status}', cannot generate plan.` });
+      }
+    }
+
+    if (snapshotId && bridgeId && userId) {
+      const existing = await getAuthoritativePlanForBridge(userId, bridgeId);
+      if (existing) {
+        if (existing.snapshotId !== snapshotId) return res.status(422).json({ error: 'Existing authoritative plan snapshot mismatch.' });
+        return res.json(InterviewPlanSchema.parse({ ...existing.plan, authority: { planId: existing.id, planHash: existing.hash, version: existing.version, snapshotId, bridgeId } }));
+      }
+    }
+    if (snapshotId && bridgeId && userId) {
+      const reservation = await reserveAuthoritativePlanGeneration(userId, snapshotId, bridgeId);
+      if (!reservation.generate) {
+        const artifact = reservation.artifact || await waitForAuthoritativePlan(userId, bridgeId);
+        return res.json(InterviewPlanSchema.parse({ ...artifact.plan, authority: { planId: artifact.id, planHash: artifact.hash, version: artifact.version, snapshotId, bridgeId } }));
+      }
+      planReservationToken = reservation.reservationToken;
+      if (!planReservationToken) throw Object.assign(new Error('Authoritative plan reservation token was not returned'), { status: 503 });
+      failedReservation = { userId, bridgeId, token: planReservationToken };
+    } else {
+      const usage = await consumeUsage(userId, 'interview_question');
+      if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached' });
+    }
+    const generate = () => aiService.generateInterviewPlan(role, intent, controls, jdText, resumeText, selectedPanelIDs, groundingSnapshot);
+    const result = InterviewPlanSchema.parse(planReservationToken && userId && bridgeId
+      ? await withAuthoritativePlanLease(userId, bridgeId, planReservationToken, generate)
+      : await generate());
+    if (snapshotId && bridgeId && userId) {
+      const artifact = await finalizeAuthoritativePlanGeneration(userId, snapshotId, bridgeId, planReservationToken!, result);
+      failedReservation = undefined;
+      return res.json(InterviewPlanSchema.parse({
+        ...artifact.plan,
+        authority: { planId: artifact.id, planHash: artifact.hash, version: artifact.version, snapshotId, bridgeId },
+      }));
+    }
+    res.json(result);
   } catch (error: any) {
+    if (failedReservation) {
+      try {
+        await releaseAuthoritativePlanGeneration(failedReservation.userId, failedReservation.bridgeId, failedReservation.token);
+      } catch (releaseError: any) {
+        console.error('[Interview] failed plan reservation release:', releaseError.message);
+      }
+    }
     console.error('[Interview] plan error:', error);
-    res.status(500).json({ error: error.message || 'Could not create interview practice plan' });
+    const status = error.status || 500;
+    res.status(status).json({ error: error.message || 'Could not create interview practice plan' });
   }
 });
 
@@ -58,7 +136,7 @@ router.post('/plan', enforceUsageLimit('interview_question'), async (req: any, r
 // SESSIONS
 // ==========================================
 
-router.post('/sessions', enforceUsageLimit('interview_question'), async (req: any, res) => {
+router.post('/sessions', async (req: any, res) => {
   try {
     const userId = req.user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -68,11 +146,79 @@ router.post('/sessions', enforceUsageLimit('interview_question'), async (req: an
       return res.status(422).json({ error: 'Invalid session start payload', details: parsed.error.issues });
     }
 
-    const result = await sessionService.createSession(userId, parsed.data.context);
+    const bridgeSessionId = parsed.data.context?.bridgeSessionId;
+    const groundingSnapshot = parsed.data.context?.groundingSnapshot;
+    const planAuthority = parsed.data.context?.interviewPlan.authority;
+    if (!bridgeSessionId && (groundingSnapshot || planAuthority)) {
+      return res.status(422).json({ error: 'Grounding snapshots and authoritative plan selectors require a valid bridgeSessionId.' });
+    }
+    let authoritativeContext = parsed.data.context;
+    let authoritativePlan: Awaited<ReturnType<typeof getAuthoritativePlan>> = null;
+
+    if (bridgeSessionId) {
+      const selector = parsed.data.context.interviewPlan.authority;
+      if (!selector) return res.status(422).json({ error: 'A server-authoritative plan selector is required for grounded sessions.' });
+      authoritativePlan = await getAuthoritativePlan(userId, selector.planId);
+      if (!authoritativePlan) return res.status(404).json({ error: 'Authoritative interview plan not found or access denied.' });
+      const { authority: _browserSelector, ...browserPlanPayload } = parsed.data.context.interviewPlan;
+      if (hashInterviewPlan(browserPlanPayload) !== authoritativePlan.hash) {
+        return res.status(422).json({ error: 'Browser interview plan payload differs from the authoritative generated plan.' });
+      }
+      if (selector.planHash !== authoritativePlan.hash || selector.version !== authoritativePlan.version ||
+          selector.snapshotId !== authoritativePlan.snapshotId || selector.bridgeId !== authoritativePlan.bridgeId ||
+          bridgeSessionId !== authoritativePlan.bridgeId) {
+        return res.status(422).json({ error: 'Interview plan selector does not match the authoritative plan lineage.' });
+      }
+      const { getModuleBridgeById } = require('../services/moduleBridgeService');
+      const { getSnapshotById } = require('../services/groundingSnapshotService');
+      const bridge = await getModuleBridgeById(userId, bridgeSessionId);
+      if (!bridge) return res.status(404).json({ error: 'Grounding bridge not found or access denied.' });
+      if (bridge.targetModule !== 'interview') return res.status(422).json({ error: 'Grounding bridge target is incompatible with Interview practice.' });
+      const snapshot = await getSnapshotById(userId, bridge.snapshotId);
+      if (!snapshot || snapshot.purpose !== bridge.purpose || snapshot.id !== authoritativePlan.snapshotId) {
+        return res.status(422).json({ error: 'Bridge, snapshot, and authoritative plan lineage do not match.' });
+      }
+      if (authoritativePlan.sessionId) {
+        const existing = await sessionService.getSession(userId, authoritativePlan.sessionId);
+        if (!existing) throw Object.assign(new Error('Authoritative plan references a missing session'), { status: 503 });
+        const questions = existing.context.interviewPlan.questionSet;
+        return res.json({ sessionId: existing.id, openingMessage: `Welcome to your MockMate interview. Reasoning mode: '${existing.context.controls.reasoningMode}'. We will cover ${questions.length} core scenarios through adaptive exploration.`, firstQuestion: questions[0], questionIndex: 0, totalQuestions: questions.length });
+      }
+      if (bridge.status !== 'confirmed') return res.status(409).json({ error: `Bridge status is '${bridge.status}', cannot start session.` });
+      authoritativeContext = {
+        ...authoritativeContext,
+        groundingSnapshot: snapshot,
+        bridgeSessionId: bridge.id,
+        candidateRole: authoritativePlan.plan.jdInsights.role,
+        controls: authoritativePlan.plan.meta.controls,
+        jdInsights: authoritativePlan.plan.jdInsights,
+        interviewPlan: {
+          ...authoritativePlan.plan,
+          authority: selector,
+        },
+      };
+    }
+
+    // Ungrounded sessions retain their explicit contract and ordinary usage charge.
+    // Grounded usage was charged exactly once by the authoritative plan reservation.
+    // Binding consumes the already-authorized lineage without another quota check.
+    if (!bridgeSessionId) {
+      const usage = await consumeUsage(userId, 'interview_question');
+      if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached', feature: 'interview_question', used: usage.used, limit: usage.limit });
+    }
+
+    if (bridgeSessionId) {
+      if (!authoritativePlan) throw new Error('Authoritative plan was not loaded');
+      const bound = await createAndBindAuthoritativeSession(userId, authoritativePlan.id, authoritativePlan.hash, bridgeSessionId, authoritativeContext);
+      const questions = authoritativeContext.interviewPlan.questionSet;
+      return res.json({ sessionId: bound.sessionId, openingMessage: `Welcome to your MockMate interview. Reasoning mode: '${authoritativeContext.controls.reasoningMode}'. We will cover ${questions.length} core scenarios through adaptive exploration.`, firstQuestion: questions[0], questionIndex: 0, totalQuestions: questions.length });
+    }
+    const result = await sessionService.createSession(userId, authoritativeContext);
     res.json(result);
   } catch (error: any) {
     console.error('[Interview] create session error:', error);
-    res.status(500).json({ error: error.message || 'Could not start session' });
+    const status = error.status || 500;
+    res.status(status).json({ error: error.message || 'Could not start session' });
   }
 });
 
