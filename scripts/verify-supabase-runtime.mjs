@@ -126,7 +126,7 @@ async function runRuntimeVerification() {
         await client.query(`
           GRANT INSERT, UPDATE, DELETE, TRUNCATE
             ON TABLE public.clearspeak_accent_attempts
-            TO service_role, authenticated, anon;
+            TO PUBLIC, service_role, authenticated, anon;
         `);
       }
 
@@ -137,14 +137,13 @@ async function runRuntimeVerification() {
         await client.query(`
           GRANT INSERT, UPDATE, DELETE, TRUNCATE
             ON TABLE public.clearspeak_accent_attempt_lifecycle
-            TO service_role;
+            TO PUBLIC, service_role, authenticated, anon;
         `);
         const modeledLifecycleDml = await client.query(`
           SELECT
-            has_table_privilege('service_role', 'public.clearspeak_accent_attempt_lifecycle', 'INSERT') AS insert,
-            has_table_privilege('service_role', 'public.clearspeak_accent_attempt_lifecycle', 'UPDATE') AS update,
-            has_table_privilege('service_role', 'public.clearspeak_accent_attempt_lifecycle', 'DELETE') AS delete,
-            has_table_privilege('service_role', 'public.clearspeak_accent_attempt_lifecycle', 'TRUNCATE') AS truncate
+            has_table_privilege('service_role', 'public.clearspeak_accent_attempt_lifecycle', 'INSERT') AS service_insert,
+            has_table_privilege('authenticated', 'public.clearspeak_accent_attempt_lifecycle', 'TRUNCATE') AS authenticated_truncate,
+            has_table_privilege('anon', 'public.clearspeak_accent_attempt_lifecycle', 'DELETE') AS anon_delete
         `);
         if (!Object.values(modeledLifecycleDml.rows[0]).every(Boolean)) {
           throw new Error('Could not model Supabase service_role lifecycle DML defaults');
@@ -1096,6 +1095,38 @@ async function runRuntimeVerification() {
       }
     }
 
+    // Exercise browser roles too. These roles inherited the modeled PUBLIC
+    // defaults, so successful denial also proves PUBLIC cannot provide an
+    // indirect mutation path. TRUNCATE is included because it bypasses RLS.
+    for (const role of ['authenticated', 'anon']) {
+      for (const [table, statements] of Object.entries({
+        clearspeak_accent_attempt_lifecycle: [
+          `insert into public.clearspeak_accent_attempt_lifecycle(user_id,attempt_id,status) values('${userA}','aaaaaaaa-0000-4000-a000-000000000095','pending')`,
+          `update public.clearspeak_accent_attempt_lifecycle set status='cancelled' where user_id='${userA}' and attempt_id='${committedId}'`,
+          `delete from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${committedId}'`,
+          'truncate table public.clearspeak_accent_attempt_lifecycle',
+        ],
+        clearspeak_accent_attempts: [
+          `insert into public.clearspeak_accent_attempts(user_id) values('${userA}')`,
+          `update public.clearspeak_accent_attempts set duration_ms=1001 where user_id='${userA}' and attempt_id='${committedId}'`,
+          `delete from public.clearspeak_accent_attempts where user_id='${userA}' and attempt_id='${committedId}'`,
+          'truncate table public.clearspeak_accent_attempts',
+        ],
+      })) {
+        for (const statement of statements) {
+          try {
+            await resetRole(client);
+            await setRole(client, role, userA);
+            await client.query(statement);
+            throw new Error(`${role} direct ${table} mutation succeeded`);
+          } catch (error) {
+            await resetRole(client);
+            if (!error.message.includes('permission denied')) throw error;
+          }
+        }
+      }
+    }
+
     await resetRole(client);
     const directMutationAcl = await client.query(`
       select coalesce(role.rolname, 'PUBLIC') role_name, table_acl.relname table_name,
@@ -1113,6 +1144,41 @@ async function runRuntimeVerification() {
         .map(row => `${row.role_name}:${row.table_name}:${row.privilege}`).join(', ');
       throw new Error(`ClearSpeak direct mutation ACL remained: ${leaked}`);
     }
+
+    const sanctionedRpcAcl = await client.query(`
+      select role_name, function_name, allowed
+      from (values
+        ('service_role','issue',has_function_privilege('service_role','public.issue_clearspeak_accent_attempt_authority(uuid,uuid,text,timestamptz,text)','EXECUTE')),
+        ('service_role','reserve_v2',has_function_privilege('service_role','public.reserve_clearspeak_accent_attempt_v2(uuid,uuid,text,text)','EXECUTE')),
+        ('service_role','commit_v2',has_function_privilege('service_role','public.commit_clearspeak_accent_attempt_v2(uuid,uuid,text,text,jsonb)','EXECUTE')),
+        ('service_role','cancel_v2',has_function_privilege('service_role','public.cancel_clearspeak_accent_attempt_v2(uuid,uuid,text)','EXECUTE')),
+        ('service_role','delete',has_function_privilege('service_role','public.delete_clearspeak_accent_attempt(uuid,uuid)','EXECUTE')),
+        ('authenticated','commit_v2',has_function_privilege('authenticated','public.commit_clearspeak_accent_attempt_v2(uuid,uuid,text,text,jsonb)','EXECUTE')),
+        ('anon','commit_v2',has_function_privilege('anon','public.commit_clearspeak_accent_attempt_v2(uuid,uuid,text,text,jsonb)','EXECUTE'))
+      ) acl(role_name,function_name,allowed)
+    `);
+    const badRpcAcl = sanctionedRpcAcl.rows.filter(row =>
+      row.role_name === 'service_role' ? !row.allowed : row.allowed);
+    if (badRpcAcl.length) throw new Error(`ClearSpeak sanctioned RPC ACL mismatch: ${JSON.stringify(badRpcAcl)}`);
+    const publicMutationRpcAcl = await client.query(`
+      select p.proname
+      from pg_proc p
+      join pg_namespace n on n.oid=p.pronamespace
+      cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) grant_acl
+      where n.nspname='public' and grant_acl.grantee=0
+        and grant_acl.privilege_type='EXECUTE'
+        and p.proname in (
+          'issue_clearspeak_accent_attempt_authority',
+          'reserve_clearspeak_accent_attempt_v2',
+          'commit_clearspeak_accent_attempt_v2',
+          'cancel_clearspeak_accent_attempt_v2',
+          'delete_clearspeak_accent_attempt',
+          'reserve_clearspeak_accent_attempt',
+          'commit_clearspeak_accent_attempt',
+          'cancel_clearspeak_accent_attempt'
+        )
+    `);
+    if (publicMutationRpcAcl.rows.length) throw new Error(`PUBLIC ClearSpeak mutation RPC remained executable: ${publicMutationRpcAcl.rows.map(row => row.proname).join(', ')}`);
     await setRole(client, 'service_role');
 
     // Runtime application authority ends at the SECURITY DEFINER RPC boundary.
