@@ -36,7 +36,7 @@ import { getSnapshotById } from '../services/groundingSnapshotService';
 import crypto from 'crypto';
 import { canonicalJsonValue, hashArtifactContent } from './artifactAuthority';
 import { ACCENT_PROFILES } from './accentProfiles';
-import { accentCatalog, cancelAccentAttempt, getAccentAttemptStatus, projectAccentHistoryAttempt, promptFor, rejectClientAuthority, submitAccentAttempt } from './accentV1Service';
+import { accentCatalog, cancelAccentAttempt, deleteAccentAttempt, getAccentAttemptStatus, issueAccentAttemptAuthority, projectAccentHistoryAttempt, promptFor, rejectClientAuthority, submitAccentAttempt } from './accentV1Service';
 import { getAccentProfile } from './accentProfiles';
 
 const router = Router();
@@ -58,7 +58,8 @@ const _rlBuckets = new Map<string, RLBucket>();
 
 function csRateLimit(max: number, windowMs: number) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const key = (req.ip ?? req.headers['x-forwarded-for']?.toString() ?? 'anon');
+    const owner = (req as any).user?.uid ?? 'anon';
+    const key = `${owner}:${req.ip ?? req.headers['x-forwarded-for']?.toString() ?? 'anon'}:${req.route?.path ?? req.path}`;
     const now = Date.now();
     const b = _rlBuckets.get(key) ?? { tokens: max, ts: now };
     if (now - b.ts > windowMs) { b.tokens = max; b.ts = now; }
@@ -78,6 +79,7 @@ const betaEventLimiter    = csRateLimit(120, 60_000);  // 120 events / min / IP
 const betaFeedbackLimiter = csRateLimit(10,  60_000);  // 10 / min / IP
 // /beta/access  — checked once on login; generous
 const betaAccessLimiter   = csRateLimit(30,  60_000);  // 30 / min / IP
+const accentLifecycleLimiter = csRateLimit(30, 60_000);
 
 
 // ─── Multer — memory storage only ────────────────────────────────────────────
@@ -192,6 +194,16 @@ router.post('/v1/accent/prompts', (req, res) => {
   } catch (error: any) { return res.status(422).json({ error: error.message }); }
 });
 
+router.post('/v1/accent/attempt-authority', accentLifecycleLimiter, async (req, res) => {
+  try {
+    return res.status(201).json(await issueAccentAttemptAuthority((req as any).user?.uid, req.body));
+  } catch (error: any) {
+    const status = error.message === 'lifecycle_limit_reached' ? 429 : error.message === 'idempotency_conflict' ? 409 : 422;
+    const allowed = new Set(['lifecycle_limit_reached','idempotency_conflict','invalid_attempt_id','stale_or_unknown_profile','unsupported_practice_mode','stale_or_mismatched_server_selector','client_authority_rejected']);
+    return res.status(status).json({ error: allowed.has(error.message) ? error.message : 'submission_authority_rejected' });
+  }
+});
+
 router.post('/v1/accent/attempts', upload.single('audio'), handleMulterError, async (req, res) => {
   try {
     const userId = (req as any).user?.uid;
@@ -221,9 +233,9 @@ router.get('/v1/accent/attempts/:attemptId/status', async (req, res) => {
   }
 });
 
-router.post('/v1/accent/attempts/:attemptId/cancel', async (req, res) => {
+router.post('/v1/accent/attempts/:attemptId/cancel', accentLifecycleLimiter, async (req, res) => {
   try {
-    const outcome = await cancelAccentAttempt((req as any).user?.uid, req.params.attemptId);
+    const outcome = await cancelAccentAttempt((req as any).user?.uid, req.params.attemptId, req.body?.submissionCapability);
     return res.json(outcome);
   } catch (error: any) {
     return res.status(error.message === 'invalid_attempt_id' ? 422 : 503).json({ error: error.message === 'invalid_attempt_id' ? error.message : 'authoritative_persistence_unavailable' });
@@ -244,9 +256,10 @@ router.delete('/v1/accent/attempts/:attemptId', async (req, res) => {
   const userId = (req as any).user?.uid;
   if (!supabaseAdmin) return res.status(503).json({ error: 'Authoritative persistence unavailable' });
   // Owner predicate is intentionally non-disclosing: absent and foreign IDs are identical.
-  const { error } = await supabaseAdmin.from('clearspeak_accent_attempts').delete().eq('user_id', userId).eq('attempt_id', req.params.attemptId);
-  if (error) return res.status(500).json({ error: 'Delete unavailable' });
-  return res.status(204).send();
+  try {
+    await deleteAccentAttempt(userId, req.params.attemptId);
+    return res.status(204).send();
+  } catch { return res.status(503).json({ error: 'Delete unavailable' }); }
 });
 
 // ─── POST /api/clearspeak/profile ─────────────────────────────────────────────

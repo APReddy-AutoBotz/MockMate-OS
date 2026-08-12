@@ -60,7 +60,9 @@ export function rejectClientAuthority(body: any): void {
   if (!body || typeof body !== 'object' || forbidden.some(k => Object.prototype.hasOwnProperty.call(body, k))) throw new Error('client_authority_rejected');
 }
 
-type AttemptDisposition = { status: 'pending' | 'cancelled' | 'committed' | 'conflict' | 'missing'; requestHash?: string; result?: AccentScoreV1; replayed?: boolean };
+type AttemptDisposition = { status: 'pending' | 'cancelled' | 'committed' | 'conflict' | 'missing' | 'limit' | 'invalid'; requestHash?: string; result?: AccentScoreV1; replayed?: boolean };
+
+const capabilityHash = (capability: string) => crypto.createHash('sha256').update(capability).digest('hex');
 
 async function lifecycleRpc(name: string, args: Record<string, unknown>): Promise<AttemptDisposition> {
   if (!supabaseAdmin) throw new Error('authoritative_persistence_unavailable');
@@ -69,9 +71,29 @@ async function lifecycleRpc(name: string, args: Record<string, unknown>): Promis
   return data as AttemptDisposition;
 }
 
-export async function cancelAccentAttempt(userId: string, attemptId: string): Promise<AttemptDisposition> {
+export async function issueAccentAttemptAuthority(userId: string, body: any): Promise<{ attemptId: string; capability: string; expiresAt: string }> {
+  rejectClientAuthority(body);
+  if (typeof body?.attemptId !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.attemptId)) throw new Error('invalid_attempt_id');
+  validatePromptSelector(body);
+  const capability = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
+  const outcome = await lifecycleRpc('issue_clearspeak_accent_attempt_authority', {
+    p_user_id: userId, p_attempt_id: body.attemptId, p_capability_hash: capabilityHash(capability), p_expires_at: expiresAt,
+  });
+  if (outcome.status === 'conflict') throw new Error('idempotency_conflict');
+  if (outcome.status !== 'pending') throw new Error(outcome.status === 'limit' ? 'lifecycle_limit_reached' : 'submission_authority_rejected');
+  return { attemptId: body.attemptId, capability, expiresAt };
+}
+
+export async function cancelAccentAttempt(userId: string, attemptId: string, capability: string): Promise<AttemptDisposition> {
   if (!/^[0-9a-f-]{36}$/i.test(attemptId)) throw new Error('invalid_attempt_id');
-  return lifecycleRpc('cancel_clearspeak_accent_attempt', { p_user_id: userId, p_attempt_id: attemptId });
+  if (!/^[a-f0-9]{64}$/.test(capability || '')) return { status: 'missing' };
+  return lifecycleRpc('cancel_clearspeak_accent_attempt_v2', { p_user_id: userId, p_attempt_id: attemptId, p_capability_hash: capabilityHash(capability) });
+}
+
+export async function deleteAccentAttempt(userId: string, attemptId: string): Promise<void> {
+  if (!/^[0-9a-f-]{36}$/i.test(attemptId)) throw new Error('invalid_attempt_id');
+  await lifecycleRpc('delete_clearspeak_accent_attempt', { p_user_id: userId, p_attempt_id: attemptId });
 }
 
 export async function getAccentAttemptStatus(userId: string, attemptId: string): Promise<AttemptDisposition> {
@@ -87,6 +109,10 @@ export async function getAccentAttemptStatus(userId: string, attemptId: string):
 }
 
 export async function submitAccentAttempt(userId: string, body: any, audio: Buffer, mimeType: string): Promise<{ score: AccentScoreV1; replayed: boolean; requestHash: string }> {
+  const submissionCapability = body?.submissionCapability;
+  if (typeof submissionCapability !== 'string' || !/^[a-f0-9]{64}$/.test(submissionCapability)) throw new Error('submission_authority_rejected');
+  body = { ...body };
+  delete body.submissionCapability;
   rejectClientAuthority(body);
   // This is a deliberate stop gate, not a provider fallback. V1 must remain
   // unavailable rather than silently invoking legacy/real speech scoring.
@@ -108,7 +134,8 @@ export async function submitAccentAttempt(userId: string, body: any, audio: Buff
   // Ordinary user bytes are never synthetic evidence. Until a speech scorer is
   // separately authorized, persist only a truthful null-score availability result.
   const score = unsupportedUserAudioResult(body.attemptId, prompt);
-  const reserved = await lifecycleRpc('reserve_clearspeak_accent_attempt', { p_user_id: userId, p_attempt_id: body.attemptId, p_request_hash: requestHash });
+  const reserved = await lifecycleRpc('reserve_clearspeak_accent_attempt_v2', { p_user_id: userId, p_attempt_id: body.attemptId, p_request_hash: requestHash, p_capability_hash: capabilityHash(submissionCapability) });
+  if (reserved.status === 'missing') throw new Error('submission_authority_rejected');
   if (reserved.status === 'conflict') throw new Error('idempotency_conflict');
   if (reserved.status === 'cancelled') throw new Error('submission_canceled');
   if (reserved.status === 'committed') {
