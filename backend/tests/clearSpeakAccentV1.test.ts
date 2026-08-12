@@ -1,7 +1,7 @@
 import { AccentDimensionV1Schema, AccentProfileV1Schema, AccentScoreV1Schema, PracticePromptV1Schema } from 'mockmate-shared';
 import { ACCENT_PROFILES } from '../clearspeak/accentProfiles';
 import { deterministicSyntheticAdapter, REAL_SPEECH_PROVIDER_NOT_AUTHORIZED, unsupportedUserAudioResult } from '../clearspeak/scoringAdapter';
-import { ACCENT_V1_MIMES, accentCatalog, promptFor, rejectClientAuthority, validatePromptSelector } from '../clearspeak/accentV1Service';
+import { ACCENT_V1_MIMES, accentCatalog, projectAccentHistoryAttempt, promptFor, rejectClientAuthority, validatePromptSelector } from '../clearspeak/accentV1Service';
 
 const prompt = PracticePromptV1Schema.parse({
   contractVersion: 'practice-prompt.v1', promptId: '8bb701a7-1901-4ef0-b72f-86b93331ee5e', promptVersion: 1,
@@ -68,5 +68,17 @@ describe('ClearSpeak accent V1 truth and authority', () => {
     expect(score.coaching[0].action).toContain('authorized speech scorer');
     expect(score).toMatchObject({ fixture: false, evidenceProvenance: 'user_recording_unscored', scoringPolicyVersion: 'scoring-unavailable.v1' });
     expect(AccentScoreV1Schema.parse(score)).toEqual(score);
+  });
+
+  it('projects each history row with its actual provenance and evidence status', () => {
+    const result = unsupportedUserAudioResult('10000000-0000-4000-a000-000000000099', prompt);
+    expect(projectAccentHistoryAttempt({ fixture: false, evidence_provenance: 'user_recording_unscored', result })).toMatchObject({
+      fixture: false,
+      evidenceProvenance: 'user_recording_unscored',
+      evidenceStatus: {
+        intelligibility: 'unsupported', pronunciation: 'unsupported', prosody: 'unsupported',
+        fluency: 'unsupported', targetStyle: 'unsupported',
+      },
+    });
   });
 });

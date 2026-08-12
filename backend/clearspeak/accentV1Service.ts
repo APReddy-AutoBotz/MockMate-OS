@@ -32,6 +32,17 @@ export function promptFor(profile: AccentProfileV1, mode: PracticeMode): Practic
 export const accentCatalog = () => ({ contractVersion: 'accent-profile-catalog.v1' as const, profiles: ACCENT_PROFILES,
   practiceModes: Object.keys(fixtures), fixture: true, retention: 'derived-results-only' as const });
 
+export function projectAccentHistoryAttempt(attempt: any) {
+  return {
+    ...attempt,
+    fixture: attempt.fixture,
+    evidenceProvenance: attempt.evidence_provenance,
+    evidenceStatus: Object.fromEntries(Object.entries(attempt.result?.dimensions || {}).map(
+      ([dimension, evidence]: [string, any]) => [dimension, evidence.evidenceStatus],
+    )),
+  };
+}
+
 export function validatePromptSelector(input: any): PracticePromptV1 {
   const profile = getAccentProfile(input?.profileId);
   if (!profile || profile.profileVersion !== input?.profileVersion) throw new Error('stale_or_unknown_profile');
@@ -49,7 +60,9 @@ export function rejectClientAuthority(body: any): void {
   if (!body || typeof body !== 'object' || forbidden.some(k => Object.prototype.hasOwnProperty.call(body, k))) throw new Error('client_authority_rejected');
 }
 
-export async function submitAccentAttempt(userId: string, body: any, audio: Buffer, mimeType: string): Promise<{ score: AccentScoreV1; replayed: boolean }> {
+export async function submitAccentAttempt(userId: string, body: any, audio: Buffer, mimeType: string, signal?: AbortSignal): Promise<{ score: AccentScoreV1; replayed: boolean }> {
+  const assertActive = () => { if (signal?.aborted) throw new Error('submission_canceled'); };
+  assertActive();
   rejectClientAuthority(body);
   // This is a deliberate stop gate, not a provider fallback. V1 must remain
   // unavailable rather than silently invoking legacy/real speech scoring.
@@ -63,6 +76,7 @@ export async function submitAccentAttempt(userId: string, body: any, audio: Buff
   if (body.durationMs > prompt.maxDurationMs) throw new Error('invalid_audio_evidence');
   const requestHash = crypto.createHash('sha256').update(JSON.stringify({ ...body, mimeType: normalizedMimeType, audioHash: crypto.createHash('sha256').update(audio).digest('hex') })).digest('hex');
   const prior = await supabaseAdmin.from('clearspeak_accent_attempts').select('*').eq('user_id', userId).eq('attempt_id', body.attemptId).maybeSingle();
+  assertActive();
   if (prior.error) throw prior.error;
   if (prior.data) {
     if (prior.data.request_hash !== requestHash) throw new Error('idempotency_conflict');
@@ -71,10 +85,12 @@ export async function submitAccentAttempt(userId: string, body: any, audio: Buff
   // Ordinary user bytes are never synthetic evidence. Until a speech scorer is
   // separately authorized, persist only a truthful null-score availability result.
   const score = unsupportedUserAudioResult(body.attemptId, prompt);
+  assertActive();
   const inserted = await supabaseAdmin.from('clearspeak_accent_attempts').insert({ user_id: userId, attempt_id: body.attemptId, request_hash: requestHash,
     prompt_id: prompt.promptId, prompt_version: prompt.promptVersion, prompt_content_hash: prompt.contentHash, profile_id: prompt.profileId,
     profile_version: prompt.profileVersion, reference_set_version: prompt.referenceSetVersion, scoring_policy_version: score.scoringPolicyVersion,
-    scoring_contract_version: score.contractVersion, fixture: score.fixture, dimensions: score.dimensions, coaching: score.coaching,
+    scoring_contract_version: score.contractVersion, evidence_provenance: score.evidenceProvenance,
+    fixture: score.fixture, dimensions: score.dimensions, coaching: score.coaching,
     duration_ms: body.durationMs, mime_type: normalizedMimeType, result: score }).select('*').single();
   // Concurrent identical submissions can both observe no prior row. Resolve a
   // uniqueness race as an idempotent replay, but never accept changed content.
@@ -85,5 +101,11 @@ export async function submitAccentAttempt(userId: string, body: any, audio: Buff
     return { score: raced.data.result, replayed: true };
   }
   if (inserted.error) throw new Error('authoritative_persistence_unavailable');
+  if (signal?.aborted) {
+    // The client explicitly canceled before receiving success. Remove only the
+    // row inserted by this request; never delete an earlier idempotent replay.
+    await supabaseAdmin.from('clearspeak_accent_attempts').delete().eq('user_id', userId).eq('attempt_id', body.attemptId).eq('request_hash', requestHash);
+    throw new Error('submission_canceled');
+  }
   return { score, replayed: false };
 }

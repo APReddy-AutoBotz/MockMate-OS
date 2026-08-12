@@ -36,7 +36,7 @@ import { getSnapshotById } from '../services/groundingSnapshotService';
 import crypto from 'crypto';
 import { canonicalJsonValue, hashArtifactContent } from './artifactAuthority';
 import { ACCENT_PROFILES } from './accentProfiles';
-import { accentCatalog, promptFor, rejectClientAuthority, submitAccentAttempt } from './accentV1Service';
+import { accentCatalog, projectAccentHistoryAttempt, promptFor, rejectClientAuthority, submitAccentAttempt } from './accentV1Service';
 import { getAccentProfile } from './accentProfiles';
 
 const router = Router();
@@ -193,13 +193,17 @@ router.post('/v1/accent/prompts', (req, res) => {
 });
 
 router.post('/v1/accent/attempts', upload.single('audio'), handleMulterError, async (req, res) => {
+  const requestController = new AbortController();
+  const cancelDisconnectedRequest = () => requestController.abort();
+  req.once('aborted', cancelDisconnectedRequest);
+  res.once('close', cancelDisconnectedRequest);
   try {
     const userId = (req as any).user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
     if (!req.file || req.file.size > 5 * 1024 * 1024) return res.status(413).json({ error: 'Audio must be non-empty and no larger than 5 MB' });
     let metadata: any;
     try { metadata = JSON.parse(String(req.body.metadata || '')); } catch { return res.status(400).json({ error: 'Malformed attempt metadata' }); }
-    const result = await submitAccentAttempt(userId, metadata, req.file.buffer, req.file.mimetype);
+    const result = await submitAccentAttempt(userId, metadata, req.file.buffer, req.file.mimetype, requestController.signal);
     return res.status(result.replayed ? 200 : 201).json({ ...result, adapter: 'scoring-unavailable-v1', retention: 'derived-results-only' });
   } catch (error: any) {
     const status = error.message === 'idempotency_conflict' ? 409 : error.message === 'authoritative_persistence_unavailable' ? 503 : 422;
@@ -209,6 +213,7 @@ router.post('/v1/accent/attempts', upload.single('audio'), handleMulterError, as
     // Memory-storage buffers are ephemeral evidence. Wipe them for every exit,
     // including malformed metadata, validation returns, success and exceptions.
     wipeUploadedAudio(req);
+    req.off('aborted', cancelDisconnectedRequest);
   }
 });
 
@@ -216,9 +221,10 @@ router.get('/v1/accent/attempts', async (req, res) => {
   const userId = (req as any).user?.uid;
   if (!supabaseAdmin) return res.status(503).json({ error: 'Authoritative persistence unavailable' });
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
-  const { data, error } = await supabaseAdmin.from('clearspeak_accent_attempts').select('attempt_id,result,duration_ms,mime_type,created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(limit);
+  const { data, error } = await supabaseAdmin.from('clearspeak_accent_attempts').select('attempt_id,result,fixture,evidence_provenance,duration_ms,mime_type,created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(limit);
   if (error) return res.status(500).json({ error: 'History unavailable' });
-  return res.json({ attempts: data || [], fixture: true });
+  const attempts = (data || []).map(projectAccentHistoryAttempt);
+  return res.json({ attempts, retention: 'derived-results-only' });
 });
 
 router.delete('/v1/accent/attempts/:attemptId', async (req, res) => {
