@@ -1000,16 +1000,45 @@ async function runRuntimeVerification() {
     const replay=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}') result`)).rows[0].result;
     const conflict=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashB}','${capabilityB}') result`)).rows[0].result;
     if(replay.status!=='committed'||conflict.status!=='conflict') throw new Error('ClearSpeak replay/conflict lifecycle failed');
-    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${committedId}')`);
-    const deletedLifecycle=await client.query(`select 1 from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${committedId}'`);
-    const deletedAttempt=await client.query(`select 1 from public.clearspeak_accent_attempts where user_id='${userA}' and attempt_id='${committedId}'`);
-    if(deletedLifecycle.rowCount||deletedAttempt.rowCount) throw new Error('ClearSpeak transactional deletion left lifecycle or result identity');
-    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${cancelledId}')`);
+
+    // Runtime application authority ends at the SECURITY DEFINER RPC boundary.
+    // Prove owner/foreign RLS and denied browser mutations independently from
+    // the trusted owner session used for physical postcondition inspection.
+    await resetRole(client);
+    await setRole(client,'authenticated',userA);
+    const ownerLifecycle=await client.query(`select attempt_id,status from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' order by attempt_id`);
+    if(ownerLifecycle.rows.length!==2) throw new Error('ClearSpeak lifecycle owner could not read their rows');
     await resetRole(client);
     await setRole(client,'authenticated',userB);
     const foreignLifecycle=await client.query(`select * from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}'`);
     await resetRole(client);
     if(foreignLifecycle.rows.length) throw new Error('ClearSpeak lifecycle RLS exposed another user');
+    for (const statement of [
+      `insert into public.clearspeak_accent_attempt_lifecycle(user_id,attempt_id,status) values('${userA}','aaaaaaaa-0000-4000-a000-000000000098','pending')`,
+      `update public.clearspeak_accent_attempt_lifecycle set status='cancelled' where user_id='${userA}' and attempt_id='${cancelledId}'`,
+      `delete from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${cancelledId}'`,
+    ]) {
+      try {
+        await setRole(client,'authenticated',userA);
+        await client.query(statement);
+        throw new Error('Authenticated direct lifecycle mutation succeeded');
+      } catch (error) {
+        await resetRole(client);
+        if (!error.message.includes('permission denied') && !error.message.includes('violates row-level security policy')) throw error;
+      }
+    }
+
+    await setRole(client, 'service_role');
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${committedId}')`);
+    await resetRole(client);
+    // Physical deletion is an internal database invariant, not service-role
+    // read authority. Inspect it only as the disposable database owner.
+    const deletedLifecycle=await client.query(`select 1 from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${committedId}'`);
+    const deletedAttempt=await client.query(`select 1 from public.clearspeak_accent_attempts where user_id='${userA}' and attempt_id='${committedId}'`);
+    if(deletedLifecycle.rowCount||deletedAttempt.rowCount) throw new Error('ClearSpeak transactional deletion left lifecycle or result identity');
+    await setRole(client, 'service_role');
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${cancelledId}')`);
+    await resetRole(client);
     console.log('  ✓ Supplemental ClearSpeak cancel/commit/replay/conflict/RLS assertions passed');
 
     // 41. protected_account_deletion
@@ -1025,13 +1054,15 @@ async function runRuntimeVerification() {
     const orphanBridges = await client.query(`SELECT count(*) FROM public.career_context_bridges WHERE user_id = '${userA}'`);
     const orphanState = await client.query(`SELECT count(*) FROM public.career_context_state WHERE user_id = '${userA}'`);
     const orphanAccentLifecycle = await client.query(`SELECT count(*) FROM public.clearspeak_accent_attempt_lifecycle WHERE user_id = '${userA}'`);
+    const orphanAccentAttempts = await client.query(`SELECT count(*) FROM public.clearspeak_accent_attempts WHERE user_id = '${userA}'`);
 
     if (
       Number(orphanItems.rows[0].count) !== 0 ||
       Number(orphanSnaps.rows[0].count) !== 0 ||
       Number(orphanBridges.rows[0].count) !== 0 ||
       Number(orphanState.rows[0].count) !== 0 ||
-      Number(orphanAccentLifecycle.rows[0].count) !== 0
+      Number(orphanAccentLifecycle.rows[0].count) !== 0 ||
+      Number(orphanAccentAttempts.rows[0].count) !== 0
     ) {
       throw new Error('Account deletion left orphan rows for User A!');
     }
