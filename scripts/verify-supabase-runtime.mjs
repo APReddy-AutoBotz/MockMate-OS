@@ -992,7 +992,12 @@ async function runRuntimeVerification() {
     const recovered=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${rotatedCapability}',${expiry},'${selectorA}') result`)).rows[0].result;
     const changedSelector=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${capabilityA}',${expiry},'${selectorB}') result`)).rows[0].result;
     const staleCapability=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${capabilityA}') result`)).rows[0].result;
+    await resetRole(client);
+    // Cardinality is a physical invariant, not runtime application authority.
+    // Inspect it only as the trusted disposable database owner, then restore
+    // service_role before continuing through the sanctioned lifecycle RPCs.
     const lifecycleRows=(await client.query(`select count(*)::int count from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${cancelledId}'`)).rows[0].count;
+    await setRole(client, 'service_role');
     if(recovered.status!=='pending'||changedSelector.status!=='conflict'||staleCapability.status!=='missing'||lifecycleRows!==1) throw new Error('ClearSpeak authority response-loss recovery failed');
     const firstCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
     const duplicateCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
