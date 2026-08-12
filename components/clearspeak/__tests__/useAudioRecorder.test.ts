@@ -87,4 +87,21 @@ describe('useAudioRecorder capture ownership', () => {
     act(() => result.current.stopRecording());
     expect(stop).toHaveBeenCalledTimes(1);
   });
+
+  it('treats device loss as terminal and releases every media reference', async () => {
+    const microphoneTrack = track();
+    let recorder!: RecorderMock;
+    class CapturedRecorder extends RecorderMock { constructor(value: MediaStream) { super(value); recorder = this; } }
+    (global as any).MediaRecorder = CapturedRecorder;
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: jest.fn().mockResolvedValue(stream(microphoneTrack)) } });
+    const { result } = renderHook(() => useAudioRecorder());
+    await act(async () => { await result.current.startRecording(); });
+    act(() => microphoneTrack.onended?.());
+    expect(result.current.state).toBe('device_lost');
+    expect(result.current.audioBlob).toBeNull();
+    expect(microphoneTrack.stop).toHaveBeenCalledTimes(1);
+    expect(recorder.ondataavailable).toBeNull();
+    expect(recorder.onstop).toBeNull();
+    expect(recorder.onerror).toBeNull();
+  });
 });

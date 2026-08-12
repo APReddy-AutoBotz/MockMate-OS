@@ -227,7 +227,7 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
 
   // ── Safeguard: Catch async recorder errors after phase transitions ──
   useEffect(() => {
-    if ((state.phase === 'recording' || state.phase === 'retry') && recorder.state === 'error') {
+    if ((state.phase === 'recording' || state.phase === 'retry') && ['error', 'device_lost', 'permission_revoked'].includes(recorder.state)) {
       dispatch({ type: 'ERROR', message: recorder.errorMessage || 'Recording failed. Please check microphone permissions.' });
     }
   }, [state.phase, recorder.state, recorder.errorMessage]);

@@ -60,9 +60,33 @@ export function rejectClientAuthority(body: any): void {
   if (!body || typeof body !== 'object' || forbidden.some(k => Object.prototype.hasOwnProperty.call(body, k))) throw new Error('client_authority_rejected');
 }
 
-export async function submitAccentAttempt(userId: string, body: any, audio: Buffer, mimeType: string, signal?: AbortSignal): Promise<{ score: AccentScoreV1; replayed: boolean }> {
-  const assertActive = () => { if (signal?.aborted) throw new Error('submission_canceled'); };
-  assertActive();
+type AttemptDisposition = { status: 'pending' | 'cancelled' | 'committed' | 'conflict' | 'missing'; requestHash?: string; result?: AccentScoreV1; replayed?: boolean };
+
+async function lifecycleRpc(name: string, args: Record<string, unknown>): Promise<AttemptDisposition> {
+  if (!supabaseAdmin) throw new Error('authoritative_persistence_unavailable');
+  const { data, error } = await supabaseAdmin.rpc(name, args);
+  if (error || !data) throw new Error('authoritative_persistence_unavailable');
+  return data as AttemptDisposition;
+}
+
+export async function cancelAccentAttempt(userId: string, attemptId: string): Promise<AttemptDisposition> {
+  if (!/^[0-9a-f-]{36}$/i.test(attemptId)) throw new Error('invalid_attempt_id');
+  return lifecycleRpc('cancel_clearspeak_accent_attempt', { p_user_id: userId, p_attempt_id: attemptId });
+}
+
+export async function getAccentAttemptStatus(userId: string, attemptId: string): Promise<AttemptDisposition> {
+  if (!supabaseAdmin) throw new Error('authoritative_persistence_unavailable');
+  if (!/^[0-9a-f-]{36}$/i.test(attemptId)) throw new Error('invalid_attempt_id');
+  const lifecycle = await supabaseAdmin.from('clearspeak_accent_attempt_lifecycle').select('status,request_hash').eq('user_id', userId).eq('attempt_id', attemptId).maybeSingle();
+  if (lifecycle.error) throw new Error('authoritative_persistence_unavailable');
+  if (!lifecycle.data) return { status: 'missing' };
+  if (lifecycle.data.status !== 'committed') return { status: lifecycle.data.status as AttemptDisposition['status'], requestHash: lifecycle.data.request_hash };
+  const attempt = await supabaseAdmin.from('clearspeak_accent_attempts').select('result').eq('user_id', userId).eq('attempt_id', attemptId).maybeSingle();
+  if (attempt.error || !attempt.data) throw new Error('authoritative_persistence_unavailable');
+  return { status: 'committed', requestHash: lifecycle.data.request_hash, result: attempt.data.result };
+}
+
+export async function submitAccentAttempt(userId: string, body: any, audio: Buffer, mimeType: string): Promise<{ score: AccentScoreV1; replayed: boolean; requestHash: string }> {
   rejectClientAuthority(body);
   // This is a deliberate stop gate, not a provider fallback. V1 must remain
   // unavailable rather than silently invoking legacy/real speech scoring.
@@ -76,36 +100,30 @@ export async function submitAccentAttempt(userId: string, body: any, audio: Buff
   if (body.durationMs > prompt.maxDurationMs) throw new Error('invalid_audio_evidence');
   const requestHash = crypto.createHash('sha256').update(JSON.stringify({ ...body, mimeType: normalizedMimeType, audioHash: crypto.createHash('sha256').update(audio).digest('hex') })).digest('hex');
   const prior = await supabaseAdmin.from('clearspeak_accent_attempts').select('*').eq('user_id', userId).eq('attempt_id', body.attemptId).maybeSingle();
-  assertActive();
   if (prior.error) throw prior.error;
   if (prior.data) {
     if (prior.data.request_hash !== requestHash) throw new Error('idempotency_conflict');
-    return { score: prior.data.result, replayed: true };
+    return { score: prior.data.result, replayed: true, requestHash };
   }
   // Ordinary user bytes are never synthetic evidence. Until a speech scorer is
   // separately authorized, persist only a truthful null-score availability result.
   const score = unsupportedUserAudioResult(body.attemptId, prompt);
-  assertActive();
-  const inserted = await supabaseAdmin.from('clearspeak_accent_attempts').insert({ user_id: userId, attempt_id: body.attemptId, request_hash: requestHash,
-    prompt_id: prompt.promptId, prompt_version: prompt.promptVersion, prompt_content_hash: prompt.contentHash, profile_id: prompt.profileId,
-    profile_version: prompt.profileVersion, reference_set_version: prompt.referenceSetVersion, scoring_policy_version: score.scoringPolicyVersion,
-    scoring_contract_version: score.contractVersion, evidence_provenance: score.evidenceProvenance,
-    fixture: score.fixture, dimensions: score.dimensions, coaching: score.coaching,
-    duration_ms: body.durationMs, mime_type: normalizedMimeType, result: score }).select('*').single();
-  // Concurrent identical submissions can both observe no prior row. Resolve a
-  // uniqueness race as an idempotent replay, but never accept changed content.
-  if (inserted.error && inserted.error.code === '23505') {
-    const raced = await supabaseAdmin.from('clearspeak_accent_attempts').select('request_hash,result').eq('user_id', userId).eq('attempt_id', body.attemptId).maybeSingle();
-    if (raced.error || !raced.data) throw new Error('authoritative_persistence_unavailable');
-    if (raced.data.request_hash !== requestHash) throw new Error('idempotency_conflict');
-    return { score: raced.data.result, replayed: true };
+  const reserved = await lifecycleRpc('reserve_clearspeak_accent_attempt', { p_user_id: userId, p_attempt_id: body.attemptId, p_request_hash: requestHash });
+  if (reserved.status === 'conflict') throw new Error('idempotency_conflict');
+  if (reserved.status === 'cancelled') throw new Error('submission_canceled');
+  if (reserved.status === 'committed') {
+    const status = await getAccentAttemptStatus(userId, body.attemptId);
+    if (!status.result) throw new Error('authoritative_persistence_unavailable');
+    return { score: status.result, replayed: true, requestHash };
   }
-  if (inserted.error) throw new Error('authoritative_persistence_unavailable');
-  if (signal?.aborted) {
-    // The client explicitly canceled before receiving success. Remove only the
-    // row inserted by this request; never delete an earlier idempotent replay.
-    await supabaseAdmin.from('clearspeak_accent_attempts').delete().eq('user_id', userId).eq('attempt_id', body.attemptId).eq('request_hash', requestHash);
-    throw new Error('submission_canceled');
-  }
-  return { score, replayed: false };
+  const committed = await lifecycleRpc('commit_clearspeak_accent_attempt', { p_user_id: userId, p_attempt_id: body.attemptId, p_request_hash: requestHash,
+    p_attempt: { prompt_id: prompt.promptId, prompt_version: prompt.promptVersion, prompt_content_hash: prompt.contentHash,
+      profile_id: prompt.profileId, profile_version: prompt.profileVersion, reference_set_version: prompt.referenceSetVersion,
+      scoring_policy_version: score.scoringPolicyVersion, scoring_contract_version: score.contractVersion,
+      evidence_provenance: score.evidenceProvenance, fixture: score.fixture, dimensions: score.dimensions, coaching: score.coaching,
+      duration_ms: body.durationMs, mime_type: normalizedMimeType, result: score } });
+  if (committed.status === 'cancelled') throw new Error('submission_canceled');
+  if (committed.status === 'conflict') throw new Error('idempotency_conflict');
+  if (committed.status !== 'committed' || !committed.result) throw new Error('authoritative_persistence_unavailable');
+  return { score: committed.result, replayed: Boolean(committed.replayed), requestHash };
 }

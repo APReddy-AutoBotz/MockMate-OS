@@ -88,7 +88,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
         throw new Error('Microphone request was canceled.');
       }
       streamRef.current = stream;
-      stream.getAudioTracks().forEach(track => { track.onended = () => { if (generation !== generationRef.current) return; releaseRecorder(); setState('device_lost'); setErrorMessage('Microphone access was revoked or the device was disconnected.'); }; });
+      stream.getAudioTracks().forEach(track => { track.onended = () => { if (generation !== generationRef.current) return; releaseRecorder(); setAudioBlob(null); setDurationMs(0); setState('device_lost'); setErrorMessage('Microphone access was revoked or the device was disconnected. Please reconnect it and retry.'); }; });
 
       const mimeType = PREFERRED_MIME_TYPES.find(t => MediaRecorder.isTypeSupported(t)) ?? '';
 

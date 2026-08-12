@@ -966,6 +966,39 @@ async function runRuntimeVerification() {
     if (policyStages.rows.length!==policyModes.length || policyStages.rows.some(row=>{ const policy=policyModes.find(([mode,,difficulty])=>mode===row.mode && difficulty===(row.adaptive_policy.maxTurns===10?'expert':'intermediate')); return !policy || row.current_stage!==policy[1] || Number(row.adaptive_policy.maxTurns)!==policy[3] || Number(row.adaptive_policy.maxProbesPerRoot)!==1 || Number(row.adaptive_policy.maxChallenges)!==2 || row.adaptive_policy.requireReflection!==true; })) throw new Error('Atomic grounded session initialization did not persist the selected reasoning-mode stage and canonical adaptive policy');
     console.log('  ✓ Supplemental reasoning-mode initial-stage assertions passed');
 
+    // ClearSpeak lifecycle: these are executable transaction/RLS assertions,
+    // not migration-string checks.
+    await setRole(client, 'service_role');
+    const lifecyclePayload = JSON.stringify({
+      prompt_id:'10000000-0000-4000-a000-000000000001',prompt_version:1,prompt_content_hash:'a'.repeat(64),
+      profile_id:'en-GB-general-v1',profile_version:1,reference_set_version:'uk-general-reference.v1',
+      scoring_policy_version:'scoring-unavailable.v1',scoring_contract_version:'accent-score.v1',
+      evidence_provenance:'user_recording_unscored',fixture:false,duration_ms:1000,mime_type:'audio/webm',coaching:[],
+      dimensions:{intelligibility:{score:null},pronunciation:{score:null},prosody:{score:null},fluency:{score:null},targetStyle:{score:null}},
+      result:{contractVersion:'accent-score.v1',evidenceProvenance:'user_recording_unscored',scoringPolicyVersion:'scoring-unavailable.v1',fixture:false,
+        dimensions:{intelligibility:{score:null},pronunciation:{score:null},prosody:{score:null},fluency:{score:null},targetStyle:{score:null}}},
+    }).replaceAll("'", "''");
+    const cancelledId='aaaaaaaa-0000-4000-a000-000000000001';
+    const committedId='aaaaaaaa-0000-4000-a000-000000000002';
+    const hashA='a'.repeat(64), hashB='b'.repeat(64);
+    await client.query(`select public.cancel_clearspeak_accent_attempt('${userA}','${cancelledId}')`);
+    await client.query(`select public.reserve_clearspeak_accent_attempt('${userA}','${cancelledId}','${hashA}')`);
+    const cancelWins=(await client.query(`select public.commit_clearspeak_accent_attempt('${userA}','${cancelledId}','${hashA}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
+    if(cancelWins.status!=='cancelled') throw new Error('ClearSpeak cancel-before-commit did not win atomically');
+    await client.query(`select public.reserve_clearspeak_accent_attempt('${userA}','${committedId}','${hashA}')`);
+    const commitWins=(await client.query(`select public.commit_clearspeak_accent_attempt('${userA}','${committedId}','${hashA}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
+    const cancelAfter=(await client.query(`select public.cancel_clearspeak_accent_attempt('${userA}','${committedId}') result`)).rows[0].result;
+    if(commitWins.status!=='committed'||cancelAfter.status!=='committed'||!cancelAfter.result) throw new Error('ClearSpeak commit-before-cancel outcome was not authoritative');
+    const replay=(await client.query(`select public.reserve_clearspeak_accent_attempt('${userA}','${committedId}','${hashA}') result`)).rows[0].result;
+    const conflict=(await client.query(`select public.reserve_clearspeak_accent_attempt('${userA}','${committedId}','${hashB}') result`)).rows[0].result;
+    if(replay.status!=='committed'||conflict.status!=='conflict') throw new Error('ClearSpeak replay/conflict lifecycle failed');
+    await resetRole(client);
+    await setRole(client,'authenticated',userB);
+    const foreignLifecycle=await client.query(`select * from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}'`);
+    await resetRole(client);
+    if(foreignLifecycle.rows.length) throw new Error('ClearSpeak lifecycle RLS exposed another user');
+    console.log('  ✓ Supplemental ClearSpeak cancel/commit/replay/conflict/RLS assertions passed');
+
     // 41. protected_account_deletion
     await setRole(client, 'service_role');
     await client.query(`SELECT public.delete_user_career_context('${userA}'::uuid);`);
@@ -978,12 +1011,14 @@ async function runRuntimeVerification() {
     const orphanSnaps = await client.query(`SELECT count(*) FROM public.career_context_snapshots WHERE user_id = '${userA}'`);
     const orphanBridges = await client.query(`SELECT count(*) FROM public.career_context_bridges WHERE user_id = '${userA}'`);
     const orphanState = await client.query(`SELECT count(*) FROM public.career_context_state WHERE user_id = '${userA}'`);
+    const orphanAccentLifecycle = await client.query(`SELECT count(*) FROM public.clearspeak_accent_attempt_lifecycle WHERE user_id = '${userA}'`);
 
     if (
       Number(orphanItems.rows[0].count) !== 0 ||
       Number(orphanSnaps.rows[0].count) !== 0 ||
       Number(orphanBridges.rows[0].count) !== 0 ||
-      Number(orphanState.rows[0].count) !== 0
+      Number(orphanState.rows[0].count) !== 0 ||
+      Number(orphanAccentLifecycle.rows[0].count) !== 0
     ) {
       throw new Error('Account deletion left orphan rows for User A!');
     }
