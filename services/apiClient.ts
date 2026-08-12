@@ -138,6 +138,25 @@ async function requestRaw(
   return response.arrayBuffer();
 }
 
+async function requestVoid(endpoint: string, options: RequestOptions = {}): Promise<void> {
+  const { requireAuth = true, params, headers: customHeaders, ...fetchOptions } = options;
+  let url = `${getApiBase()}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
+  if (params) { const query = new URLSearchParams(params).toString(); if (query) url += `?${query}`; }
+  const headers = new Headers(customHeaders as any);
+  if (requireAuth) {
+    const token = await getAuthToken();
+    if (!token) throw new ApiError(401, 'UNAUTHORIZED', 'Authentication required');
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  try {
+    const response = await fetch(url, { ...fetchOptions, headers });
+    if (!response.ok) throw new ApiError(response.status, 'HTTP_ERROR', `Request failed with status ${response.status}`);
+  } catch (err: any) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError(500, 'NETWORK_ERROR', err.message || 'Network request failed');
+  }
+}
+
 export const apiClient = {
   get<T>(endpoint: string, schema: z.ZodType<T, any, any>, options?: RequestOptions): Promise<T> {
     return request<T>(endpoint, schema, { ...options, method: 'GET' });
@@ -161,6 +180,10 @@ export const apiClient = {
 
   delete<T>(endpoint: string, schema: z.ZodType<T, any, any>, options?: RequestOptions): Promise<T> {
     return request<T>(endpoint, schema, { ...options, method: 'DELETE' });
+  },
+
+  deleteVoid(endpoint: string, options?: RequestOptions): Promise<void> {
+    return requestVoid(endpoint, { ...options, method: 'DELETE' });
   },
 
   getRaw(endpoint: string, options?: RequestOptions): Promise<ArrayBuffer> {
