@@ -23,6 +23,7 @@ describe('ClearSpeak accent V1 truth and authority', () => {
     const second = AccentScoreV1Schema.parse(await deterministicSyntheticAdapter.score(request));
     expect(first).toEqual(second);
     expect(first.fixture).toBe(true);
+    expect(first.evidenceProvenance).toBe('synthetic_fixture_scored');
     expect(first.dimensions.targetStyle).not.toBe(first.dimensions.intelligibility);
     expect(REAL_SPEECH_PROVIDER_NOT_AUTHORIZED).toBe(true);
   });
@@ -65,6 +66,7 @@ describe('ClearSpeak accent V1 truth and authority', () => {
       expect(dimension).toMatchObject({ score: null, confidence: 0, evidenceStatus: 'unsupported' });
     }
     expect(score.coaching[0].action).toContain('authorized speech scorer');
+    expect(score).toMatchObject({ fixture: false, evidenceProvenance: 'user_recording_unscored', scoringPolicyVersion: 'scoring-unavailable.v1' });
     expect(AccentScoreV1Schema.parse(score)).toEqual(score);
   });
 });

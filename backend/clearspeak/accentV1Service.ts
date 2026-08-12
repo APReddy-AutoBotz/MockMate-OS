@@ -74,7 +74,7 @@ export async function submitAccentAttempt(userId: string, body: any, audio: Buff
   const inserted = await supabaseAdmin.from('clearspeak_accent_attempts').insert({ user_id: userId, attempt_id: body.attemptId, request_hash: requestHash,
     prompt_id: prompt.promptId, prompt_version: prompt.promptVersion, prompt_content_hash: prompt.contentHash, profile_id: prompt.profileId,
     profile_version: prompt.profileVersion, reference_set_version: prompt.referenceSetVersion, scoring_policy_version: score.scoringPolicyVersion,
-    scoring_contract_version: score.contractVersion, fixture: true, dimensions: score.dimensions, coaching: score.coaching,
+    scoring_contract_version: score.contractVersion, fixture: score.fixture, dimensions: score.dimensions, coaching: score.coaching,
     duration_ms: body.durationMs, mime_type: normalizedMimeType, result: score }).select('*').single();
   // Concurrent identical submissions can both observe no prior row. Resolve a
   // uniqueness race as an idempotent replay, but never accept changed content.

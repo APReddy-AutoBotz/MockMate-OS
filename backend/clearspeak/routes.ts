@@ -95,8 +95,25 @@ const betaAccessLimiter   = csRateLimit(30,  60_000);  // 30 / min / IP
 //     ✓ HardWordsLedger (failed/resolved words)
 //   Never stored: raw audio binary, audio metadata, Whisper transcript text.
 
+const memoryStorage = multer.memoryStorage();
+const ephemeralMemoryStorage: multer.StorageEngine = {
+  _handleFile: memoryStorage._handleFile.bind(memoryStorage),
+  _removeFile(req, file, cb) {
+    const buffer = (file as Express.Multer.File).buffer;
+    if (Buffer.isBuffer(buffer)) buffer.fill(0);
+    memoryStorage._removeFile(req, file, cb);
+  },
+};
+
+function wipeUploadedAudio(req: Request): void {
+  if (Buffer.isBuffer(req.file?.buffer)) req.file.buffer.fill(0);
+  const files = req.files;
+  if (Array.isArray(files)) files.forEach(file => file.buffer?.fill(0));
+  else if (files) Object.values(files).flat().forEach(file => file.buffer?.fill(0));
+}
+
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: ephemeralMemoryStorage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB — max ~5 min WebM/Opus
   fileFilter: (_req, file, cb) => {
     //
@@ -138,10 +155,11 @@ const upload = multer({
  */
 function handleMulterError(
   err: any,
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction,
 ): void {
+  wipeUploadedAudio(req);
   if (err instanceof MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
       res.status(413).json({ error: 'Audio file exceeds the 10 MB limit. Please record a shorter clip.' });
@@ -182,7 +200,7 @@ router.post('/v1/accent/attempts', upload.single('audio'), handleMulterError, as
     let metadata: any;
     try { metadata = JSON.parse(String(req.body.metadata || '')); } catch { return res.status(400).json({ error: 'Malformed attempt metadata' }); }
     const result = await submitAccentAttempt(userId, metadata, req.file.buffer, req.file.mimetype);
-    return res.status(result.replayed ? 200 : 201).json({ ...result, adapter: 'deterministic-synthetic-v1', retention: 'derived-results-only' });
+    return res.status(result.replayed ? 200 : 201).json({ ...result, adapter: 'scoring-unavailable-v1', retention: 'derived-results-only' });
   } catch (error: any) {
     const status = error.message === 'idempotency_conflict' ? 409 : error.message === 'authoritative_persistence_unavailable' ? 503 : 422;
     const publicErrors = new Set(['idempotency_conflict', 'authoritative_persistence_unavailable', 'unsupported_audio_type', 'invalid_audio_evidence', 'invalid_attempt_id', 'stale_or_unknown_profile', 'unsupported_practice_mode', 'stale_or_mismatched_server_selector', 'client_authority_rejected', 'real_speech_provider_not_authorized']);
@@ -190,7 +208,7 @@ router.post('/v1/accent/attempts', upload.single('audio'), handleMulterError, as
   } finally {
     // Memory-storage buffers are ephemeral evidence. Wipe them for every exit,
     // including malformed metadata, validation returns, success and exceptions.
-    req.file?.buffer?.fill(0);
+    wipeUploadedAudio(req);
   }
 });
 

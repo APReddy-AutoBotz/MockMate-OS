@@ -46,12 +46,15 @@ export function useAudioRecorder(): UseAudioRecorderResult {
 
   const releaseRecorder = useCallback(() => {
     generationRef.current += 1;
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.onstop = null;
-      if (mediaRecorderRef.current.state === 'recording') mediaRecorderRef.current.stop();
-    }
+    const recorder = mediaRecorderRef.current;
     mediaRecorderRef.current = null;
-    streamRef.current?.getTracks().forEach(track => track.stop());
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      recorder.onerror = null;
+      if (recorder.state === 'recording') recorder.stop();
+    }
+    streamRef.current?.getTracks().forEach(track => { track.onended = null; track.stop(); });
     streamRef.current = null;
     chunksRef.current = [];
   }, []);
@@ -80,11 +83,13 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
+        if (generation === generationRef.current && e.data.size > 0) chunksRef.current.push(e.data);
       };
 
       recorder.onstop = () => {
+        if (generation !== generationRef.current) return;
         const blob = new Blob(chunksRef.current, { type: mimeType || 'audio/webm' });
+        chunksRef.current = [];
         setAudioBlob(blob);
         setDurationMs(Date.now() - startTimeRef.current);
         setState('preview_ready');
@@ -95,6 +100,8 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       };
 
       recorder.onerror = () => {
+        if (generation !== generationRef.current) return;
+        releaseRecorder();
         setState('error');
         setErrorMessage('Recording failed. Please check microphone permissions.');
         streamRef.current?.getTracks().forEach(t => t.stop());
@@ -105,6 +112,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       setState('recording');
     } catch (err: any) {
       if (generation !== generationRef.current) throw err;
+      releaseRecorder();
       setState(err?.name === 'NotAllowedError' ? 'permission_denied' : err?.name === 'NotFoundError' ? 'device_lost' : 'error');
       const msg = err?.name === 'NotAllowedError'
           ? 'Microphone access denied. Please allow microphone in your browser settings.'

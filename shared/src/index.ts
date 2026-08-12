@@ -1702,7 +1702,8 @@ export const AccentScoreV1Schema = z.object({
   profileVersion: z.literal(1),
   referenceSetVersion: z.string().min(1).max(80),
   scoringPolicyVersion: z.string().min(1).max(80),
-  fixture: z.literal(true),
+  evidenceProvenance: z.enum(['synthetic_fixture_scored', 'user_recording_unscored']),
+  fixture: z.boolean(),
   dimensions: z.object({
     intelligibility: AccentDimensionV1Schema,
     pronunciation: AccentDimensionV1Schema,
@@ -1715,8 +1716,16 @@ export const AccentScoreV1Schema = z.object({
     dimension: z.enum(['intelligibility', 'pronunciation', 'prosody', 'fluency', 'targetStyle']),
     action: z.string().min(1).max(400),
   }).strict()).max(3),
-  disclaimer: z.literal('Synthetic scoring validates product behavior only; it is not real pronunciation validation.'),
-}).strict();
+  disclaimer: z.string().min(1).max(400),
+}).strict().superRefine((value, ctx) => {
+  if (value.evidenceProvenance === 'user_recording_unscored') {
+    if (value.fixture || value.scoringPolicyVersion !== 'scoring-unavailable.v1') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['fixture'], message: 'User recordings cannot be synthetic fixtures' });
+    for (const [name, dimension] of Object.entries(value.dimensions)) {
+      if (dimension.score !== null || dimension.evidenceStatus !== 'unsupported') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['dimensions', name], message: 'Unscored user recordings require unsupported null dimensions' });
+    }
+  }
+  if (value.evidenceProvenance === 'synthetic_fixture_scored' && !value.fixture) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['fixture'], message: 'Synthetic scored evidence must be a fixture' });
+});
 export type AccentScoreV1 = z.infer<typeof AccentScoreV1Schema>;
 
 export const BridgeTriggerStateSchema = z.object({

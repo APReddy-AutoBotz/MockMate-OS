@@ -33,7 +33,7 @@ export const deterministicSyntheticAdapter: AccentScoringAdapter = {
       resultId: deterministicUuid(attemptId),
       promptId: prompt.promptId, promptVersion: prompt.promptVersion, promptContentHash: prompt.contentHash,
       profileId: prompt.profileId, profileVersion: 1, referenceSetVersion: prompt.referenceSetVersion,
-      scoringPolicyVersion: 'synthetic-policy.v1', fixture: true,
+      scoringPolicyVersion: 'synthetic-policy.v1', evidenceProvenance: 'synthetic_fixture_scored', fixture: true,
       dimensions: {
         intelligibility: dimension(base + 4, 'Words were distinguishable in this deterministic fixture.'),
         pronunciation: dimension(base, 'Repeat the displayed target with deliberate consonant endings.'),
@@ -59,7 +59,7 @@ export function unsupportedUserAudioResult(attemptId: string, prompt: PracticePr
     resultId: deterministicUuid(`unsupported:${attemptId}`),
     promptId: prompt.promptId, promptVersion: prompt.promptVersion, promptContentHash: prompt.contentHash,
     profileId: prompt.profileId, profileVersion: 1, referenceSetVersion: prompt.referenceSetVersion,
-    scoringPolicyVersion: 'synthetic-policy.v1', fixture: true,
+    scoringPolicyVersion: 'scoring-unavailable.v1', evidenceProvenance: 'user_recording_unscored', fixture: false,
     dimensions: {
       intelligibility: unsupportedDimension(unavailable),
       pronunciation: unsupportedDimension(unavailable),
@@ -68,6 +68,6 @@ export function unsupportedUserAudioResult(attemptId: string, prompt: PracticePr
       targetStyle: unsupportedDimension(unavailable),
     },
     coaching: [{ rank: 1, dimension: 'pronunciation', action: 'Try again when an authorized speech scorer is available; your recording was not retained.' }],
-    disclaimer: 'Synthetic scoring validates product behavior only; it is not real pronunciation validation.',
+    disclaimer: 'This user recording was not scored or retained because no authorized speech scorer is available.',
   };
 }
