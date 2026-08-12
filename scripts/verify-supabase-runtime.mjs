@@ -980,23 +980,37 @@ async function runRuntimeVerification() {
     }).replaceAll("'", "''");
     const cancelledId='aaaaaaaa-0000-4000-a000-000000000001';
     const committedId='aaaaaaaa-0000-4000-a000-000000000002';
-    const hashA='a'.repeat(64), hashB='b'.repeat(64);
-    const capabilityA='c'.repeat(64), capabilityB='d'.repeat(64);
+    const hashA='a'.repeat(64), hashB='b'.repeat(64), selectorA='e'.repeat(64), selectorB='f'.repeat(64);
+    const capabilityA='c'.repeat(64), capabilityB='d'.repeat(64), rotatedCapability='1'.repeat(64);
     const expiry=`now()+interval '5 minutes'`;
     const arbitraryCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','aaaaaaaa-0000-4000-a000-000000000099','${capabilityA}') result`)).rows[0].result;
     if(arbitraryCancel.status!=='missing') throw new Error('Arbitrary cancellation UUID minted a lifecycle tombstone');
-    await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${capabilityA}',${expiry})`);
-    const firstCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${capabilityA}') result`)).rows[0].result;
-    const duplicateCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${capabilityA}') result`)).rows[0].result;
+    await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${capabilityA}',${expiry},'${selectorA}')`);
+    // Treat the first issuance response as lost, then recover the same row and
+    // selector with a replacement capability. Rotation is atomic and leaves
+    // exactly one lifecycle identity.
+    const recovered=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${rotatedCapability}',${expiry},'${selectorA}') result`)).rows[0].result;
+    const changedSelector=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${capabilityA}',${expiry},'${selectorB}') result`)).rows[0].result;
+    const staleCapability=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${capabilityA}') result`)).rows[0].result;
+    const lifecycleRows=(await client.query(`select count(*)::int count from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${cancelledId}'`)).rows[0].count;
+    if(recovered.status!=='pending'||changedSelector.status!=='conflict'||staleCapability.status!=='missing'||lifecycleRows!==1) throw new Error('ClearSpeak authority response-loss recovery failed');
+    const firstCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
+    const duplicateCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
     if(firstCancel.status!=='cancelled'||duplicateCancel.status!=='cancelled') throw new Error('Authorized cancel-before-reserve was not idempotent');
-    await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${capabilityA}')`);
+    await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${rotatedCapability}')`);
     const cancelWins=(await client.query(`select public.commit_clearspeak_accent_attempt('${userA}','${cancelledId}','${hashA}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
     if(cancelWins.status!=='cancelled') throw new Error('ClearSpeak cancel-before-commit did not win atomically');
-    await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${committedId}','${capabilityB}',${expiry})`);
+    const rotateCancelled=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;
+    if(rotateCancelled.status!=='conflict') throw new Error('Cancelled ClearSpeak authority rotated');
+    await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${committedId}','${capabilityB}',${expiry},'${selectorA}')`);
     await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}')`);
+    const rotateReserved=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${committedId}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;
+    if(rotateReserved.status!=='conflict') throw new Error('Reserved ClearSpeak authority rotated');
     const commitWins=(await client.query(`select public.commit_clearspeak_accent_attempt('${userA}','${committedId}','${hashA}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
     const cancelAfter=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${committedId}','${capabilityB}') result`)).rows[0].result;
     if(commitWins.status!=='committed'||cancelAfter.status!=='committed'||!cancelAfter.result) throw new Error('ClearSpeak commit-before-cancel outcome was not authoritative');
+    const rotateCommitted=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${committedId}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;
+    if(rotateCommitted.status!=='conflict') throw new Error('Committed ClearSpeak authority rotated');
     const replay=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}') result`)).rows[0].result;
     const conflict=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashB}','${capabilityB}') result`)).rows[0].result;
     if(replay.status!=='committed'||conflict.status!=='conflict') throw new Error('ClearSpeak replay/conflict lifecycle failed');

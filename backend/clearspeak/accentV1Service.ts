@@ -74,11 +74,17 @@ async function lifecycleRpc(name: string, args: Record<string, unknown>): Promis
 export async function issueAccentAttemptAuthority(userId: string, body: any): Promise<{ attemptId: string; capability: string; expiresAt: string }> {
   rejectClientAuthority(body);
   if (typeof body?.attemptId !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.attemptId)) throw new Error('invalid_attempt_id');
-  validatePromptSelector(body);
+  const prompt = validatePromptSelector(body);
+  const selectorHash = crypto.createHash('sha256').update(JSON.stringify({
+    mode: prompt.mode, promptId: prompt.promptId, promptVersion: prompt.promptVersion,
+    promptContentHash: prompt.contentHash, profileId: prompt.profileId, profileVersion: prompt.profileVersion,
+    referenceSetVersion: prompt.referenceSetVersion, scoringPolicyVersion: body.scoringPolicyVersion,
+  })).digest('hex');
   const capability = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
   const outcome = await lifecycleRpc('issue_clearspeak_accent_attempt_authority', {
     p_user_id: userId, p_attempt_id: body.attemptId, p_capability_hash: capabilityHash(capability), p_expires_at: expiresAt,
+    p_selector_hash: selectorHash,
   });
   if (outcome.status === 'conflict') throw new Error('idempotency_conflict');
   if (outcome.status !== 'pending') throw new Error(outcome.status === 'limit' ? 'lifecycle_limit_reached' : 'submission_authority_rejected');
