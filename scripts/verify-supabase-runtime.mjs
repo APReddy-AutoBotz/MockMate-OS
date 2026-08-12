@@ -1011,6 +1011,7 @@ async function runRuntimeVerification() {
     }).replaceAll("'", "''");
     const cancelledId='aaaaaaaa-0000-4000-a000-000000000001';
     const committedId='aaaaaaaa-0000-4000-a000-000000000002';
+    const expiredId='aaaaaaaa-0000-4000-a000-000000000003';
     const hashA='a'.repeat(64), hashB='b'.repeat(64), selectorA='e'.repeat(64), selectorB='f'.repeat(64);
     const capabilityA='c'.repeat(64), capabilityB='d'.repeat(64), rotatedCapability='1'.repeat(64);
     const expiry=`now()+interval '5 minutes'`;
@@ -1035,6 +1036,34 @@ async function runRuntimeVerification() {
     const lifecycleRows=(await client.query(`select count(*)::int count from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${cancelledId}'`)).rows[0].count;
     await setRole(client, 'service_role');
     if(recovered.status!=='pending'||changedSelector.status!=='conflict'||staleCapability.status!=='missing'||lifecycleRows!==1) throw new Error('ClearSpeak authority response-loss recovery failed');
+
+    // A lost issuance response remains recoverable after expiry when and only
+    // when the same row is pending, unreserved, and selector-identical.
+    await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredId}','${capabilityA}',now()+interval '100 milliseconds','${selectorA}')`);
+    await client.query(`select pg_sleep(0.15)`);
+    const expiredChangedSelector=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredId}','${capabilityB}',${expiry},'${selectorB}') result`)).rows[0].result;
+    const expiredRecovered=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredId}','${rotatedCapability}',${expiry},'${selectorA}') result`)).rows[0].result;
+    const expiredStaleCapability=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredId}','${hashA}','${capabilityA}') result`)).rows[0].result;
+    const expiredReserve=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredId}','${hashA}','${rotatedCapability}') result`)).rows[0].result;
+    const expiredRotateAfterReserve=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredId}','${capabilityB}',${expiry},'${selectorA}') result`)).rows[0].result;
+    if(expiredChangedSelector.status!=='conflict'||expiredRecovered.status!=='pending'||expiredStaleCapability.status!=='missing'||expiredReserve.status!=='pending'||expiredRotateAfterReserve.status!=='conflict') throw new Error('ClearSpeak expired authority recovery/fencing failed');
+
+    // Reclaim only expired, unreserved pending ghosts before applying quota.
+    // Trusted-owner setup creates the otherwise unreachable expired fixtures;
+    // issuance itself performs the production cleanup under the owner lock.
+    await resetRole(client);
+    await client.query(`insert into public.clearspeak_accent_attempt_lifecycle(user_id,attempt_id,status,capability_hash,capability_expires_at,authority_selector_hash)
+      select '${userA}', ('aaaaaaaa-0000-4000-a000-'||lpad(n::text,12,'0'))::uuid, 'pending', '${capabilityA}', now()-interval '1 minute', '${selectorA}'
+      from generate_series(90,92) n`);
+    await setRole(client, 'service_role');
+    const postReclaimId='aaaaaaaa-0000-4000-a000-000000000004';
+    const postReclaim=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${postReclaimId}','${capabilityB}',${expiry},'${selectorA}') result`)).rows[0].result;
+    await resetRole(client);
+    const issuanceGhosts=(await client.query(`select count(*)::int count from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and status='pending' and request_hash is null and capability_expires_at < now()`)).rows[0].count;
+    await setRole(client, 'service_role');
+    if(postReclaim.status!=='pending'||issuanceGhosts!==0) throw new Error('ClearSpeak expired issuance ghosts were not reclaimed');
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${expiredId}')`);
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${postReclaimId}')`);
     const firstCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
     const duplicateCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
     if(firstCancel.status!=='cancelled'||duplicateCancel.status!=='cancelled') throw new Error('Authorized cancel-before-reserve was not idempotent');
