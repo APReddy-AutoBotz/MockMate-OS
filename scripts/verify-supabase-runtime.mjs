@@ -118,6 +118,27 @@ async function runRuntimeVerification() {
       console.log(`[Runtime Verification] Executing migration: ${file}`);
       const sql = await readFile(path.join(migrationsDir, file), 'utf8');
       await client.query(sql);
+
+      // Model Supabase's service_role default table grants after the lifecycle
+      // table is created and before the forward hardening migration is applied.
+      // A bare PostgreSQL role would otherwise conceal a direct-DML bypass.
+      if (file === '20260812150000_clearspeak_attempt_lifecycle.sql') {
+        await client.query(`
+          GRANT INSERT, UPDATE, DELETE, TRUNCATE
+            ON TABLE public.clearspeak_accent_attempt_lifecycle
+            TO service_role;
+        `);
+        const modeledLifecycleDml = await client.query(`
+          SELECT
+            has_table_privilege('service_role', 'public.clearspeak_accent_attempt_lifecycle', 'INSERT') AS insert,
+            has_table_privilege('service_role', 'public.clearspeak_accent_attempt_lifecycle', 'UPDATE') AS update,
+            has_table_privilege('service_role', 'public.clearspeak_accent_attempt_lifecycle', 'DELETE') AS delete,
+            has_table_privilege('service_role', 'public.clearspeak_accent_attempt_lifecycle', 'TRUNCATE') AS truncate
+        `);
+        if (!Object.values(modeledLifecycleDml.rows[0]).every(Boolean)) {
+          throw new Error('Could not model Supabase service_role lifecycle DML defaults');
+        }
+      }
     }
     console.log('[Runtime Verification] All migration SQL compiled and executed cleanly!');
 
@@ -1019,6 +1040,23 @@ async function runRuntimeVerification() {
     const replay=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}') result`)).rows[0].result;
     const conflict=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashB}','${capabilityB}') result`)).rows[0].result;
     if(replay.status!=='committed'||conflict.status!=='conflict') throw new Error('ClearSpeak replay/conflict lifecycle failed');
+
+    // Supabase-like default DML was granted before the hardening migration.
+    // Prove the final service role cannot bypass capability checks or row locks,
+    // while the sanctioned SECURITY DEFINER lifecycle RPCs above still work.
+    for (const [privilege, statement] of [
+      ['INSERT', `insert into public.clearspeak_accent_attempt_lifecycle(user_id,attempt_id,status) values('${userA}','aaaaaaaa-0000-4000-a000-000000000097','pending')`],
+      ['UPDATE', `update public.clearspeak_accent_attempt_lifecycle set status='cancelled' where user_id='${userA}' and attempt_id='${committedId}'`],
+      ['DELETE', `delete from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${committedId}'`],
+      ['TRUNCATE', 'truncate table public.clearspeak_accent_attempt_lifecycle'],
+    ]) {
+      try {
+        await client.query(statement);
+        throw new Error(`service_role direct lifecycle ${privilege} succeeded`);
+      } catch (error) {
+        if (!error.message.includes('permission denied')) throw error;
+      }
+    }
 
     // Runtime application authority ends at the SECURITY DEFINER RPC boundary.
     // Prove owner/foreign RLS and denied browser mutations independently from
