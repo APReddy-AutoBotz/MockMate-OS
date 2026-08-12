@@ -119,6 +119,17 @@ async function runRuntimeVerification() {
       const sql = await readFile(path.join(migrationsDir, file), 'utf8');
       await client.query(sql);
 
+      // Model Supabase's default result-table mutation grants before the
+      // forward authority hardening is applied. The final migration must close
+      // both service and browser bypasses without removing owner history reads.
+      if (file === '20260811090000_clearspeak_accent_v1.sql') {
+        await client.query(`
+          GRANT INSERT, UPDATE, DELETE, TRUNCATE
+            ON TABLE public.clearspeak_accent_attempts
+            TO service_role, authenticated, anon;
+        `);
+      }
+
       // Model Supabase's service_role default table grants after the lifecycle
       // table is created and before the forward hardening migration is applied.
       // A bare PostgreSQL role would otherwise conceal a direct-DML bypass.
@@ -1069,6 +1080,41 @@ async function runRuntimeVerification() {
       }
     }
 
+    // Results and lifecycle state are one mutation authority family. Direct
+    // result-table writes must not bypass capability-bound commit/delete RPCs.
+    for (const [privilege, statement] of [
+      ['INSERT', `insert into public.clearspeak_accent_attempts(user_id,attempt_id,request_hash,prompt_id,prompt_version,prompt_content_hash,profile_id,profile_version,reference_set_version,scoring_policy_version,scoring_contract_version,fixture,dimensions,coaching,duration_ms,mime_type,result,evidence_provenance) values('${userA}','aaaaaaaa-0000-4000-a000-000000000096','${hashA}','8bb701a7-1901-4ef0-b72f-86b93331ee5e',1,'${hashA}','en-GB-general-v1',1,'safe-reference.v1','scoring-unavailable.v1','accent-score.v1',false,'{}','[]',1000,'audio/webm','{}','user_recording_unscored')`],
+      ['UPDATE', `update public.clearspeak_accent_attempts set duration_ms=1001 where user_id='${userA}' and attempt_id='${committedId}'`],
+      ['DELETE', `delete from public.clearspeak_accent_attempts where user_id='${userA}' and attempt_id='${committedId}'`],
+      ['TRUNCATE', 'truncate table public.clearspeak_accent_attempts'],
+    ]) {
+      try {
+        await client.query(statement);
+        throw new Error(`service_role direct result ${privilege} succeeded`);
+      } catch (error) {
+        if (!error.message.includes('permission denied')) throw error;
+      }
+    }
+
+    await resetRole(client);
+    const directMutationAcl = await client.query(`
+      select coalesce(role.rolname, 'PUBLIC') role_name, table_acl.relname table_name,
+             grant_acl.privilege_type privilege
+      from pg_class table_acl
+      cross join lateral aclexplode(coalesce(table_acl.relacl, acldefault('r', table_acl.relowner))) grant_acl
+      left join pg_roles role on role.oid=grant_acl.grantee
+      where table_acl.relnamespace='public'::regnamespace
+        and table_acl.relname in ('clearspeak_accent_attempts','clearspeak_accent_attempt_lifecycle')
+        and coalesce(role.rolname, 'PUBLIC') in ('service_role','authenticated','anon','PUBLIC')
+        and grant_acl.privilege_type in ('INSERT','UPDATE','DELETE','TRUNCATE')
+    `);
+    if (directMutationAcl.rows.length) {
+      const leaked = directMutationAcl.rows
+        .map(row => `${row.role_name}:${row.table_name}:${row.privilege}`).join(', ');
+      throw new Error(`ClearSpeak direct mutation ACL remained: ${leaked}`);
+    }
+    await setRole(client, 'service_role');
+
     // Runtime application authority ends at the SECURITY DEFINER RPC boundary.
     // Prove owner/foreign RLS and denied browser mutations independently from
     // the trusted owner session used for physical postcondition inspection.
@@ -1081,6 +1127,28 @@ async function runRuntimeVerification() {
     const foreignLifecycle=await client.query(`select * from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}'`);
     await resetRole(client);
     if(foreignLifecycle.rows.length) throw new Error('ClearSpeak lifecycle RLS exposed another user');
+    await setRole(client,'authenticated',userA);
+    const ownerAttempts=await client.query(`select attempt_id,result from public.clearspeak_accent_attempts where user_id='${userA}'`);
+    await resetRole(client);
+    if(ownerAttempts.rows.length!==1) throw new Error('ClearSpeak result owner could not read history');
+    await setRole(client,'authenticated',userB);
+    const foreignAttempts=await client.query(`select * from public.clearspeak_accent_attempts where user_id='${userA}'`);
+    await resetRole(client);
+    if(foreignAttempts.rows.length) throw new Error('ClearSpeak result RLS exposed another user');
+    for (const statement of [
+      `insert into public.clearspeak_accent_attempts(user_id) values('${userA}')`,
+      `update public.clearspeak_accent_attempts set duration_ms=1001 where user_id='${userA}' and attempt_id='${committedId}'`,
+      `delete from public.clearspeak_accent_attempts where user_id='${userA}' and attempt_id='${committedId}'`,
+    ]) {
+      try {
+        await setRole(client,'authenticated',userA);
+        await client.query(statement);
+        throw new Error('Authenticated direct result mutation succeeded');
+      } catch (error) {
+        await resetRole(client);
+        if (!error.message.includes('permission denied')) throw error;
+      }
+    }
     for (const statement of [
       `insert into public.clearspeak_accent_attempt_lifecycle(user_id,attempt_id,status) values('${userA}','aaaaaaaa-0000-4000-a000-000000000098','pending')`,
       `update public.clearspeak_accent_attempt_lifecycle set status='cancelled' where user_id='${userA}' and attempt_id='${cancelledId}'`,
