@@ -1004,6 +1004,11 @@ async function runRuntimeVerification() {
     const hashA='a'.repeat(64), hashB='b'.repeat(64), selectorA='e'.repeat(64), selectorB='f'.repeat(64);
     const capabilityA='c'.repeat(64), capabilityB='d'.repeat(64), rotatedCapability='1'.repeat(64);
     const expiry=`now()+interval '5 minutes'`;
+    const legacyCommitAcl=(await client.query(`select
+      has_function_privilege('service_role','public.commit_clearspeak_accent_attempt(uuid,uuid,text,jsonb)','EXECUTE') service_role,
+      has_function_privilege('authenticated','public.commit_clearspeak_accent_attempt(uuid,uuid,text,jsonb)','EXECUTE') authenticated,
+      has_function_privilege('anon','public.commit_clearspeak_accent_attempt(uuid,uuid,text,jsonb)','EXECUTE') anon`)).rows[0];
+    if(Object.values(legacyCommitAcl).some(Boolean)) throw new Error('Legacy capability-free ClearSpeak commit remains executable');
     const arbitraryCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','aaaaaaaa-0000-4000-a000-000000000099','${capabilityA}') result`)).rows[0].result;
     if(arbitraryCancel.status!=='missing') throw new Error('Arbitrary cancellation UUID minted a lifecycle tombstone');
     await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${capabilityA}',${expiry},'${selectorA}')`);
@@ -1024,15 +1029,21 @@ async function runRuntimeVerification() {
     const duplicateCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
     if(firstCancel.status!=='cancelled'||duplicateCancel.status!=='cancelled') throw new Error('Authorized cancel-before-reserve was not idempotent');
     await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${rotatedCapability}')`);
-    const cancelWins=(await client.query(`select public.commit_clearspeak_accent_attempt('${userA}','${cancelledId}','${hashA}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
+    const cancelWins=(await client.query(`select public.commit_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${rotatedCapability}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
     if(cancelWins.status!=='cancelled') throw new Error('ClearSpeak cancel-before-commit did not win atomically');
     const rotateCancelled=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;
     if(rotateCancelled.status!=='conflict') throw new Error('Cancelled ClearSpeak authority rotated');
     await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${committedId}','${capabilityB}',${expiry},'${selectorA}')`);
+    try {
+      await client.query(`select public.commit_clearspeak_accent_attempt('${userA}','${committedId}','${hashA}','${lifecyclePayload}'::jsonb)`);
+      throw new Error('Legacy capability-free commit executed against an unreserved authority row');
+    } catch (error) {
+      if (!error.message.includes('permission denied')) throw error;
+    }
     await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}')`);
     const rotateReserved=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${committedId}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;
     if(rotateReserved.status!=='conflict') throw new Error('Reserved ClearSpeak authority rotated');
-    const commitWins=(await client.query(`select public.commit_clearspeak_accent_attempt('${userA}','${committedId}','${hashA}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
+    const commitWins=(await client.query(`select public.commit_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
     const cancelAfter=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${committedId}','${capabilityB}') result`)).rows[0].result;
     if(commitWins.status!=='committed'||cancelAfter.status!=='committed'||!cancelAfter.result) throw new Error('ClearSpeak commit-before-cancel outcome was not authoritative');
     const rotateCommitted=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${committedId}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;

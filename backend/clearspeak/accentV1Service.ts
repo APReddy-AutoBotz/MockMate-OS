@@ -149,7 +149,8 @@ export async function submitAccentAttempt(userId: string, body: any, audio: Buff
     if (!status.result) throw new Error('authoritative_persistence_unavailable');
     return { score: status.result, replayed: true, requestHash };
   }
-  const committed = await lifecycleRpc('commit_clearspeak_accent_attempt', { p_user_id: userId, p_attempt_id: body.attemptId, p_request_hash: requestHash,
+  const committed = await lifecycleRpc('commit_clearspeak_accent_attempt_v2', { p_user_id: userId, p_attempt_id: body.attemptId, p_request_hash: requestHash,
+    p_capability_hash: capabilityHash(submissionCapability),
     p_attempt: { prompt_id: prompt.promptId, prompt_version: prompt.promptVersion, prompt_content_hash: prompt.contentHash,
       profile_id: prompt.profileId, profile_version: prompt.profileVersion, reference_set_version: prompt.referenceSetVersion,
       scoring_policy_version: score.scoringPolicyVersion, scoring_contract_version: score.contractVersion,
