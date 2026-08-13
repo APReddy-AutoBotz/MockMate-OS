@@ -1119,9 +1119,10 @@ async function runRuntimeVerification() {
     if(postCompaction.status!=='pending'||retainedOldCancellations!==0) throw new Error('Cancelled lifecycle retention was not bounded');
     await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${afterCancellationId}')`);
     await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${postCompactionId}')`);
-    await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${rotatedCapability}')`);
+    const cancelReserveReplay=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${rotatedCapability}') result`)).rows[0].result;
     const cancelWins=(await client.query(`select public.commit_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${rotatedCapability}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
-    if(cancelWins.status!=='cancelled') throw new Error('ClearSpeak cancel-before-commit did not win atomically');
+    const cancelChangedRequest=(await client.query(`select public.commit_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashB}','${rotatedCapability}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
+    if(cancelReserveReplay.status!=='cancelled'||cancelWins.status!=='cancelled'||cancelChangedRequest.status!=='cancelled') throw new Error('ClearSpeak cancel-before-reserve/expiry did not replay atomically');
     const rotateCancelled=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;
     if(rotateCancelled.status!=='conflict') throw new Error('Cancelled ClearSpeak authority rotated');
     await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${committedId}','${capabilityB}',${expiry},'${selectorA}')`);
@@ -1141,7 +1142,8 @@ async function runRuntimeVerification() {
     if(rotateCommitted.status!=='conflict') throw new Error('Committed ClearSpeak authority rotated');
     const replay=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}') result`)).rows[0].result;
     const conflict=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashB}','${capabilityB}') result`)).rows[0].result;
-    if(replay.status!=='committed'||conflict.status!=='conflict') throw new Error('ClearSpeak replay/conflict lifecycle failed');
+    const commitReplay=(await client.query(`select public.commit_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
+    if(replay.status!=='committed'||commitReplay.status!=='committed'||commitReplay.replayed!==true||conflict.status!=='conflict') throw new Error('ClearSpeak terminal replay/conflict lifecycle failed');
 
     // Supabase-like default DML was granted before the hardening migration.
     // Prove the final service role cannot bypass capability checks or row locks,
