@@ -1,0 +1,67 @@
+name: Creator Studio CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: creator-studio-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-and-authority:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+      - name: Enable pinned pnpm
+        run: corepack enable
+      - name: Install workspace dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Lint, typecheck, test, migration guardrails, and build
+        run: pnpm check
+
+  render-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install worker and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/render-worker pytest httpx
+      - name: Test worker
+        run: python -m pytest services/render-worker/tests -q
+      - name: Compile worker
+        run: python -m compileall -q services/render-worker/src services/render-worker/tests
+
+  repository-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Reject publishing integrations and committed secrets
+        shell: bash
+        run: |
+          if grep -RniE --exclude-dir=.git --exclude='*.md' \
+            'youtube|instagram|facebook|tiktok|linkedin|social[ _-]?oauth' .; then
+            echo 'Publishing integration is outside product scope.' >&2
+            exit 1
+          fi
+          if grep -RniE --exclude-dir=.git --exclude='*.md' \
+            '(service_role|sk-proj-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' .; then
+            echo 'Potential privileged credential committed.' >&2
+            exit 1
+          fi
