@@ -10,7 +10,9 @@ Voice samples and facial/avatar media are sensitive identity data. Treat them as
 - Short-lived signed URLs, least-privilege worker access and server-side validation.
 - Encryption in transit and provider secrets only in managed secret stores.
 - No secrets, samples, generated media or model weights in Git.
-- Content rights attestation before script generation.
+- Content rights attestation before content approval or script generation.
+- Artifact versions and reviews are immutable; approval is bound to the exact latest digest.
+- Project stages cannot be updated directly by browser clients; transitions are RPC-controlled.
 - Clear mock/synthetic labels and optional disclosure slate/metadata.
 - Download and deletion audit events.
 - Revoking a consent profile blocks new jobs immediately.

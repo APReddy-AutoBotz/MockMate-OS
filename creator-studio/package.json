@@ -8,10 +8,10 @@
   },
   "scripts": {
     "dev": "pnpm --filter @creator/web dev",
-    "build": "pnpm -r --if-present build",
-    "lint": "pnpm -r --if-present lint",
-    "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm -r --if-present test",
+    "build": "pnpm -r --if-present run build",
+    "lint": "pnpm -r --if-present run lint",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test": "pnpm -r --if-present run test",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   }
 }
