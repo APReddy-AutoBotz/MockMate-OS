@@ -50,6 +50,7 @@ def test_mock_generation_is_deterministic_and_labelled(monkeypatch) -> None:
     body = response.json()
     assert body["artifact"]["kind"] == "voice"
     assert body["artifact"]["is_mock"] is True
+    assert body["artifact"]["provider"] == "synthetic_mock"
     assert body["warning"].startswith("synthetic_mock")
     UUID(JOB_ID)
 
@@ -76,3 +77,16 @@ def test_path_traversal_is_rejected(monkeypatch) -> None:
         json=body,
     )
     assert response.status_code == 422
+
+
+def test_real_provider_fails_closed_when_unconfigured(monkeypatch) -> None:
+    monkeypatch.setenv("CREATOR_RUNTIME_MODE", "production")
+    monkeypatch.setenv("CREATOR_PROVIDER_MODE", "real")
+    monkeypatch.setenv("CREATOR_WORKER_TOKEN", "test-secret")
+    response = client.post(
+        "/v1/jobs/execute",
+        headers={"x-worker-token": "test-secret"},
+        json=request_body(),
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "real provider is not configured"

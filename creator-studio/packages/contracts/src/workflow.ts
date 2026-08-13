@@ -65,3 +65,30 @@ export const ApprovalBindingSchema = z.object({
 }).strict();
 
 export type ApprovalBinding = z.infer<typeof ApprovalBindingSchema>;
+
+export type ArtifactSnapshot = Readonly<{
+  id: string;
+  kind: 'content' | 'script' | 'voice' | 'avatar' | 'edit' | 'final';
+  version: number;
+  sha256: string;
+  stale: boolean;
+}>;
+
+export function approvalMatchesArtifact(approval: ApprovalBinding, artifact: ArtifactSnapshot): boolean {
+  return !artifact.stale
+    && approval.artifactId === artifact.id
+    && approval.artifactVersion === artifact.version
+    && approval.sha256 === artifact.sha256;
+}
+
+const downstreamKinds: ArtifactSnapshot['kind'][] = ['content', 'script', 'voice', 'avatar', 'edit', 'final'];
+
+export function invalidateDownstream(
+  artifacts: readonly ArtifactSnapshot[],
+  revisedKind: ArtifactSnapshot['kind']
+): ArtifactSnapshot[] {
+  const boundary = downstreamKinds.indexOf(revisedKind);
+  return artifacts.map((artifact) => downstreamKinds.indexOf(artifact.kind) > boundary
+    ? { ...artifact, stale: true }
+    : artifact);
+}

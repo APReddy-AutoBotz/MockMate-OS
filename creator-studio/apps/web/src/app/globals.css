@@ -28,6 +28,13 @@ li small { margin-top: 2px; text-transform: capitalize; font-size: 11px; }
 label { display: block; margin: 16px 0 8px; font-weight: 750; }
 textarea { width: 100%; min-height: 260px; resize: vertical; border: 1px solid #bac7d8; border-radius: 14px; padding: 16px; line-height: 1.55; background: #fbfcfe; color: #142033; }
 textarea:focus { outline: 3px solid #dbe5ff; border-color: #315efb; }
+.notes { min-height: 90px; }
+.binding, .status, .available { margin-top: 16px; padding: 14px; border-radius: 12px; background: #f3f6fb; }
+.binding { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; overflow-wrap: anywhere; }
+.binding span { color: #526176; }
+.status { color: #31506f; border-left: 4px solid #315efb; }
+.available { border: 1px solid #96d5af; background: #effaf3; }
+.available p { color: #3d654d; }
 .attestation { display: flex; gap: 10px; align-items: flex-start; font-weight: 600; line-height: 1.45; }
 .attestation input { margin-top: 4px; }
 .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }

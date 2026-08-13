@@ -32,7 +32,7 @@ class ProviderUnavailable(RuntimeError):
 
 
 class MockGenerationProvider:
-    name = "mock"
+    name = "synthetic_mock"
 
     def generate(
         self,

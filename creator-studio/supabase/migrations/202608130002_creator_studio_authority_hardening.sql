@@ -183,9 +183,9 @@ begin
     end if;
 
     insert into public.creator_reviews(
-      project_id, artifact_id, reviewer_id, decision, artifact_sha256, notes
+      project_id, artifact_id, reviewer_id, decision, artifact_version, artifact_sha256, notes
     ) values (
-      p_project_id, p_artifact_id, v_actor, 'approved', p_artifact_sha256, p_notes
+      p_project_id, p_artifact_id, v_actor, 'approved', v_artifact.version_number, p_artifact_sha256, p_notes
     );
   end if;
 

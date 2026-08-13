@@ -55,6 +55,7 @@ create table public.creator_reviews (
   artifact_id uuid not null references public.creator_artifacts(id) on delete cascade,
   reviewer_id uuid not null references auth.users(id) on delete cascade,
   decision text not null check (decision in ('approved','revision_requested')),
+  artifact_version integer not null check (artifact_version > 0),
   artifact_sha256 text not null check (artifact_sha256 ~ '^[a-f0-9]{64}$'),
   notes text,
   created_at timestamptz not null default now()
@@ -63,6 +64,14 @@ create table public.creator_reviews (
 create unique index creator_one_approval_per_artifact
   on public.creator_reviews(artifact_id)
   where decision = 'approved';
+
+create table public.creator_transition_requests (
+  project_id uuid not null references public.creator_projects(id) on delete cascade,
+  idempotency_key text not null,
+  event_code text not null,
+  created_at timestamptz not null default now(),
+  primary key (project_id, idempotency_key)
+);
 
 create table public.creator_jobs (
   id uuid primary key default gen_random_uuid(),
@@ -99,6 +108,7 @@ alter table public.creator_artifacts enable row level security;
 alter table public.creator_reviews enable row level security;
 alter table public.creator_jobs enable row level security;
 alter table public.creator_audit_events enable row level security;
+alter table public.creator_transition_requests enable row level security;
 
 create policy creator_projects_owner_all on public.creator_projects
   for all using (owner_id = auth.uid()) with check (owner_id = auth.uid());
@@ -160,8 +170,9 @@ begin
     if not exists (select 1 from public.creator_artifacts a where a.id = p_artifact_id and a.project_id = p_project_id and a.sha256 = p_artifact_sha256 and a.stale_at is null) then
       raise exception 'ARTIFACT_BINDING_INVALID';
     end if;
-    insert into public.creator_reviews(project_id, artifact_id, reviewer_id, decision, artifact_sha256, notes)
-      values (p_project_id, p_artifact_id, auth.uid(), 'approved', p_artifact_sha256, p_notes);
+    insert into public.creator_reviews(project_id, artifact_id, reviewer_id, decision, artifact_version, artifact_sha256, notes)
+      select p_project_id, p_artifact_id, auth.uid(), 'approved', version_number, p_artifact_sha256, p_notes
+      from public.creator_artifacts where id = p_artifact_id;
   end if;
 
   update public.creator_projects set current_stage = p_next_stage, updated_at = now() where id = p_project_id returning * into v_project;
