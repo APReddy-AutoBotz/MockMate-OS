@@ -1012,6 +1012,7 @@ async function runRuntimeVerification() {
     const cancelledId='aaaaaaaa-0000-4000-a000-000000000001';
     const committedId='aaaaaaaa-0000-4000-a000-000000000002';
     const expiredId='aaaaaaaa-0000-4000-a000-000000000003';
+    const expiredReservedId='aaaaaaaa-0000-4000-a000-000000000005';
     const hashA='a'.repeat(64), hashB='b'.repeat(64), selectorA='e'.repeat(64), selectorB='f'.repeat(64);
     const capabilityA='c'.repeat(64), capabilityB='d'.repeat(64), rotatedCapability='1'.repeat(64);
     const expiry=`now()+interval '5 minutes'`;
@@ -1047,6 +1048,25 @@ async function runRuntimeVerification() {
     const expiredReserve=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredId}','${hashA}','${rotatedCapability}') result`)).rows[0].result;
     const expiredRotateAfterReserve=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredId}','${capabilityB}',${expiry},'${selectorA}') result`)).rows[0].result;
     if(expiredChangedSelector.status!=='conflict'||expiredRecovered.status!=='pending'||expiredStaleCapability.status!=='missing'||expiredReserve.status!=='pending'||expiredRotateAfterReserve.status!=='conflict') throw new Error('ClearSpeak expired authority recovery/fencing failed');
+
+    // Reservation response loss must remain recoverable through capability
+    // expiry without changing the canonical request hash. Exact content can
+    // continue, while stale capabilities and changed content remain fenced.
+    await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredReservedId}','${capabilityA}',now()+interval '100 milliseconds','${selectorA}')`);
+    await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredReservedId}','${hashA}','${capabilityA}')`);
+    await client.query(`select pg_sleep(0.15)`);
+    const reservedChangedSelector=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredReservedId}','${capabilityB}',${expiry},'${selectorB}') result`)).rows[0].result;
+    const reservedRecovered=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredReservedId}','${rotatedCapability}',${expiry},'${selectorA}') result`)).rows[0].result;
+    const reservedStaleCapability=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredReservedId}','${hashA}','${capabilityA}') result`)).rows[0].result;
+    const reservedChangedContent=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredReservedId}','${hashB}','${rotatedCapability}') result`)).rows[0].result;
+    const reservedExactContent=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredReservedId}','${hashA}','${rotatedCapability}') result`)).rows[0].result;
+    const reservedCancelled=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${expiredReservedId}','${rotatedCapability}') result`)).rows[0].result;
+    if(reservedChangedSelector.status!=='conflict'||reservedRecovered.status!=='pending'||reservedRecovered.requestHash!==hashA||reservedStaleCapability.status!=='missing'||reservedChangedContent.status!=='conflict'||reservedExactContent.status!=='pending'||reservedCancelled.status!=='cancelled') throw new Error('ClearSpeak reserved-expiry exact-content recovery failed');
+    await resetRole(client);
+    const reservedHash=(await client.query(`select request_hash from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${expiredReservedId}'`)).rows[0]?.request_hash;
+    await setRole(client, 'service_role');
+    if(reservedHash!==hashA) throw new Error('ClearSpeak reserved recovery changed the canonical request hash');
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${expiredReservedId}')`);
 
     // Reclaim only expired, unreserved pending ghosts before applying quota.
     // Trusted-owner setup creates the otherwise unreachable expired fixtures;
