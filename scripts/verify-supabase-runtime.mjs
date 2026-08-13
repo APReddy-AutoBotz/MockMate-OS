@@ -1087,6 +1087,38 @@ async function runRuntimeVerification() {
     const firstCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
     const duplicateCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
     if(firstCancel.status!=='cancelled'||duplicateCancel.status!=='cancelled') throw new Error('Authorized cancel-before-reserve was not idempotent');
+    // Cancellation is terminal but does not consume active issuance capacity.
+    // Exercise beyond the old whole-row ceiling, then prove a fresh authority
+    // still succeeds and cancellation response-loss replays after expiry.
+    for (let n=200; n<305; n++) {
+      const id=`aaaaaaaa-0000-4000-a000-${String(n).padStart(12,'0')}`;
+      const issued=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${id}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;
+      const cancelled=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${id}','${capabilityA}') result`)).rows[0].result;
+      if(issued.status!=='pending'||cancelled.status!=='cancelled') throw new Error('Sequential ClearSpeak cancellation lifecycle failed');
+    }
+    const afterCancellationId='aaaaaaaa-0000-4000-a000-000000000006';
+    const afterCancellations=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${afterCancellationId}','${capabilityB}',${expiry},'${selectorA}') result`)).rows[0].result;
+    if(afterCancellations.status!=='pending') throw new Error('Terminal cancellations exhausted active lifecycle capacity');
+    await resetRole(client);
+    await client.query(`update public.clearspeak_accent_attempt_lifecycle
+      set capability_expires_at=now()-interval '1 minute'
+      where user_id='${userA}' and attempt_id='${cancelledId}'`);
+    await setRole(client, 'service_role');
+    const lostCancelReplay=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
+    if(lostCancelReplay.status!=='cancelled') throw new Error('Expired cancellation response did not replay exactly');
+    await resetRole(client);
+    await client.query(`update public.clearspeak_accent_attempt_lifecycle
+      set updated_at=now()-interval '11 minutes'
+      where user_id='${userA}' and status='cancelled' and attempt_id<>'${cancelledId}'`);
+    await setRole(client, 'service_role');
+    const postCompactionId='aaaaaaaa-0000-4000-a000-000000000007';
+    const postCompaction=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${postCompactionId}','${capabilityB}',${expiry},'${selectorA}') result`)).rows[0].result;
+    await resetRole(client);
+    const retainedOldCancellations=(await client.query(`select count(*)::int count from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and status='cancelled' and updated_at < now()-interval '10 minutes'`)).rows[0].count;
+    await setRole(client, 'service_role');
+    if(postCompaction.status!=='pending'||retainedOldCancellations!==0) throw new Error('Cancelled lifecycle retention was not bounded');
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${afterCancellationId}')`);
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${postCompactionId}')`);
     await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${rotatedCapability}')`);
     const cancelWins=(await client.query(`select public.commit_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${rotatedCapability}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
     if(cancelWins.status!=='cancelled') throw new Error('ClearSpeak cancel-before-commit did not win atomically');
