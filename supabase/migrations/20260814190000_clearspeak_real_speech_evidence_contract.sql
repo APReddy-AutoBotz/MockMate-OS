@@ -5,6 +5,17 @@
 -- separately governed accent-score.v2 result if/when a server-owned real-speech
 -- adapter is explicitly authorized in a future source change.
 
+-- V1 originally constrained this column inline to accent-score.v1. Expand the
+-- storage vocabulary explicitly rather than relying on the provenance check to
+-- contradict an older table-level constraint.
+alter table public.clearspeak_accent_attempts
+  drop constraint if exists clearspeak_accent_attempts_scoring_contract_version_check;
+
+alter table public.clearspeak_accent_attempts
+  add constraint clearspeak_accent_attempts_scoring_contract_version_check check (
+    scoring_contract_version in ('accent-score.v1', 'accent-score.v2')
+  );
+
 alter table public.clearspeak_accent_attempts
   drop constraint if exists clearspeak_accent_attempts_provenance_check;
 
