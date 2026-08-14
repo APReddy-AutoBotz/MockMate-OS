@@ -77,8 +77,8 @@ router.post('/score', enforceUsageLimit('resume_review'), async (req, res) => {
 
   try {
     const { resumeData, rawText, jdText } = request.data;
-    const cacheKey = hashText({ contract: 'governed-resume-score.v1', resumeData, rawText, jdText });
-    const cached = await getCachedResult<unknown>('resume_score_governed_v1', cacheKey);
+    const cacheKey = hashText({ contract: 'governed-resume-score.v2', resumeData, rawText, jdText });
+    const cached = await getCachedResult<unknown>('resume_score_governed_v2', cacheKey);
     const cachedParsed = GovernedResumeScoreResponseSchema.safeParse(cached);
     if (cachedParsed.success) return res.json(cachedParsed.data);
 
@@ -99,7 +99,7 @@ router.post('/score', enforceUsageLimit('resume_review'), async (req, res) => {
       });
     }
 
-    await setCachedResult('resume_score_governed_v1', cacheKey, payload, 24);
+    await setCachedResult('resume_score_governed_v2', cacheKey, payload, 24);
     return res.json(payload);
   } catch (error: any) {
     console.error('[RESUME_SCORE_FAILED]', error?.message || 'unknown');
