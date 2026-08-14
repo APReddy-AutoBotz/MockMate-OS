@@ -18,22 +18,14 @@ const TECHNICAL_FACTS = [
   'supabase', 'vercel', 'netlify', 'openai', 'gemini', 'groq', 'anthropic', 'claude',
 ] as const;
 
-// Deliberately narrow vocabulary that may be introduced for grammar or low-risk
-// wording polish. Candidate-specific nouns, technologies, domains, outcomes and
-// scope words must already occur in the located source evidence.
-const SAFE_REWRITE_TERMS = new Set([
+// Only grammar/linking terms may be introduced freely. Verbs/adverbs that can
+// assert delivery, scale, quality or outcomes must be evidenced by the located
+// source text (or be a morphological form of an evidenced source token).
+const GRAMMAR_ONLY_TERMS = new Set([
   'the', 'and', 'but', 'for', 'with', 'within', 'across', 'through', 'using', 'via', 'from', 'into',
   'that', 'which', 'while', 'where', 'when', 'this', 'these', 'those', 'their', 'your', 'our', 'its',
-  'result', 'results', 'resulting', 'streamline', 'streamlined', 'streamlining', 'optimize', 'optimized',
-  'optimizing', 'improve', 'improved', 'improving', 'enhance', 'enhanced', 'enhancing', 'simplify',
-  'simplified', 'simplifying', 'partner', 'partnered', 'partnering', 'collaborate', 'collaborated',
-  'collaborating', 'coordinate', 'coordinated', 'coordinating', 'support', 'supported', 'supporting',
-  'deliver', 'delivered', 'delivering', 'implement', 'implemented', 'implementing', 'develop', 'developed',
-  'developing', 'design', 'designed', 'designing', 'build', 'built', 'building', 'automate', 'automated',
-  'automating', 'analyze', 'analyzed', 'analyzing', 'manage', 'managed', 'managing', 'reduce', 'reduced',
-  'reducing', 'increase', 'increased', 'increasing', 'maintain', 'maintained', 'maintaining', 'resolve',
-  'resolved', 'resolving', 'enable', 'enabled', 'enabling', 'ensure', 'ensured', 'ensuring', 'effectively',
-  'efficiently', 'successfully',
+  'to', 'of', 'as', 'by', 'on', 'in', 'at', 'per', 'over', 'under', 'without', 'between', 'among',
+  'including', 'during', 'after', 'before', 'than', 'or', 'nor', 'yet', 'so', 'an', 'a',
 ]);
 
 const normalize = (value: string): string => value.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -44,6 +36,17 @@ const normalizeFact = (value: string): string => value
   .replace(/\s+/g, ' ')
   .trim();
 const unique = (values: string[]): string[] => [...new Set(values.map(normalize).filter(Boolean))];
+
+const stemToken = (token: string): string => {
+  let stem = token;
+  if (stem.length > 5 && stem.endsWith('ing')) stem = stem.slice(0, -3);
+  else if (stem.length > 4 && stem.endsWith('ied')) stem = `${stem.slice(0, -3)}y`;
+  else if (stem.length > 4 && stem.endsWith('ed')) stem = stem.slice(0, -2);
+  else if (stem.length > 4 && stem.endsWith('es')) stem = stem.slice(0, -2);
+  else if (stem.length > 3 && stem.endsWith('s')) stem = stem.slice(0, -1);
+  if (stem.length > 3 && stem.endsWith('e')) stem = stem.slice(0, -1);
+  return stem;
+};
 
 const extract = (value: string, pattern: RegExp): string[] => {
   pattern.lastIndex = 0;
@@ -97,11 +100,17 @@ const structuredFactsIn = (resume: ResumeData): string[] => {
 };
 
 const unsupportedSourceTokens = (sourceText: string, suggestedText: string): string[] => {
-  const sourceTokens = new Set(normalizeFact(sourceText).split(' ').filter(Boolean));
+  const sourceTokens = normalizeFact(sourceText).split(' ').filter(Boolean);
+  const sourceTokenSet = new Set(sourceTokens);
+  const sourceStems = new Set(sourceTokens.map(stemToken));
+
   return [...new Set(
     normalizeFact(suggestedText)
       .split(' ')
-      .filter(token => token.length >= 3 && !sourceTokens.has(token) && !SAFE_REWRITE_TERMS.has(token)),
+      .filter(token => token.length >= 3)
+      .filter(token => !sourceTokenSet.has(token))
+      .filter(token => !GRAMMAR_ONLY_TERMS.has(token))
+      .filter(token => !sourceStems.has(stemToken(token))),
   )];
 };
 
@@ -203,8 +212,6 @@ export const assessBulletRewrite = (
   if (!actual || normalize(actual) !== normalize(providerOriginal)) {
     return { safe: false, failures: ['source_location_mismatch'] };
   }
-  // Bullet evidence is deliberately local: a skill or claim that appears in a
-  // different role or in the global skills list cannot be transplanted here.
   return assessResumeRewrite(actual, suggestedText, resume);
 };
 
@@ -217,8 +224,6 @@ export const assessSummaryRewrite = (
   if (normalize(actual) !== normalize(providerOriginal)) {
     return { safe: false, failures: ['source_location_mismatch'] };
   }
-  // A summary is global by nature, so it may restate facts from anywhere in the
-  // candidate-provided resume, but still cannot introduce an unevidenced token.
   return assessResumeRewrite(structuredFactsIn(resume).join('\n'), suggestedText, resume);
 };
 
