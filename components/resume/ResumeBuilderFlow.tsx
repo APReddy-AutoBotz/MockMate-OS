@@ -20,14 +20,14 @@ export const ResumeBuilderFlow: React.FC<ResumeBuilderFlowProps> = ({ onIntervie
     const [stage, setStage] = useState<ResumeFlowStage>('SETUP');
     const [resumeData, setResumeData] = useState<ResumeData | null>(null);
     const [jdText, setJdText] = useState<string>('');
-    const [rawText, setRawText] = useState<string>('');
-    const [scores, setScores] = useState<any>(null);
+    const [scores, setScores] = useState<unknown>(null);
 
-    const handleSetupComplete = (data: ResumeData, jd: string, raw: string, atsMetrics: any) => {
+    // Raw extracted document text is used only inside UploadSetupScreen for the
+    // immediate ATS scoring request. Do not retain it in longer-lived flow state.
+    const handleSetupComplete = (data: ResumeData, jd: string, _raw: string, atsMetrics: unknown) => {
         audioService.playConfirm();
         setResumeData(data);
         setJdText(jd);
-        setRawText(raw);
         setScores(atsMetrics);
         setStage('DIAGNOSTICS');
     };
@@ -47,6 +47,7 @@ export const ResumeBuilderFlow: React.FC<ResumeBuilderFlowProps> = ({ onIntervie
         audioService.playConfirm();
         setResumeData(null);
         setJdText('');
+        setScores(null);
         setStage('SETUP');
     };
 
@@ -62,15 +63,9 @@ export const ResumeBuilderFlow: React.FC<ResumeBuilderFlowProps> = ({ onIntervie
 
     return (
         <div className="flex w-full flex-col items-center pt-2 sm:pt-4 lg:pt-8">
-
-            {/* ── 4-Step Progress Stepper ─────────────────────────────── */}
             <div className="mb-8 w-full max-w-2xl px-1 sm:mb-12 sm:px-6 lg:mb-16">
                 <div className="relative flex items-center justify-between">
-
-                    {/* Base track */}
                     <div className="absolute left-0 right-0 top-[15px] h-[1px] bg-white/10 z-0" />
-
-                    {/* Amber fill track */}
                     <div
                         className="absolute left-0 top-[15px] h-[1px] bg-brand-primary z-0 transition-all duration-1000 ease-in-out"
                         style={{
@@ -84,7 +79,6 @@ export const ResumeBuilderFlow: React.FC<ResumeBuilderFlowProps> = ({ onIntervie
                         const active = i === stageIndex[stage];
                         return (
                             <div key={label} className="relative z-10 flex flex-col items-center gap-3">
-                                {/* Step bubble */}
                                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold border-2 transition-all duration-500 ${
                                     done
                                         ? 'bg-brand-primary border-brand-primary text-brand-dark shadow-[0_0_16px_rgba(255,188,3,0.5)]'
@@ -94,8 +88,6 @@ export const ResumeBuilderFlow: React.FC<ResumeBuilderFlowProps> = ({ onIntervie
                                 }`}>
                                     {done ? '✓' : i + 1}
                                 </div>
-
-                                {/* Step label */}
                                 <span className={`text-[9px] font-bold uppercase tracking-[0.1em] transition-all whitespace-nowrap sm:text-[10px] sm:tracking-[0.18em] ${
                                     active
                                         ? 'text-brand-primary opacity-100'
@@ -111,7 +103,6 @@ export const ResumeBuilderFlow: React.FC<ResumeBuilderFlowProps> = ({ onIntervie
                 </div>
             </div>
 
-            {/* ── Stage Content ──────────────────────────────────────────── */}
             <AnimatePresence mode="wait">
                 {stage === 'SETUP' && (
                     <motion.div key="setup" {...flowAnimation} className="w-full max-w-2xl">
