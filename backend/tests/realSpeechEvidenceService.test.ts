@@ -85,6 +85,9 @@ describe('P0-5 governed real-speech evidence service', () => {
     expect(result.score.dimensions.intelligibility.score).toBe(91);
     expect(result.score.dimensions.pronunciation.score).toBeNull();
     expect(result.score.dimensions.pronunciation.evidenceStatus).toBe('insufficient');
+    expect(result.score.dimensions.pronunciation.evidenceRefs).toEqual([]);
+    expect(result.score.dimensions.pronunciation.summary).toMatch(/did not meet the server confidence threshold/i);
+    expect(result.score.dimensions.pronunciation.summary).not.toMatch(/supports this dimension/i);
     expect(result.score.dimensions.fluency.score).toBe(79);
     expect(result.score.dimensions.targetStyle.score).toBeNull();
     expect((result.score as any).overallScore).toBeUndefined();
@@ -116,6 +119,7 @@ describe('P0-5 governed real-speech evidence service', () => {
     expect(result.score.dimensions.pronunciation).toMatchObject({
       score: null,
       evidenceStatus: 'insufficient',
+      evidenceRefs: [],
     });
     expect(result.score.coaching.some(item => item.dimension === 'pronunciation')).toBe(false);
     expect(result.score.dimensions.intelligibility.score).toBe(91);
@@ -146,6 +150,24 @@ describe('P0-5 governed real-speech evidence service', () => {
       .rejects.toThrow(/lineage does not match/i);
   });
 
+  it('binds lineage to pre-adapter bytes and isolates adapter buffer mutation', async () => {
+    const originalAudio = Buffer.from(audio);
+    const mutatingAdapter: GovernedAccentScoringAdapterV1 = {
+      adapterId: 'mock-governed-scorer',
+      adapterVersion: 'v1',
+      score: jest.fn(async input => {
+        input.audio.fill(0x78);
+        const evidence = evidenceFor() as any;
+        evidence.audioEvidence.sha256 = crypto.createHash('sha256').update(input.audio).digest('hex');
+        evidence.audioEvidence.byteLength = input.audio.length;
+        return evidence;
+      }),
+    };
+    await expect(scoreWithGovernedAccentAdapter(context, audio, mutatingAdapter))
+      .rejects.toThrow(/lineage does not match/i);
+    expect(audio).toEqual(originalAudio);
+  });
+
   it('rejects evidence bound to a stale prompt or profile selector', async () => {
     const evidence = evidenceFor({ promptVersion: 2 });
     await expect(scoreWithGovernedAccentAdapter(context, audio, adapter(evidence)))
@@ -167,6 +189,17 @@ describe('P0-5 governed real-speech evidence service', () => {
   it('rejects direct employment inference in provider summaries', async () => {
     const evidence = evidenceFor() as any;
     evidence.dimensions.intelligibility.summary = 'This recording limits your employment prospects.';
+    await expect(scoreWithGovernedAccentAdapter(context, audio, adapter(evidence)))
+      .rejects.toThrow(/forbidden identity or employment inference/i);
+  });
+
+  it.each([
+    'The speaker sounds British.',
+    'The speaker is from India.',
+    'Your accent sounds Canadian.',
+  ])('rejects direct nationality/origin inference: %s', async summary => {
+    const evidence = evidenceFor() as any;
+    evidence.dimensions.intelligibility.summary = summary;
     await expect(scoreWithGovernedAccentAdapter(context, audio, adapter(evidence)))
       .rejects.toThrow(/forbidden identity or employment inference/i);
   });
