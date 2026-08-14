@@ -31,7 +31,7 @@ export interface GovernedAccentScoringAdapterV1 {
 
 export type AccentRealSpeechOutcomeV1 =
   | { status: 'unavailable'; reason: 'no_authorized_real_speech_adapter' }
-  | { status: 'scored'; score: AccentScoreV2; evidenceSha256: string };
+  | { status: 'evaluated'; score: AccentScoreV2; evidenceSha256: string };
 
 const dimensionOrder: AccentEvidenceDimensionKey[] = [
   'intelligibility',
@@ -161,6 +161,7 @@ export const scoreWithGovernedAccentAdapter = async (
   const dimensions = Object.fromEntries(
     dimensionOrder.map(key => [key, mapDimension(key, evidence.dimensions[key])]),
   ) as AccentScoreV2['dimensions'];
+  const scoredDimensionCount = dimensionOrder.filter(key => dimensions[key].score !== null).length;
 
   const scoredCoachingCandidates = dimensionOrder
     .map(key => ({ key, evidence: evidence.dimensions[key], score: dimensions[key].score }))
@@ -187,7 +188,7 @@ export const scoreWithGovernedAccentAdapter = async (
     profileVersion: context.profileVersion,
     referenceSetVersion: context.referenceSetVersion,
     scoringPolicyVersion: AccentRealSpeechPolicyV1.scoringPolicyVersion,
-    evidenceProvenance: 'user_recording_scored',
+    evidenceProvenance: scoredDimensionCount > 0 ? 'user_recording_scored' : 'user_recording_evaluated_unscored',
     fixture: false,
     evidenceLineage: {
       evidenceContractVersion: evidence.contractVersion,
@@ -220,5 +221,5 @@ export const scoreUserAccentRecording = async (
   const adapter = getAuthorizedRealSpeechAdapter();
   if (!adapter) return { status: 'unavailable', reason: 'no_authorized_real_speech_adapter' };
   const result = await scoreWithGovernedAccentAdapter(context, audio, adapter);
-  return { status: 'scored', ...result };
+  return { status: 'evaluated', ...result };
 };
