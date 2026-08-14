@@ -13,6 +13,13 @@
       "default": "./dist/resumeIntegrity.js"
     }
   },
+  "typesVersions": {
+    "*": {
+      "resume-integrity": [
+        "dist/resumeIntegrity.d.ts"
+      ]
+    }
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc -w",
