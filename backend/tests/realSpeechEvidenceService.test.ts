@@ -88,6 +88,18 @@ describe('P0-5 governed real-speech evidence service', () => {
     expect((result.score as any).overallScore).toBeUndefined();
   });
 
+  it('returns evaluated-unscored when all provider evidence remains below scoring authority', async () => {
+    const evidence = evidenceFor() as any;
+    evidence.providerExecutionState = 'completed';
+    for (const key of Object.keys(evidence.dimensions)) {
+      evidence.dimensions[key] = dimension(null, 0.25, 'insufficient', 'unused');
+    }
+    const result = await scoreWithGovernedAccentAdapter(context, audio, adapter(evidence));
+    expect(result.score.evidenceProvenance).toBe('user_recording_evaluated_unscored');
+    expect(Object.values(result.score.dimensions).every(item => item.score === null)).toBe(true);
+    expect(result.score.coaching).toEqual([]);
+  });
+
   it('keeps result identity deterministic for an identical evidence envelope', async () => {
     const evidence = evidenceFor();
     const first = await scoreWithGovernedAccentAdapter(context, audio, adapter(evidence));
