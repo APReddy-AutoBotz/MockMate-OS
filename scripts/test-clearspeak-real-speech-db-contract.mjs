@@ -69,6 +69,24 @@ const buildEvaluatedUnscoredResult = (attemptId) => {
   return result;
 };
 
+const buildLifecyclePayload = (result) => ({
+  prompt_id: result.promptId,
+  prompt_version: result.promptVersion,
+  prompt_content_hash: result.promptContentHash,
+  profile_id: result.profileId,
+  profile_version: result.profileVersion,
+  reference_set_version: result.referenceSetVersion,
+  scoring_policy_version: result.scoringPolicyVersion,
+  scoring_contract_version: result.contractVersion,
+  evidence_provenance: result.evidenceProvenance,
+  fixture: result.fixture,
+  dimensions: result.dimensions,
+  coaching: result.coaching,
+  duration_ms: 1800,
+  mime_type: 'audio/webm',
+  result,
+});
+
 const client = new Client({ connectionString });
 
 const insertAttempt = async ({ userId, attemptId, result }) => {
@@ -165,6 +183,59 @@ try {
   }
   console.log('  ✓ provider-evaluated low-evidence result accepted with all dimensions null and no coaching');
 
+  // Prove the same governed V2 payload can traverse the existing capability-bound
+  // issue -> reserve -> commit -> replay lifecycle. This reuses the hardened V1
+  // serialization machinery rather than inventing a parallel V2 state machine.
+  const lifecycleAttemptId = '70000000-0000-4000-8000-000000000017';
+  const lifecycleResult = buildResult(lifecycleAttemptId);
+  const lifecyclePayload = buildLifecyclePayload(lifecycleResult);
+  const capabilityHash = 'd'.repeat(64);
+  const selectorHash = 'e'.repeat(64);
+  const requestHash = 'f'.repeat(64);
+  const expiry = new Date(Date.now() + 5 * 60_000).toISOString();
+
+  const issued = (await client.query(
+    `select public.issue_clearspeak_accent_attempt_authority($1::uuid,$2::uuid,$3,$4::timestamptz,$5) result`,
+    [userId, lifecycleAttemptId, capabilityHash, expiry, selectorHash],
+  )).rows[0].result;
+  const reserved = (await client.query(
+    `select public.reserve_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4) result`,
+    [userId, lifecycleAttemptId, requestHash, capabilityHash],
+  )).rows[0].result;
+  const committed = (await client.query(
+    `select public.commit_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4,$5::jsonb) result`,
+    [userId, lifecycleAttemptId, requestHash, capabilityHash, JSON.stringify(lifecyclePayload)],
+  )).rows[0].result;
+  const reserveReplay = (await client.query(
+    `select public.reserve_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4) result`,
+    [userId, lifecycleAttemptId, requestHash, capabilityHash],
+  )).rows[0].result;
+  const commitReplay = (await client.query(
+    `select public.commit_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4,$5::jsonb) result`,
+    [userId, lifecycleAttemptId, requestHash, capabilityHash, JSON.stringify(lifecyclePayload)],
+  )).rows[0].result;
+  const changedRequest = (await client.query(
+    `select public.reserve_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4) result`,
+    [userId, lifecycleAttemptId, HASH_B, capabilityHash],
+  )).rows[0].result;
+  const cancelAfterCommit = (await client.query(
+    `select public.cancel_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3) result`,
+    [userId, lifecycleAttemptId, capabilityHash],
+  )).rows[0].result;
+
+  if (issued.status !== 'pending'
+      || reserved.status !== 'pending'
+      || committed.status !== 'committed'
+      || committed.result?.contractVersion !== 'accent-score.v2'
+      || reserveReplay.status !== 'committed'
+      || commitReplay.status !== 'committed'
+      || commitReplay.replayed !== true
+      || changedRequest.status !== 'conflict'
+      || cancelAfterCommit.status !== 'committed') {
+    throw new Error('Governed accent-score.v2 did not preserve the hardened lifecycle authority/replay contract');
+  }
+  console.log('  ✓ governed V2 result traversed issue/reserve/commit/replay/conflict/cancel authority unchanged');
+
   const missingLineageId = '70000000-0000-4000-8000-000000000011';
   const missingLineage = buildResult(missingLineageId);
   delete missingLineage.evidenceLineage.adapterId;
@@ -189,7 +260,7 @@ try {
   await expectProvenanceConstraintReject('evaluated_unscored_with_precise_score', { userId, attemptId: evaluatedWithScoreId, result: evaluatedWithScore });
 
   await client.query('rollback');
-  console.log('[ClearSpeak P0-5 DB] PASSED: governed real-speech persistence contract verified in disposable PostgreSQL.');
+  console.log('[ClearSpeak P0-5 DB] PASSED: governed real-speech persistence and lifecycle contracts verified in disposable PostgreSQL.');
 } catch (error) {
   try { await client.query('rollback'); } catch {}
   console.error('[ClearSpeak P0-5 DB] FAILED:', error);
