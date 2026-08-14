@@ -1,4 +1,5 @@
 import { ResumeData } from 'mockmate-shared';
+import type { GovernedJDMatchResult } from 'mockmate-shared/resume-integrity';
 import Groq from 'groq-sdk';
 
 const providerClient = (): Groq | null => {
@@ -85,9 +86,6 @@ const cleanMissingRequirements = (value: unknown, jdText: string, resumeText: st
         const text = candidate.replace(/\s+/g, ' ').trim();
         const normalized = text.toLowerCase();
         if (!text || text.length > 120 || seen.has(normalized)) continue;
-        // The provider may classify requirements, but it cannot invent them:
-        // every surfaced requirement must be explicitly present in the JD and
-        // absent from the candidate-provided resume.
         if (!normalizedJD.includes(normalized) || normalizedResume.includes(normalized)) continue;
         seen.add(normalized);
         grounded.push(text);
@@ -96,26 +94,64 @@ const cleanMissingRequirements = (value: unknown, jdText: string, resumeText: st
     return grounded;
 };
 
-export const runJDMatch = async (resume: ResumeData, jdText: string) => {
+const uniqueRequirements = (values: string[]): string[] => {
+    const seen = new Set<string>();
+    return values.filter(value => {
+        const normalized = value.toLowerCase().trim();
+        if (!normalized || seen.has(normalized)) return false;
+        seen.add(normalized);
+        return true;
+    });
+};
+
+const buildJDResult = (
+    matchedSkills: string[],
+    deterministicMissingSkills: string[],
+    llmMissingHardSkills: string[] = [],
+    llmMissingSoftSkills: string[] = [],
+): GovernedJDMatchResult => {
+    const knownRequirements = uniqueRequirements([
+        ...matchedSkills,
+        ...deterministicMissingSkills,
+        ...llmMissingHardSkills,
+        ...llmMissingSoftSkills,
+    ]);
+
+    if (knownRequirements.length === 0) {
+        return {
+            scoreStatus: 'insufficient_coverage',
+            jdMatchScore: null,
+            matchedSkills,
+            deterministicMissingSkills,
+            llmMissingHardSkills,
+            llmMissingSoftSkills,
+        };
+    }
+
+    return {
+        scoreStatus: 'scored',
+        jdMatchScore: Math.round((matchedSkills.length / knownRequirements.length) * 100),
+        matchedSkills,
+        deterministicMissingSkills,
+        llmMissingHardSkills,
+        llmMissingSoftSkills,
+    };
+};
+
+export const runJDMatch = async (resume: ResumeData, jdText: string): Promise<GovernedJDMatchResult> => {
     const normalizedJD = jdText.toLowerCase();
     const resumeText = JSON.stringify(resume);
     const normalizedResume = resumeText.toLowerCase();
 
-    const taxonomy = ['react', 'node', 'typescript', 'javascript', 'python', 'java', 'c++', 'aws', 'azure', 'gcp', 'agile', 'scrum', 'sql', 'nosql', 'leadership', 'communication', 'management'];
+    const taxonomy = [
+        'react', 'node', 'typescript', 'javascript', 'python', 'java', 'c++', 'aws', 'azure', 'gcp',
+        'agile', 'scrum', 'sql', 'nosql', 'leadership', 'communication', 'management', 'tableau',
+        'power bi', 'salesforce', 'sap', 'uipath', 'automation anywhere', 'power automate', 'cpa',
+    ];
     const requiredTaxonomy = taxonomy.filter(skill => normalizedJD.includes(skill));
     const matchedSkills = requiredTaxonomy.filter(skill => normalizedResume.includes(skill));
     const missingSkills = requiredTaxonomy.filter(skill => !normalizedResume.includes(skill));
-    const deterministicScore = requiredTaxonomy.length === 0
-        ? 100
-        : Math.round((matchedSkills.length / requiredTaxonomy.length) * 100);
-
-    const deterministic = {
-        matchedSkills,
-        deterministicMissingSkills: missingSkills,
-        llmMissingHardSkills: [] as string[],
-        llmMissingSoftSkills: [] as string[],
-        jdMatchScore: deterministicScore,
-    };
+    const deterministic = buildJDResult(matchedSkills, missingSkills);
 
     const groq = providerClient();
     if (!groq) return deterministic;
@@ -142,11 +178,9 @@ KNOWN MISSING TAXONOMY TERMS: ${missingSkills.join(', ')}`;
             response_format: { type: 'json_object' },
         });
         const parsed = JSON.parse(response.choices?.[0]?.message?.content || '{}');
-        return {
-            ...deterministic,
-            llmMissingHardSkills: cleanMissingRequirements(parsed.additionalMissingHardSkills, jdText, resumeText),
-            llmMissingSoftSkills: cleanMissingRequirements(parsed.additionalMissingSoftSkills, jdText, resumeText),
-        };
+        const llmMissingHardSkills = cleanMissingRequirements(parsed.additionalMissingHardSkills, jdText, resumeText);
+        const llmMissingSoftSkills = cleanMissingRequirements(parsed.additionalMissingSoftSkills, jdText, resumeText);
+        return buildJDResult(matchedSkills, missingSkills, llmMissingHardSkills, llmMissingSoftSkills);
     } catch {
         console.error('[RESUME_JD_CLASSIFIER_UNAVAILABLE]');
         return deterministic;
