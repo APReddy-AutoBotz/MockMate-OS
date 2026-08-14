@@ -20,6 +20,7 @@ type SuggestionState = 'idle' | 'loading' | 'reviewing';
 
 const inputCls = "w-full bg-white/[0.04] border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-brand-tint/45 focus:border-brand-primary/60 outline-none transition-all";
 const labelCls = "block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint mb-2";
+const normalizeSource = (value?: string) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
 export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resumeData, jdText, onProceed, onBack, onSpeakBridge }) => {
     const [data, setData] = useState<ResumeData>(resumeData);
@@ -33,6 +34,17 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
     const [filteredSuggestionCount, setFilteredSuggestionCount] = useState(0);
     const [suggestionError, setSuggestionError] = useState('');
 
+    const clearSuggestionReview = (message?: string) => {
+        setSuggestionState('idle');
+        setBulletSuggestions([]);
+        setSummarySuggestion(null);
+        setAcceptedBullets(new Set());
+        setRejectedBullets(new Set());
+        setSummaryAccepted(null);
+        setFilteredSuggestionCount(0);
+        if (message) setSuggestionError(message);
+    };
+
     const update = (fn: (d: ResumeData) => ResumeData) => {
         setData(prev => fn({
             ...prev,
@@ -42,6 +54,9 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
             education: (prev.education || []).map(e => ({ ...e })),
             projects: prev.projects ? prev.projects.map(p => ({ ...p })) : []
         }));
+        if (suggestionState === 'reviewing') {
+            clearSuggestionReview('Your resume changed while suggestions were open, so the old suggestions were discarded. Request fresh suggestions to continue.');
+        }
     };
 
     const bulletKey = (expIdx: number, bulletIdx: number) => `${expIdx}-${bulletIdx}`;
@@ -73,12 +88,30 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
     };
 
     const acceptBullet = (suggestion: GovernedResumeBulletSuggestion) => {
-        update(d => {
-            const bullet = d.experience?.[suggestion.expIdx]?.bullets?.[suggestion.bulletIdx];
-            if (bullet !== undefined) d.experience![suggestion.expIdx].bullets[suggestion.bulletIdx] = suggestion.suggested;
-            return d;
+        const current = data.experience?.[suggestion.expIdx]?.bullets?.[suggestion.bulletIdx];
+        if (normalizeSource(current) !== normalizeSource(suggestion.original)) {
+            clearSuggestionReview('That source bullet changed after these suggestions were created. No AI wording was applied; request fresh suggestions.');
+            return;
+        }
+
+        setData(prev => {
+            const next: ResumeData = {
+                ...prev,
+                experience: (prev.experience || []).map(exp => ({ ...exp, bullets: [...exp.bullets] })),
+            };
+            next.experience![suggestion.expIdx].bullets[suggestion.bulletIdx] = suggestion.suggested;
+            return next;
         });
         setAcceptedBullets(prev => new Set([...prev, bulletKey(suggestion.expIdx, suggestion.bulletIdx)]));
+    };
+
+    const acceptSummary = (suggestion: GovernedResumeSummarySuggestion) => {
+        if (normalizeSource(data.summary) !== normalizeSource(suggestion.original)) {
+            clearSuggestionReview('The source summary changed after these suggestions were created. No AI wording was applied; request fresh suggestions.');
+            return;
+        }
+        setData(prev => ({ ...prev, summary: suggestion.suggested }));
+        setSummaryAccepted(true);
     };
 
     const rejectBullet = (suggestion: GovernedResumeBulletSuggestion) => {
@@ -112,7 +145,7 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
                         </div>
                     )}
                     {suggestionState === 'reviewing' && (
-                        <button onClick={() => setSuggestionState('idle')}
+                        <button onClick={() => clearSuggestionReview()}
                             className="flex items-center text-xs bg-white/5 text-brand-tint border border-white/10 px-3 py-2 rounded-xl hover:bg-white/10 transition gap-1.5 font-semibold">
                             <X className="w-3 h-3" /> Done reviewing
                         </button>
@@ -151,10 +184,7 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
                         <SuggestionBox
                             original={summarySuggestion.original}
                             suggested={summarySuggestion.suggested}
-                            onAccept={() => {
-                                update(d => ({ ...d, summary: summarySuggestion.suggested }));
-                                setSummaryAccepted(true);
-                            }}
+                            onAccept={() => acceptSummary(summarySuggestion)}
                             onReject={() => setSummaryAccepted(false)}
                         />
                     ) : (
