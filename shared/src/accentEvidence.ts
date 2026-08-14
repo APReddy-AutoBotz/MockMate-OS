@@ -23,6 +23,12 @@ export const AccentProviderExecutionStateV1Schema = z.enum([
 ]);
 export type AccentProviderExecutionStateV1 = z.infer<typeof AccentProviderExecutionStateV1Schema>;
 
+export const AccentEvidenceProvenanceV2Schema = z.enum([
+  'user_recording_scored',
+  'user_recording_evaluated_unscored',
+]);
+export type AccentEvidenceProvenanceV2 = z.infer<typeof AccentEvidenceProvenanceV2Schema>;
+
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const AdapterIdentifierSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{2,79}$/);
 const VersionIdentifierSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,79}$/);
@@ -113,13 +119,6 @@ export const AccentScorerEvidenceV1Schema = z.object({
 }).strict().superRefine((value, ctx) => {
   const statuses = Object.values(value.dimensions).map(dimension => dimension.evidenceStatus);
   const scoreableCount = statuses.filter(status => status === 'sufficient' || status === 'limited').length;
-  if (value.providerExecutionState === 'completed' && scoreableCount === 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['providerExecutionState'],
-      message: 'Completed scorer execution requires at least one scoreable dimension',
-    });
-  }
   if (value.providerExecutionState === 'partial' && scoreableCount === statuses.length) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -182,7 +181,7 @@ export const AccentScoreV2Schema = z.object({
   profileVersion: z.literal(1),
   referenceSetVersion: z.string().min(1).max(80),
   scoringPolicyVersion: z.literal('real-speech-policy.v1'),
-  evidenceProvenance: z.literal('user_recording_scored'),
+  evidenceProvenance: AccentEvidenceProvenanceV2Schema,
   fixture: z.literal(false),
   evidenceLineage: AccentEvidenceLineageV1Schema,
   dimensions: AccentScoredDimensionsV2Schema,
@@ -195,11 +194,25 @@ export const AccentScoreV2Schema = z.object({
   disclaimer: z.string().min(1).max(600),
 }).strict().superRefine((value, ctx) => {
   const scoredDimensions = Object.values(value.dimensions).filter(dimension => dimension.score !== null);
-  if (scoredDimensions.length === 0) {
+  if (scoredDimensions.length === 0 && value.evidenceProvenance !== 'user_recording_evaluated_unscored') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ['dimensions'],
-      message: 'A real-speech scored result requires at least one scored dimension',
+      path: ['evidenceProvenance'],
+      message: 'A real-speech result with no scored dimensions must be labeled evaluated-unscored',
+    });
+  }
+  if (scoredDimensions.length > 0 && value.evidenceProvenance !== 'user_recording_scored') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['evidenceProvenance'],
+      message: 'A real-speech result with scored dimensions must be labeled user-recording-scored',
+    });
+  }
+  if (scoredDimensions.length === 0 && value.coaching.length !== 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['coaching'],
+      message: 'An evaluated-unscored result cannot contain evidence-specific coaching',
     });
   }
   for (const [index, coaching] of value.coaching.entries()) {
