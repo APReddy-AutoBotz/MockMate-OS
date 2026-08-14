@@ -193,21 +193,31 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
     if (!id) return 'cancelled' as const;
 
     try {
-      if ((!capability || !capabilityExpiresAt.current || capabilityExpiresAt.current <= Date.now()) && request) {
+      const sendCancel = (activeCapability: string) => apiClient.post(
+        `clearspeak/v1/accent/attempts/${encodeURIComponent(id)}/cancel`,
+        Disposition,
+        { submissionCapability: activeCapability },
+      );
+
+      // Always try the issued capability first, even if its client-side issuance
+      // timestamp has elapsed. A reserved real-speech v3 operation may still
+      // have a live server execution lease that explicitly permits cancellation.
+      let outcome = capability ? await sendCancel(capability) : null;
+
+      // Only recover/rotate authority after the server says the current
+      // capability is actually missing. This preserves active execution leases
+      // while retaining the established v2 expired-authority recovery path.
+      if ((!capability || outcome?.status === 'missing') && request) {
         const authority = await apiClient.post('clearspeak/v1/accent/attempt-authority', Authority, request);
         capability = authority.capability;
         if (attemptId.current === id && attemptGeneration.current === identityGeneration) {
           submissionCapability.current = capability;
           capabilityExpiresAt.current = Date.parse(authority.expiresAt);
         }
+        outcome = await sendCancel(capability);
       }
-      if (!capability) return 'cancelled' as const;
+      if (!outcome) return 'cancelled' as const;
 
-      const outcome = await apiClient.post(
-        `clearspeak/v1/accent/attempts/${encodeURIComponent(id)}/cancel`,
-        Disposition,
-        { submissionCapability: capability },
-      );
       const terminal = ['committed', 'cancelled', 'conflict', 'missing'].includes(outcome.status);
       if (terminal) clearAttemptIdentity(id, identityGeneration);
       if (!applyCompletion || generation !== practiceGeneration.current || identityGeneration !== generation) return outcome.status;
