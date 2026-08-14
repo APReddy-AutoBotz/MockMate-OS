@@ -61,4 +61,23 @@ describe('resume JD scoring authority', () => {
     expect(result.jdMatchScore).toBe(100);
     expect(result.matchedSkills).toEqual(expect.arrayContaining(['sql', 'uipath']));
   });
+
+  it('does not infer SAP from the substring inside WhatsApp', async () => {
+    const whatsappResume: ResumeData = {
+      ...resume,
+      summary: 'Automation analyst who supported WhatsApp integration for service workflows.',
+    };
+    const result = await runJDMatch(whatsappResume, 'Experience with WhatsApp integration is required.');
+    expect(result.scoreStatus).toBe('insufficient_coverage');
+    expect(result.jdMatchScore).toBeNull();
+    expect(result.matchedSkills).not.toContain('sap');
+    expect(result.deterministicMissingSkills).not.toContain('sap');
+  });
+
+  it('still recognizes SAP when it is an actual standalone requirement', async () => {
+    const result = await runJDMatch(resume, 'SAP integration experience is required.');
+    expect(result.scoreStatus).toBe('scored');
+    expect(result.jdMatchScore).toBe(0);
+    expect(result.deterministicMissingSkills).toContain('sap');
+  });
 });
