@@ -6,6 +6,7 @@ import {
 } from 'mockmate-shared/resume-integrity';
 import {
   assessBulletRewrite,
+  assessResumeExtraction,
   assessResumeRewrite,
   assessSummaryRewrite,
   passedResumeRewriteIntegrity,
@@ -125,6 +126,40 @@ describe('resume rewrite integrity', () => {
     );
     expect(unsafe.safe).toBe(false);
     expect(unsafe.failures).toContain('unsupported_technical_fact');
+  });
+
+  it('grounds provider-parsed hard facts in the extracted source resume', () => {
+    const parsedResume: ResumeData = {
+      basics: { name: 'A Candidate' },
+      skills: [{ category: 'Automation', items: ['UiPath'] }],
+      experience: [{
+        company: 'Example Co',
+        position: 'Automation Analyst',
+        bullets: ['Reduced manual handling by 30% using UiPath.'],
+      }],
+    };
+    const source = 'A Candidate Example Co Automation Analyst UiPath Reduced manual handling by 30% using UiPath.';
+    expect(assessResumeExtraction(source, parsedResume)).toEqual({ safe: true, failures: [] });
+
+    const injectedTechnology: ResumeData = {
+      ...parsedResume,
+      skills: [{ category: 'Automation', items: ['UiPath', 'AWS'] }],
+    };
+    const technologyCheck = assessResumeExtraction(source, injectedTechnology);
+    expect(technologyCheck.safe).toBe(false);
+    expect(technologyCheck.failures).toContain('unsupported_technical_fact');
+
+    const injectedMetric: ResumeData = {
+      ...parsedResume,
+      experience: [{
+        company: 'Example Co',
+        position: 'Automation Analyst',
+        bullets: ['Reduced manual handling by 45% using UiPath.'],
+      }],
+    };
+    const metricCheck = assessResumeExtraction(source, injectedMetric);
+    expect(metricCheck.safe).toBe(false);
+    expect(metricCheck.failures).toContain('unsupported_numeric_fact');
   });
 
   it('keeps the browser/backend suggestion contract strict and nullable for no summary proposal', () => {
