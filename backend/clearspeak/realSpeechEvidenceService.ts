@@ -120,6 +120,9 @@ const assertEvidenceBinding = (
   for (const key of dimensionOrder) {
     const dimension = evidence.dimensions[key];
     assertNeutralEvidenceText(dimension.summary, `${key} summary`);
+    for (const [index, contradiction] of dimension.contradictions.entries()) {
+      assertNeutralEvidenceText(contradiction, `${key} contradiction ${index + 1}`);
+    }
     if (dimension.coachingAction) assertNeutralEvidenceText(dimension.coachingAction, `${key} coaching`);
   }
 };
