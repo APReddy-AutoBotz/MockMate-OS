@@ -1,26 +1,28 @@
 import React, { useState, useCallback } from 'react';
 import { UploadCloud, PenTool, Loader2, FileText, X, Plus, Trash2 } from 'lucide-react';
 import { ResumeData } from 'mockmate-shared';
-import { getAccessToken } from '../../services/supabaseClient';
-import { API_ORIGIN } from '../../services/apiBase';
+import { GovernedResumeScoreResponseSchema, ResumeParseResponseSchema } from 'mockmate-shared/resume-integrity';
+import { apiClient, ApiError } from '../../services/apiClient';
 
 interface UploadSetupScreenProps {
-    onComplete: (data: ResumeData, jd: string, rawText: string, atsMetrics: any) => void;
+    onComplete: (data: ResumeData, jd: string, rawText: string, atsMetrics: unknown) => void;
 }
-
-const BACKEND_URL = API_ORIGIN;
 
 const inputCls = "w-full bg-white/[0.04] border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-brand-tint/45 focus:border-brand-primary/60 focus:bg-white/[0.06] outline-none transition-all";
 const labelCls = "block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-primary/80 mb-2";
 
-const authHeader = async (): Promise<HeadersInit> => {
-    const token = await getAccessToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
+const supportedResumeFile = (file: File) => {
+    const name = file.name.toLowerCase();
+    return name.endsWith('.pdf') || name.endsWith('.docx');
 };
 
-const friendlyResumeError = (message?: string) => {
-    if (message && /429|quota|too many|rate/i.test(message)) {
+const friendlyResumeError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : '';
+    if ((error instanceof ApiError && error.status === 429) || /429|quota|too many|rate/i.test(message)) {
         return "You've used today's free resume reviews. You can keep editing your resume here and try another review tomorrow.";
+    }
+    if (error instanceof ApiError && error.status === 503) {
+        return 'Resume AI is temporarily unavailable. Your file was not changed or saved; please try again later or build the resume manually.';
     }
     return message || 'We could not review your resume. Please try again.';
 };
@@ -39,17 +41,30 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
     const [education, setEducation] = useState([{ institution: '', degree: '', year: '' }]);
     const [experience, setExperience] = useState([{ company: '', position: '', startDate: '', endDate: '', bullets: [''] }]);
 
-    const onDrop = useCallback((e: React.DragEvent) => {
-        e.preventDefault();
-        setIsDragOver(false);
-        const dropped = e.dataTransfer.files[0];
-        if (dropped && (dropped.name.endsWith('.pdf') || dropped.name.endsWith('.docx') || dropped.name.endsWith('.doc'))) {
-            setFile(dropped);
-            setError('');
-        } else {
-            setError('Please drop a PDF or DOCX file.');
+    const selectFile = useCallback((candidate?: File | null) => {
+        if (!candidate) {
+            setFile(null);
+            return;
         }
+        if (!supportedResumeFile(candidate)) {
+            setFile(null);
+            setError('Please choose a PDF or DOCX file.');
+            return;
+        }
+        if (candidate.size > 10 * 1024 * 1024) {
+            setFile(null);
+            setError('Please choose a resume smaller than 10MB.');
+            return;
+        }
+        setFile(candidate);
+        setError('');
     }, []);
+
+    const onDrop = useCallback((event: React.DragEvent) => {
+        event.preventDefault();
+        setIsDragOver(false);
+        selectFile(event.dataTransfer.files[0]);
+    }, [selectFile]);
 
     const handleFileUpload = async () => {
         if (!file) return;
@@ -58,27 +73,15 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
         const formData = new FormData();
         formData.append('resume', file);
         try {
-            const parseRes = await fetch(`${BACKEND_URL}/api/resume/parse`, {
-                method: 'POST',
-                headers: await authHeader(),
-                body: formData
+            const parsed = await apiClient.post('/api/resume/parse', ResumeParseResponseSchema, formData);
+            const score = await apiClient.post('/api/resume/score', GovernedResumeScoreResponseSchema, {
+                resumeData: parsed.resumeData,
+                rawText: parsed.rawText,
+                jdText,
             });
-            const parseData = await parseRes.json();
-            if (!parseRes.ok || !parseData.success) throw new Error(parseData.error || `Failed to read file (${parseRes.status})`);
-            const headers = {
-                'Content-Type': 'application/json',
-                ...(await authHeader())
-            };
-            const scoreRes = await fetch(`${BACKEND_URL}/api/resume/score`, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({ resumeData: parseData.resumeData, rawText: parseData.rawText, jdText })
-            });
-            const scoreData = await scoreRes.json();
-            if (!scoreRes.ok || !scoreData.success) throw new Error(scoreData.error || `Failed to review resume (${scoreRes.status})`);
-            onComplete(parseData.resumeData, jdText, parseData.rawText, scoreData);
-        } catch (err: any) {
-            setError(friendlyResumeError(err.message));
+            onComplete(parsed.resumeData, jdText, parsed.rawText, score);
+        } catch (caught) {
+            setError(friendlyResumeError(caught));
         } finally {
             setIsProcessing(false);
         }
@@ -86,29 +89,27 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
 
     const handleScratchProceed = async () => {
         setIsProcessing(true);
+        setError('');
         try {
             const builtData: ResumeData = {
                 basics,
                 summary,
-                skills: skills.map(sg => ({ category: sg.category, items: sg.items.split(',').map(s => s.trim()).filter(Boolean) })),
-                experience: experience.map(exp => ({ ...exp, bullets: exp.bullets.filter(Boolean) })),
+                skills: skills.map(group => ({
+                    category: group.category,
+                    items: group.items.split(',').map(skill => skill.trim()).filter(Boolean),
+                })),
+                experience: experience.map(role => ({ ...role, bullets: role.bullets.filter(Boolean) })),
                 education,
-                projects: []
+                projects: [],
             };
-            const headers = {
-                'Content-Type': 'application/json',
-                ...(await authHeader())
-            };
-            const scoreRes = await fetch(`${BACKEND_URL}/api/resume/score`, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({ resumeData: builtData, rawText: '', jdText })
+            const score = await apiClient.post('/api/resume/score', GovernedResumeScoreResponseSchema, {
+                resumeData: builtData,
+                rawText: '',
+                jdText,
             });
-            const scoreData = await scoreRes.json();
-            if (!scoreRes.ok || !scoreData.success) throw new Error(scoreData.error || `Failed to review resume (${scoreRes.status})`);
-            onComplete(builtData, jdText, '', scoreData);
-        } catch (e: any) {
-            setError(friendlyResumeError(e.message));
+            onComplete(builtData, jdText, '', score);
+        } catch (caught) {
+            setError(friendlyResumeError(caught));
         } finally {
             setIsProcessing(false);
         }
@@ -128,8 +129,7 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
                 ].map(({ icon: Icon, label, desc, action }) => (
                     <button key={label} onClick={action}
                         className="group flex flex-col items-start rounded-[22px] border border-white/5 bg-gradient-to-b from-white/[0.04] to-transparent p-6 text-left transition-all duration-500 hover:-translate-y-1 hover:border-brand-primary/30 hover:shadow-[0_20px_40px_-20px_rgba(255,188,3,0.15)] sm:p-8"
-                        style={{ boxShadow: 'inset 0 1px 0 0 rgba(255,255,255,0.05)' }}
-                    >
+                        style={{ boxShadow: 'inset 0 1px 0 0 rgba(255,255,255,0.05)' }}>
                         <div className="w-12 h-12 rounded-2xl bg-brand-primary/10 border border-brand-primary/20 flex items-center justify-center mb-5 text-brand-primary group-hover:scale-110 transition-transform duration-300">
                             <Icon className="w-5 h-5" />
                         </div>
@@ -149,12 +149,12 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
 
             <div
                 onDrop={onDrop}
-                onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+                onDragOver={(event) => { event.preventDefault(); setIsDragOver(true); }}
                 onDragLeave={() => setIsDragOver(false)}
                 onClick={() => document.getElementById('file-input')?.click()}
-                className={`relative mb-6 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-6 text-center transition-all sm:p-10 ${isDragOver ? 'border-brand-primary/70 bg-brand-primary/10' : 'border-white/10 hover:border-brand-primary/30 hover:bg-white/[0.02]'}`}
-            >
-                <input id="file-input" type="file" accept=".pdf,.doc,.docx" className="hidden" onChange={e => { setFile(e.target.files?.[0] || null); setError(''); }} />
+                className={`relative mb-6 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-6 text-center transition-all sm:p-10 ${isDragOver ? 'border-brand-primary/70 bg-brand-primary/10' : 'border-white/10 hover:border-brand-primary/30 hover:bg-white/[0.02]'}`}>
+                <input id="file-input" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden"
+                    onChange={event => selectFile(event.target.files?.[0])} />
                 {file ? (
                     <div className="flex items-center gap-3">
                         <FileText className="w-8 h-8 text-brand-primary" />
@@ -162,7 +162,7 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
                             <p className="text-white font-semibold text-sm">{file.name}</p>
                             <p className="text-brand-tint text-xs">{(file.size / 1024).toFixed(0)} KB</p>
                         </div>
-                        <button onClick={(e) => { e.stopPropagation(); setFile(null); }} className="ml-4 text-brand-tint hover:text-red-400 transition-colors"><X className="w-4 h-4" /></button>
+                        <button onClick={(event) => { event.stopPropagation(); setFile(null); }} className="ml-4 text-brand-tint hover:text-red-400 transition-colors"><X className="w-4 h-4" /></button>
                     </div>
                 ) : (
                     <>
@@ -175,11 +175,11 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
 
             <div className="mb-6">
                 <label className={labelCls}>Target job description <span className="text-brand-tint normal-case tracking-normal">optional, but helpful</span></label>
-                <textarea value={jdText} onChange={e => setJdText(e.target.value)} rows={4}
+                <textarea value={jdText} onChange={event => setJdText(event.target.value)} rows={4}
                     className={inputCls} placeholder="Paste the job description here to compare your resume with the role." />
             </div>
 
-            {error && <div className="text-red-300 text-sm mb-4 px-4 py-3 bg-red-900/20 border border-red-400/20 rounded-xl">{error}</div>}
+            {error && <div role="alert" className="text-red-300 text-sm mb-4 px-4 py-3 bg-red-900/20 border border-red-400/20 rounded-xl">{error}</div>}
 
             <button onClick={handleFileUpload} disabled={isProcessing || !file}
                 className="w-full bg-brand-primary hover:bg-brand-primary/90 disabled:opacity-40 text-brand-dark font-bold py-4 rounded-xl text-sm uppercase tracking-[0.12em] transition-all hover:-translate-y-0.5 flex items-center justify-center gap-2 shadow-[0_10px_30px_-10px_rgba(255,188,3,0.4)]">
@@ -200,7 +200,7 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
                         <div key={field}>
                             <label className={labelCls}>{field.charAt(0).toUpperCase() + field.slice(1)}</label>
                             <input className={inputCls} placeholder={field === 'name' ? 'Full Name' : field === 'email' ? 'you@example.com' : field === 'phone' ? '+1 555 000 0000' : 'City, Country'}
-                                value={basics[field]} onChange={e => setBasics({ ...basics, [field]: e.target.value })} />
+                                value={basics[field]} onChange={event => setBasics({ ...basics, [field]: event.target.value })} />
                         </div>
                     ))}
                 </div>
@@ -208,69 +208,69 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
 
             <Section title="Professional Summary">
                 <textarea className={inputCls} rows={3} placeholder="A 2-3 sentence summary of your background, key skills, and career goal."
-                    value={summary} onChange={e => setSummary(e.target.value)} />
+                    value={summary} onChange={event => setSummary(event.target.value)} />
             </Section>
 
             <Section title="Experience">
-                {experience.map((exp, i) => (
-                    <div key={i} className="mb-6 bg-white/[0.02] border border-white/5 rounded-2xl p-5">
+                {experience.map((role, index) => (
+                    <div key={index} className="mb-6 bg-white/[0.02] border border-white/5 rounded-2xl p-5">
                         <div className="flex justify-between items-center mb-4">
-                            <span className="text-xs font-bold text-brand-tint uppercase tracking-[0.12em]">Role {i + 1}</span>
-                            {i > 0 && <button onClick={() => setExperience(ex => ex.filter((_, idx) => idx !== i))} className="text-red-300 hover:text-red-200 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>}
+                            <span className="text-xs font-bold text-brand-tint uppercase tracking-[0.12em]">Role {index + 1}</span>
+                            {index > 0 && <button onClick={() => setExperience(current => current.filter((_, itemIndex) => itemIndex !== index))} className="text-red-300 hover:text-red-200 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>}
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-                            {(['company', 'position'] as const).map(f => <div key={f}><label className={labelCls}>{f}</label><input className={inputCls} placeholder={f === 'company' ? 'Company Name' : 'Job Title'} value={exp[f]} onChange={e => setExperience(ex => ex.map((x, idx) => idx === i ? { ...x, [f]: e.target.value } : x))} /></div>)}
-                            {(['startDate', 'endDate'] as const).map(f => <div key={f}><label className={labelCls}>{f === 'startDate' ? 'Start Date' : 'End Date'}</label><input className={inputCls} placeholder="e.g. Jan 2022" value={exp[f]} onChange={e => setExperience(ex => ex.map((x, idx) => idx === i ? { ...x, [f]: e.target.value } : x))} /></div>)}
+                            {(['company', 'position'] as const).map(field => <div key={field}><label className={labelCls}>{field}</label><input className={inputCls} placeholder={field === 'company' ? 'Company Name' : 'Job Title'} value={role[field]} onChange={event => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: event.target.value } : item))} /></div>)}
+                            {(['startDate', 'endDate'] as const).map(field => <div key={field}><label className={labelCls}>{field === 'startDate' ? 'Start Date' : 'End Date'}</label><input className={inputCls} placeholder="e.g. Jan 2022" value={role[field]} onChange={event => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: event.target.value } : item))} /></div>)}
                         </div>
                         <label className={labelCls}>Key achievements, one per line</label>
-                        {exp.bullets.map((b, bi) => (
-                            <div key={bi} className="flex gap-2 mb-2">
-                                <input className={inputCls} placeholder={`Achievement ${bi + 1}...`} value={b}
-                                    onChange={e => setExperience(ex => ex.map((x, idx) => idx === i ? { ...x, bullets: x.bullets.map((bul, bidx) => bidx === bi ? e.target.value : bul) } : x))} />
-                                {bi > 0 && <button onClick={() => setExperience(ex => ex.map((x, idx) => idx === i ? { ...x, bullets: x.bullets.filter((_, bidx) => bidx !== bi) } : x))} className="text-brand-tint hover:text-red-300 transition-colors flex-shrink-0"><X className="w-4 h-4" /></button>}
+                        {role.bullets.map((bullet, bulletIndex) => (
+                            <div key={bulletIndex} className="flex gap-2 mb-2">
+                                <input className={inputCls} placeholder={`Achievement ${bulletIndex + 1}...`} value={bullet}
+                                    onChange={event => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, bullets: item.bullets.map((currentBullet, currentBulletIndex) => currentBulletIndex === bulletIndex ? event.target.value : currentBullet) } : item))} />
+                                {bulletIndex > 0 && <button onClick={() => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, bullets: item.bullets.filter((_, currentBulletIndex) => currentBulletIndex !== bulletIndex) } : item))} className="text-brand-tint hover:text-red-300 transition-colors flex-shrink-0"><X className="w-4 h-4" /></button>}
                             </div>
                         ))}
-                        <button onClick={() => setExperience(ex => ex.map((x, idx) => idx === i ? { ...x, bullets: [...x.bullets, ''] } : x))}
+                        <button onClick={() => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, bullets: [...item.bullets, ''] } : item))}
                             className="text-xs text-brand-primary/80 hover:text-brand-primary flex items-center gap-1 mt-1 transition-colors"><Plus className="w-3 h-3" /> Add bullet</button>
                     </div>
                 ))}
-                <button onClick={() => setExperience(ex => [...ex, { company: '', position: '', startDate: '', endDate: '', bullets: [''] }])}
+                <button onClick={() => setExperience(current => [...current, { company: '', position: '', startDate: '', endDate: '', bullets: [''] }])}
                     className="w-full border border-dashed border-white/10 rounded-2xl py-3 text-xs text-brand-tint hover:text-white hover:border-brand-primary/30 transition-all flex items-center justify-center gap-2">
                     <Plus className="w-3.5 h-3.5" /> Add another role
                 </button>
             </Section>
 
             <Section title="Skills">
-                {skills.map((sg, i) => (
-                    <div key={i} className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3 items-center">
-                        <input className={inputCls} placeholder="Category" value={sg.category} onChange={e => setSkills(s => s.map((x, idx) => idx === i ? { ...x, category: e.target.value } : x))} />
+                {skills.map((group, index) => (
+                    <div key={index} className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3 items-center">
+                        <input className={inputCls} placeholder="Category" value={group.category} onChange={event => setSkills(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, category: event.target.value } : item))} />
                         <div className="sm:col-span-2 flex gap-2">
-                            <input className={inputCls} placeholder="Skill 1, Skill 2, Skill 3..." value={sg.items} onChange={e => setSkills(s => s.map((x, idx) => idx === i ? { ...x, items: e.target.value } : x))} />
-                            {i > 0 && <button onClick={() => setSkills(s => s.filter((_, idx) => idx !== i))} className="text-brand-tint hover:text-red-300 transition-colors flex-shrink-0"><Trash2 className="w-4 h-4" /></button>}
+                            <input className={inputCls} placeholder="Skill 1, Skill 2, Skill 3..." value={group.items} onChange={event => setSkills(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, items: event.target.value } : item))} />
+                            {index > 0 && <button onClick={() => setSkills(current => current.filter((_, itemIndex) => itemIndex !== index))} className="text-brand-tint hover:text-red-300 transition-colors flex-shrink-0"><Trash2 className="w-4 h-4" /></button>}
                         </div>
                     </div>
                 ))}
-                <button onClick={() => setSkills(s => [...s, { category: '', items: '' }])}
+                <button onClick={() => setSkills(current => [...current, { category: '', items: '' }])}
                     className="text-xs text-brand-primary/80 hover:text-brand-primary flex items-center gap-1 transition-colors mt-1"><Plus className="w-3 h-3" /> Add skill category</button>
             </Section>
 
             <Section title="Education">
-                {education.map((edu, i) => (
-                    <div key={i} className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-                        <input className={inputCls} placeholder="Institution" value={edu.institution} onChange={e => setEducation(eds => eds.map((x, idx) => idx === i ? { ...x, institution: e.target.value } : x))} />
-                        <input className={inputCls} placeholder="Degree / Major" value={edu.degree} onChange={e => setEducation(eds => eds.map((x, idx) => idx === i ? { ...x, degree: e.target.value } : x))} />
-                        <input className={inputCls} placeholder="Year" value={edu.year} onChange={e => setEducation(eds => eds.map((x, idx) => idx === i ? { ...x, year: e.target.value } : x))} />
+                {education.map((entry, index) => (
+                    <div key={index} className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+                        <input className={inputCls} placeholder="Institution" value={entry.institution} onChange={event => setEducation(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, institution: event.target.value } : item))} />
+                        <input className={inputCls} placeholder="Degree / Major" value={entry.degree} onChange={event => setEducation(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, degree: event.target.value } : item))} />
+                        <input className={inputCls} placeholder="Year" value={entry.year} onChange={event => setEducation(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, year: event.target.value } : item))} />
                     </div>
                 ))}
-                <button onClick={() => setEducation(eds => [...eds, { institution: '', degree: '', year: '' }])}
+                <button onClick={() => setEducation(current => [...current, { institution: '', degree: '', year: '' }])}
                     className="text-xs text-brand-primary/80 hover:text-brand-primary flex items-center gap-1 transition-colors mt-1"><Plus className="w-3 h-3" /> Add education</button>
             </Section>
 
             <Section title="Target Job Description">
-                <textarea rows={4} className={inputCls} placeholder="Paste a job description to compare your resume with the role." value={jdText} onChange={e => setJdText(e.target.value)} />
+                <textarea rows={4} className={inputCls} placeholder="Paste a job description to compare your resume with the role." value={jdText} onChange={event => setJdText(event.target.value)} />
             </Section>
 
-            {error && <div className="mb-4 rounded-xl border border-red-400/20 bg-red-900/20 px-4 py-3 text-sm text-red-200">{error}</div>}
+            {error && <div role="alert" className="mb-4 rounded-xl border border-red-400/20 bg-red-900/20 px-4 py-3 text-sm text-red-200">{error}</div>}
 
             <button onClick={handleScratchProceed} disabled={isProcessing || !basics.name.trim()}
                 className="w-full bg-brand-primary hover:bg-brand-primary/90 disabled:opacity-40 text-brand-dark font-bold py-4 rounded-xl text-sm uppercase tracking-[0.12em] transition-all hover:-translate-y-0.5 flex items-center justify-center gap-2 shadow-[0_10px_30px_-10px_rgba(255,188,3,0.4)] mt-4">
