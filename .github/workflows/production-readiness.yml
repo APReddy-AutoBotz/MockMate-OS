@@ -74,6 +74,11 @@ jobs:
           POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: npm run verify:supabase:runtime
 
+      - name: 8a. ClearSpeak P0-5 real-speech persistence contract
+        env:
+          POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: npm run test:clearspeak-p0-5-db
+
       - name: 9. Frontend build
         run: npm run build
 
