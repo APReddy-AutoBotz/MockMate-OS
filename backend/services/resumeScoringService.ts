@@ -74,10 +74,17 @@ export const runATSDiagnostics = (resume: ResumeData, rawText: string): ATSDiagn
     return result;
 };
 
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const containsRequirement = (text: string, requirement: string): boolean => {
+    const phrase = requirement.trim();
+    if (!phrase) return false;
+    const phrasePattern = phrase.split(/\s+/).map(escapeRegExp).join('\\s+');
+    return new RegExp(`(^|[^a-z0-9])${phrasePattern}(?=$|[^a-z0-9])`, 'i').test(text);
+};
+
 const cleanMissingRequirements = (value: unknown, jdText: string, resumeText: string): string[] => {
     if (!Array.isArray(value)) return [];
-    const normalizedJD = jdText.toLowerCase();
-    const normalizedResume = resumeText.toLowerCase();
     const seen = new Set<string>();
     const grounded: string[] = [];
 
@@ -86,7 +93,7 @@ const cleanMissingRequirements = (value: unknown, jdText: string, resumeText: st
         const text = candidate.replace(/\s+/g, ' ').trim();
         const normalized = text.toLowerCase();
         if (!text || text.length > 120 || seen.has(normalized)) continue;
-        if (!normalizedJD.includes(normalized) || normalizedResume.includes(normalized)) continue;
+        if (!containsRequirement(jdText, text) || containsRequirement(resumeText, text)) continue;
         seen.add(normalized);
         grounded.push(text);
         if (grounded.length >= 20) break;
@@ -139,18 +146,16 @@ const buildJDResult = (
 };
 
 export const runJDMatch = async (resume: ResumeData, jdText: string): Promise<GovernedJDMatchResult> => {
-    const normalizedJD = jdText.toLowerCase();
     const resumeText = JSON.stringify(resume);
-    const normalizedResume = resumeText.toLowerCase();
 
     const taxonomy = [
         'react', 'node', 'typescript', 'javascript', 'python', 'java', 'c++', 'aws', 'azure', 'gcp',
         'agile', 'scrum', 'sql', 'nosql', 'leadership', 'communication', 'management', 'tableau',
         'power bi', 'salesforce', 'sap', 'uipath', 'automation anywhere', 'power automate', 'cpa',
     ];
-    const requiredTaxonomy = taxonomy.filter(skill => normalizedJD.includes(skill));
-    const matchedSkills = requiredTaxonomy.filter(skill => normalizedResume.includes(skill));
-    const missingSkills = requiredTaxonomy.filter(skill => !normalizedResume.includes(skill));
+    const requiredTaxonomy = taxonomy.filter(skill => containsRequirement(jdText, skill));
+    const matchedSkills = requiredTaxonomy.filter(skill => containsRequirement(resumeText, skill));
+    const missingSkills = requiredTaxonomy.filter(skill => !containsRequirement(resumeText, skill));
     const deterministic = buildJDResult(matchedSkills, missingSkills);
 
     const groq = providerClient();
