@@ -128,7 +128,7 @@ describe('resume rewrite integrity', () => {
     expect(unsafe.failures).toContain('unsupported_technical_fact');
   });
 
-  it('grounds provider-parsed hard facts in the extracted source resume', () => {
+  it('grounds every provider-parsed structured fact in the extracted source resume', () => {
     const parsedResume: ResumeData = {
       basics: { name: 'A Candidate' },
       skills: [{ category: 'Automation', items: ['UiPath'] }],
@@ -141,12 +141,25 @@ describe('resume rewrite integrity', () => {
     const source = 'A Candidate Example Co Automation Analyst UiPath Reduced manual handling by 30% using UiPath.';
     expect(assessResumeExtraction(source, parsedResume)).toEqual({ safe: true, failures: [] });
 
+    const injectedCompany: ResumeData = {
+      ...parsedResume,
+      experience: [{
+        company: 'Invented Corp',
+        position: 'Automation Analyst',
+        bullets: ['Reduced manual handling by 30% using UiPath.'],
+      }],
+    };
+    const companyCheck = assessResumeExtraction(source, injectedCompany);
+    expect(companyCheck.safe).toBe(false);
+    expect(companyCheck.failures).toContain('unsupported_structured_fact');
+
     const injectedTechnology: ResumeData = {
       ...parsedResume,
       skills: [{ category: 'Automation', items: ['UiPath', 'AWS'] }],
     };
     const technologyCheck = assessResumeExtraction(source, injectedTechnology);
     expect(technologyCheck.safe).toBe(false);
+    expect(technologyCheck.failures).toContain('unsupported_structured_fact');
     expect(technologyCheck.failures).toContain('unsupported_technical_fact');
 
     const injectedMetric: ResumeData = {
@@ -159,6 +172,7 @@ describe('resume rewrite integrity', () => {
     };
     const metricCheck = assessResumeExtraction(source, injectedMetric);
     expect(metricCheck.safe).toBe(false);
+    expect(metricCheck.failures).toContain('unsupported_structured_fact');
     expect(metricCheck.failures).toContain('unsupported_numeric_fact');
   });
 
