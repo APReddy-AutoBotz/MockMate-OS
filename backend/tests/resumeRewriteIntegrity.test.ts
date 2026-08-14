@@ -41,13 +41,13 @@ const resume: ResumeData = {
 };
 
 describe('resume rewrite integrity', () => {
-  it('allows a wording-only rewrite that preserves supplied facts', () => {
+  it('allows wording and morphology changes that preserve supplied facts', () => {
     const result = assessBulletRewrite(
       resume,
       0,
       0,
       resume.experience![0].bullets[0],
-      'Streamlined invoice review in UiPath, reducing manual handling by 30%.',
+      'Automated invoice review in UiPath, reducing manual handling by 30%.',
     );
     expect(result).toEqual({ safe: true, failures: [] });
   });
@@ -107,6 +107,18 @@ describe('resume rewrite integrity', () => {
       1,
       resume.experience![0].bullets[1],
       'Partnered with finance stakeholders to improve enterprise strategy and exception handling.',
+    );
+    expect(result.safe).toBe(false);
+    expect(result.failures).toContain('unsupported_source_token');
+  });
+
+  it('does not exempt outcome verbs or success adverbs from factual grounding', () => {
+    const result = assessBulletRewrite(
+      resume,
+      0,
+      1,
+      resume.experience![0].bullets[1],
+      'Successfully increased exception handling with finance stakeholders.',
     );
     expect(result.safe).toBe(false);
     expect(result.failures).toContain('unsupported_source_token');
@@ -199,7 +211,7 @@ describe('resume rewrite integrity', () => {
         expIdx: 0,
         bulletIdx: 0,
         original: resume.experience![0].bullets[0],
-        suggested: 'Streamlined invoice review in UiPath, reducing manual handling by 30%.',
+        suggested: 'Automated invoice review in UiPath, reducing manual handling by 30%.',
         integrity: passedResumeRewriteIntegrity(),
       }],
       summarySuggestion: null,
