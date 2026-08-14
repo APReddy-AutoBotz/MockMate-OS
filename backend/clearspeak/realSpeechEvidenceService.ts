@@ -42,9 +42,13 @@ const dimensionOrder: AccentEvidenceDimensionKey[] = [
 ];
 
 const forbiddenIdentityOrEmploymentClaim = /\b(?:native(?:[- ]speaker)?|non[- ]?native|nationality|ethnicity|ethnic|mother tongue|native language|employment|employab\w*|hireab\w*|hiring|correct accent|wrong accent|superior accent|infer(?:red|ring)? (?:identity|origin|nationality|language))\b/i;
+const directOriginInference = /\b(?:speaker|user|person|you|recording|voice|accent|speech|your (?:voice|accent|speech|recording))\b[^.!?\n]{0,48}\b(?:is|are|sounds?|seems?|appears?)\b[^.!?\n]{0,24}\bfrom\b/i;
+const directNationalityDescriptor = /\b(?:speaker|user|person|you|recording|voice|accent|speech|your (?:voice|accent|speech|recording))\b[^.!?\n]{0,48}\b(?:is|are|sounds?|seems?|appears?)\b\s*(?:(?:very|quite|distinctly|typically|like)\s+)*(?:an?\s+)?(?:[a-z]{3,}(?:ish|ian|ean|ese|istani|an|i)|french|dutch|greek|thai|swiss)\b/i;
 
 const assertNeutralEvidenceText = (value: string, label: string) => {
-  if (forbiddenIdentityOrEmploymentClaim.test(value)) {
+  if (forbiddenIdentityOrEmploymentClaim.test(value)
+      || directOriginInference.test(value)
+      || directNationalityDescriptor.test(value)) {
     throw new Error(`Accent evidence ${label} contains a forbidden identity or employment inference`);
   }
 };
@@ -66,6 +70,8 @@ const stableSha256 = (value: unknown) => crypto
   .update(JSON.stringify(stableValue(value)))
   .digest('hex');
 
+const sha256Buffer = (value: Buffer) => crypto.createHash('sha256').update(value).digest('hex');
+
 const uuidFromHash = (hex: string): string => {
   const bytes = Buffer.from(hex.slice(0, 32), 'hex');
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
@@ -77,10 +83,10 @@ const uuidFromHash = (hex: string): string => {
 const assertEvidenceBinding = (
   evidence: AccentScorerEvidenceV1,
   context: AccentRealSpeechContextV1,
-  audio: Buffer,
+  authoritativeAudioSha256: string,
+  authoritativeByteLength: number,
   adapter: GovernedAccentScoringAdapterV1,
 ) => {
-  const audioSha256 = crypto.createHash('sha256').update(audio).digest('hex');
   const expected = {
     attemptId: context.attemptId,
     promptId: context.promptId,
@@ -91,10 +97,10 @@ const assertEvidenceBinding = (
     referenceSetVersion: context.referenceSetVersion,
     adapterId: adapter.adapterId,
     adapterVersion: adapter.adapterVersion,
-    audioSha256,
+    audioSha256: authoritativeAudioSha256,
     durationMs: context.durationMs,
     mimeType: context.mimeType,
-    byteLength: audio.length,
+    byteLength: authoritativeByteLength,
   };
 
   const actual = {
@@ -134,15 +140,21 @@ const mapDimension = (
   const minimumConfidence = AccentRealSpeechPolicyV1.minimumConfidence[key];
   const providerMarkedScoreable = evidence.evidenceStatus === 'sufficient' || evidence.evidenceStatus === 'limited';
   const meetsConfidence = providerMarkedScoreable && evidence.confidence >= minimumConfidence;
-  const score = meetsConfidence ? evidence.candidateScore : null;
-  const evidenceStatus = providerMarkedScoreable && !meetsConfidence
-    ? 'insufficient' as const
-    : evidence.evidenceStatus;
+
+  if (providerMarkedScoreable && !meetsConfidence) {
+    return {
+      score: null,
+      confidence: evidence.confidence,
+      evidenceStatus: 'insufficient' as const,
+      summary: 'The available evidence did not meet the server confidence threshold for this dimension.',
+      evidenceRefs: [],
+    };
+  }
 
   return {
-    score,
+    score: meetsConfidence ? evidence.candidateScore : null,
     confidence: evidence.confidence,
-    evidenceStatus,
+    evidenceStatus: evidence.evidenceStatus,
     summary: evidence.summary,
     evidenceRefs: evidence.evidenceRefs,
   };
@@ -156,9 +168,20 @@ export const scoreWithGovernedAccentAdapter = async (
   if (!audio.length) throw new Error('Accent scoring requires non-empty audio evidence');
   if (audio.length > 5 * 1024 * 1024) throw new Error('Accent scoring audio evidence exceeds the bounded size');
 
-  const rawEvidence = await adapter.score({ context: Object.freeze({ ...context }), audio });
+  // Capture authoritative lineage before adapter code can observe a buffer. The
+  // adapter receives a disposable copy so mutation cannot rewrite request truth.
+  const authoritativeAudioSha256 = sha256Buffer(audio);
+  const authoritativeByteLength = audio.length;
+  const adapterAudio = Buffer.from(audio);
+  let rawEvidence: unknown;
+  try {
+    rawEvidence = await adapter.score({ context: Object.freeze({ ...context }), audio: adapterAudio });
+  } finally {
+    adapterAudio.fill(0);
+  }
+
   const evidence = AccentScorerEvidenceV1Schema.parse(rawEvidence);
-  assertEvidenceBinding(evidence, context, audio, adapter);
+  assertEvidenceBinding(evidence, context, authoritativeAudioSha256, authoritativeByteLength, adapter);
 
   const evidenceSha256 = stableSha256(evidence);
   const dimensions = Object.fromEntries(
@@ -198,7 +221,7 @@ export const scoreWithGovernedAccentAdapter = async (
       adapterId: evidence.adapterId,
       adapterVersion: evidence.adapterVersion,
       providerExecutionState: evidence.providerExecutionState,
-      audioSha256: evidence.audioEvidence.sha256,
+      audioSha256: authoritativeAudioSha256,
       evidenceSha256,
     },
     dimensions,
