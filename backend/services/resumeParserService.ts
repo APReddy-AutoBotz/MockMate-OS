@@ -175,15 +175,17 @@ const normalizedPhraseSpans = (source: string, phrase: string): SourceSpan[] => 
     const normalizedSource = normalizeGrounding(source);
     const normalizedPhrase = normalizeGrounding(phrase);
     if (!normalizedPhrase) return [];
-    const haystack = ` ${normalizedSource} `;
-    const needle = ` ${normalizedPhrase} `;
+
     const spans: SourceSpan[] = [];
     let offset = 0;
-    while (offset < haystack.length) {
-        const found = haystack.indexOf(needle, offset);
+    while (offset <= normalizedSource.length - normalizedPhrase.length) {
+        const found = normalizedSource.indexOf(normalizedPhrase, offset);
         if (found === -1) break;
-        spans.push({ start: found, end: found + needle.length });
-        offset = found + Math.max(1, needle.length - 1);
+        const end = found + normalizedPhrase.length;
+        const startsOnBoundary = found === 0 || normalizedSource[found - 1] === ' ';
+        const endsOnBoundary = end === normalizedSource.length || normalizedSource[end] === ' ';
+        if (startsOnBoundary && endsOnBoundary) spans.push({ start: found, end });
+        offset = found + 1;
     }
     return spans;
 };
