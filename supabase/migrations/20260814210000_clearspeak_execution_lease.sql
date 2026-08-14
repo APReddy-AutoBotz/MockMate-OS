@@ -1,15 +1,18 @@
--- P0-5 correction: once an exact request has been successfully reserved with a
--- live submission capability, provider execution receives a short bounded lease.
--- This prevents a capability that expires during an in-flight scorer call from
--- invalidating the later commit, while still preventing indefinite mutation.
+-- P0-5 correction: real-speech provider execution needs bounded completion
+-- authority after an exact request is reserved, without changing the already
+-- proven V1/no-provider v2 lifecycle semantics. v3 reserve/commit RPCs therefore
+-- add a short execution lease only for the authorized real-speech path.
 -- No provider is activated by this migration.
 
 alter table public.clearspeak_accent_attempt_lifecycle
   add column if not exists execution_lease_expires_at timestamptz;
 
 comment on column public.clearspeak_accent_attempt_lifecycle.execution_lease_expires_at is
-  'Short server-owned lease established by exact request reservation; allows commit/cancel to finish after issuance capability expiry without extending provider execution indefinitely.';
+  'Short server-owned lease established only by the real-speech v3 reserve RPC; permits bounded commit/cancel completion after issuance capability expiry.';
 
+-- Keep the latest v2 recovery semantics, adding one fence only: a capability
+-- cannot rotate while a v3 provider execution lease is active. v2 reservations
+-- never set this column, so legacy/provider-unavailable recovery is unchanged.
 create or replace function public.issue_clearspeak_accent_attempt_authority(
   p_user_id uuid, p_attempt_id uuid, p_capability_hash text,
   p_expires_at timestamptz, p_selector_hash text
@@ -35,9 +38,6 @@ begin
           )) then
       return jsonb_build_object('status','conflict');
     end if;
-    -- Recovery is allowed only after both the prior capability and any reserved
-    -- execution lease are over. Keep request_hash immutable; a new exact reserve
-    -- must establish the next bounded execution lease.
     update public.clearspeak_accent_attempt_lifecycle
       set capability_hash=p_capability_hash,
           capability_expires_at=p_expires_at,
@@ -64,7 +64,9 @@ begin
   return jsonb_build_object('status','pending');
 end $$;
 
-create or replace function public.reserve_clearspeak_accent_attempt_v2(
+-- Real-speech-only reserve. A live issuance capability is required to start or
+-- refresh execution. Exact request identity remains immutable across recovery.
+create or replace function public.reserve_clearspeak_accent_attempt_v3(
   p_user_id uuid, p_attempt_id uuid, p_request_hash text, p_capability_hash text
 ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
 declare l public.clearspeak_accent_attempt_lifecycle; a public.clearspeak_accent_attempts; lease_until timestamptz;
@@ -86,7 +88,6 @@ begin
       where user_id=p_user_id and attempt_id=p_attempt_id;
     return jsonb_build_object('status','committed','requestHash',l.request_hash,'result',a.result);
   end if;
-  -- A reservation can only start/refresh while the issuance capability is live.
   if l.capability_expires_at < now() then
     return jsonb_build_object('status','missing');
   end if;
@@ -106,7 +107,10 @@ begin
   );
 end $$;
 
-create or replace function public.commit_clearspeak_accent_attempt_v2(
+-- Real-speech-only commit. A successful v3 reservation is the bounded completion
+-- authority; the earlier issuance timestamp may elapse while provider work is in
+-- flight, but the execution lease itself may not.
+create or replace function public.commit_clearspeak_accent_attempt_v3(
   p_user_id uuid, p_attempt_id uuid, p_request_hash text,
   p_capability_hash text, p_attempt jsonb
 ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
@@ -132,8 +136,6 @@ begin
   if l.request_hash is null then
     return jsonb_build_object('status','conflict');
   end if;
-  -- Commit authority comes from the exact successful reservation, not from an
-  -- issuance timestamp that may expire while provider work is already in flight.
   if l.execution_lease_expires_at is null or l.execution_lease_expires_at < now() then
     return jsonb_build_object('status','missing');
   end if;
@@ -152,6 +154,9 @@ begin
   return jsonb_build_object('status','committed','requestHash',p_request_hash,'result',a.result,'replayed',false);
 end $$;
 
+-- Preserve existing cancel behavior for v2 rows. For a v3-reserved operation,
+-- the same bounded execution lease lets user cancellation win after issuance
+-- expiry while provider work is still in flight.
 create or replace function public.cancel_clearspeak_accent_attempt_v2(
   p_user_id uuid, p_attempt_id uuid, p_capability_hash text
 ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
@@ -171,8 +176,6 @@ begin
       where user_id=p_user_id and attempt_id=p_attempt_id;
     return jsonb_build_object('status','committed','requestHash',l.request_hash,'result',a.result);
   end if;
-  -- A user may still cancel an already-reserved in-flight operation during its
-  -- execution lease even if the issuance capability clock elapsed meanwhile.
   if l.capability_expires_at < now()
      and (l.execution_lease_expires_at is null or l.execution_lease_expires_at < now()) then
     return jsonb_build_object('status','missing');
@@ -184,12 +187,12 @@ begin
 end $$;
 
 revoke execute on function public.issue_clearspeak_accent_attempt_authority(uuid,uuid,text,timestamptz,text),
-                           public.reserve_clearspeak_accent_attempt_v2(uuid,uuid,text,text),
-                           public.commit_clearspeak_accent_attempt_v2(uuid,uuid,text,text,jsonb),
+                           public.reserve_clearspeak_accent_attempt_v3(uuid,uuid,text,text),
+                           public.commit_clearspeak_accent_attempt_v3(uuid,uuid,text,text,jsonb),
                            public.cancel_clearspeak_accent_attempt_v2(uuid,uuid,text)
   from public, anon, authenticated;
 grant execute on function public.issue_clearspeak_accent_attempt_authority(uuid,uuid,text,timestamptz,text),
-                          public.reserve_clearspeak_accent_attempt_v2(uuid,uuid,text,text),
-                          public.commit_clearspeak_accent_attempt_v2(uuid,uuid,text,text,jsonb),
+                          public.reserve_clearspeak_accent_attempt_v3(uuid,uuid,text,text),
+                          public.commit_clearspeak_accent_attempt_v3(uuid,uuid,text,text,jsonb),
                           public.cancel_clearspeak_accent_attempt_v2(uuid,uuid,text)
   to service_role;
