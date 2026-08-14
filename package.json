@@ -42,6 +42,7 @@
     "shared:build": "npm run build --workspace=mockmate-shared",
     "shared:test": "npm run test --workspace=mockmate-shared",
     "check:contracts": "npm run typecheck --workspace=mockmate-shared"
+    ,"check:clearspeak-v1": "npm run check:contracts && npm run shared:test && npm run shared:build && npm run typecheck && cd backend && npm run build && npm test -- --runTestsByPath tests/clearSpeakAccentV1.test.ts"
   },
   "dependencies": {
     "@google/genai": "^1.40.0",

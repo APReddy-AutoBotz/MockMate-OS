@@ -35,8 +35,17 @@ import { getModuleBridgeById } from '../services/moduleBridgeService';
 import { getSnapshotById } from '../services/groundingSnapshotService';
 import crypto from 'crypto';
 import { canonicalJsonValue, hashArtifactContent } from './artifactAuthority';
+import { ACCENT_PROFILES } from './accentProfiles';
+import { accentCatalog, cancelAccentAttempt, deleteAccentAttempt, getAccentAttemptStatus, issueAccentAttemptAuthority, projectAccentHistoryAttempt, promptFor, rejectClientAuthority, submitAccentAttempt } from './accentV1Service';
+import { getAccentProfile } from './accentProfiles';
 
 const router = Router();
+
+// Catalog metadata contains no user data. Keeping the immutable supported
+// profiles server-owned prevents clients from inventing privileged policies.
+router.get('/accent-profiles', (_req: Request, res: Response) => {
+  res.json({ contractVersion: 'accent-profile-catalog.v1', profiles: ACCENT_PROFILES });
+});
 
 // ─── Rate Limiters ────────────────────────────────────────────────────────────
 // Re-uses the same in-memory token-bucket pattern as server.ts.
@@ -49,7 +58,8 @@ const _rlBuckets = new Map<string, RLBucket>();
 
 function csRateLimit(max: number, windowMs: number) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const key = (req.ip ?? req.headers['x-forwarded-for']?.toString() ?? 'anon');
+    const owner = (req as any).user?.uid ?? 'anon';
+    const key = `${owner}:${req.ip ?? req.headers['x-forwarded-for']?.toString() ?? 'anon'}:${req.route?.path ?? req.path}`;
     const now = Date.now();
     const b = _rlBuckets.get(key) ?? { tokens: max, ts: now };
     if (now - b.ts > windowMs) { b.tokens = max; b.ts = now; }
@@ -69,6 +79,7 @@ const betaEventLimiter    = csRateLimit(120, 60_000);  // 120 events / min / IP
 const betaFeedbackLimiter = csRateLimit(10,  60_000);  // 10 / min / IP
 // /beta/access  — checked once on login; generous
 const betaAccessLimiter   = csRateLimit(30,  60_000);  // 30 / min / IP
+const accentLifecycleLimiter = csRateLimit(30, 60_000);
 
 
 // ─── Multer — memory storage only ────────────────────────────────────────────
@@ -86,8 +97,25 @@ const betaAccessLimiter   = csRateLimit(30,  60_000);  // 30 / min / IP
 //     ✓ HardWordsLedger (failed/resolved words)
 //   Never stored: raw audio binary, audio metadata, Whisper transcript text.
 
+const memoryStorage = multer.memoryStorage();
+const ephemeralMemoryStorage: multer.StorageEngine = {
+  _handleFile: memoryStorage._handleFile.bind(memoryStorage),
+  _removeFile(req, file, cb) {
+    const buffer = (file as Express.Multer.File).buffer;
+    if (Buffer.isBuffer(buffer)) buffer.fill(0);
+    memoryStorage._removeFile(req, file, cb);
+  },
+};
+
+function wipeUploadedAudio(req: Request): void {
+  if (Buffer.isBuffer(req.file?.buffer)) req.file.buffer.fill(0);
+  const files = req.files;
+  if (Array.isArray(files)) files.forEach(file => file.buffer?.fill(0));
+  else if (files) Object.values(files).flat().forEach(file => file.buffer?.fill(0));
+}
+
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: ephemeralMemoryStorage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB — max ~5 min WebM/Opus
   fileFilter: (_req, file, cb) => {
     //
@@ -129,10 +157,11 @@ const upload = multer({
  */
 function handleMulterError(
   err: any,
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction,
 ): void {
+  wipeUploadedAudio(req);
   if (err instanceof MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
       res.status(413).json({ error: 'Audio file exceeds the 10 MB limit. Please record a shorter clip.' });
@@ -150,6 +179,88 @@ function handleMulterError(
 
 // All ClearSpeak routes require auth
 router.use(verifyAuthToken);
+
+// Accent Practice V1 is deliberately separate from legacy /score. Its policy,
+// references and deterministic adapter are selected exclusively by the server.
+router.get('/v1/accent/catalog', (_req, res) => res.json(accentCatalog()));
+
+router.post('/v1/accent/prompts', (req, res) => {
+  try {
+    rejectClientAuthority(req.body);
+    const profile = getAccentProfile(req.body?.profileId);
+    if (!profile || (req.body?.profileVersion != null && req.body.profileVersion !== profile.profileVersion)) return res.status(409).json({ error: 'stale_or_unknown_profile' });
+    if (!['word', 'phrase', 'sentence_reading', 'free_response'].includes(req.body?.mode)) return res.status(422).json({ error: 'unsupported_practice_mode' });
+    return res.json({ prompt: promptFor(profile, req.body.mode), scoringPolicyVersion: profile.scoringPolicyVersion, fixture: true });
+  } catch (error: any) { return res.status(422).json({ error: error.message }); }
+});
+
+router.post('/v1/accent/attempt-authority', accentLifecycleLimiter, async (req, res) => {
+  try {
+    return res.status(201).json(await issueAccentAttemptAuthority((req as any).user?.uid, req.body));
+  } catch (error: any) {
+    const status = error.message === 'lifecycle_limit_reached' ? 429 : error.message === 'idempotency_conflict' ? 409 : 422;
+    const allowed = new Set(['lifecycle_limit_reached','idempotency_conflict','invalid_attempt_id','stale_or_unknown_profile','unsupported_practice_mode','stale_or_mismatched_server_selector','client_authority_rejected']);
+    return res.status(status).json({ error: allowed.has(error.message) ? error.message : 'submission_authority_rejected' });
+  }
+});
+
+router.post('/v1/accent/attempts', upload.single('audio'), handleMulterError, async (req, res) => {
+  try {
+    const userId = (req as any).user?.uid;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!req.file || req.file.size > 5 * 1024 * 1024) return res.status(413).json({ error: 'Audio must be non-empty and no larger than 5 MB' });
+    let metadata: any;
+    try { metadata = JSON.parse(String(req.body.metadata || '')); } catch { return res.status(400).json({ error: 'Malformed attempt metadata' }); }
+    const result = await submitAccentAttempt(userId, metadata, req.file.buffer, req.file.mimetype);
+    return res.status(result.replayed ? 200 : 201).json({ ...result, adapter: 'scoring-unavailable-v1', retention: 'derived-results-only' });
+  } catch (error: any) {
+    const status = error.message === 'idempotency_conflict' ? 409 : error.message === 'authoritative_persistence_unavailable' ? 503 : 422;
+    const publicErrors = new Set(['idempotency_conflict', 'submission_canceled', 'authoritative_persistence_unavailable', 'unsupported_audio_type', 'invalid_audio_evidence', 'invalid_attempt_id', 'stale_or_unknown_profile', 'unsupported_practice_mode', 'stale_or_mismatched_server_selector', 'client_authority_rejected', 'real_speech_provider_not_authorized']);
+    return res.status(status).json({ error: publicErrors.has(error.message) ? error.message : 'accent_attempt_rejected' });
+  } finally {
+    // Memory-storage buffers are ephemeral evidence. Wipe them for every exit,
+    // including malformed metadata, validation returns, success and exceptions.
+    wipeUploadedAudio(req);
+  }
+});
+
+router.get('/v1/accent/attempts/:attemptId/status', async (req, res) => {
+  try {
+    const outcome = await getAccentAttemptStatus((req as any).user?.uid, req.params.attemptId);
+    return res.json(outcome);
+  } catch (error: any) {
+    return res.status(error.message === 'invalid_attempt_id' ? 422 : 503).json({ error: error.message === 'invalid_attempt_id' ? error.message : 'authoritative_persistence_unavailable' });
+  }
+});
+
+router.post('/v1/accent/attempts/:attemptId/cancel', accentLifecycleLimiter, async (req, res) => {
+  try {
+    const outcome = await cancelAccentAttempt((req as any).user?.uid, req.params.attemptId, req.body?.submissionCapability);
+    return res.json(outcome);
+  } catch (error: any) {
+    return res.status(error.message === 'invalid_attempt_id' ? 422 : 503).json({ error: error.message === 'invalid_attempt_id' ? error.message : 'authoritative_persistence_unavailable' });
+  }
+});
+
+router.get('/v1/accent/attempts', async (req, res) => {
+  const userId = (req as any).user?.uid;
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Authoritative persistence unavailable' });
+  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+  const { data, error } = await supabaseAdmin.from('clearspeak_accent_attempts').select('attempt_id,result,fixture,evidence_provenance,duration_ms,mime_type,created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(limit);
+  if (error) return res.status(500).json({ error: 'History unavailable' });
+  const attempts = (data || []).map(projectAccentHistoryAttempt);
+  return res.json({ attempts, retention: 'derived-results-only' });
+});
+
+router.delete('/v1/accent/attempts/:attemptId', async (req, res) => {
+  const userId = (req as any).user?.uid;
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Authoritative persistence unavailable' });
+  // Owner predicate is intentionally non-disclosing: absent and foreign IDs are identical.
+  try {
+    await deleteAccentAttempt(userId, req.params.attemptId);
+    return res.status(204).send();
+  } catch { return res.status(503).json({ error: 'Delete unavailable' }); }
+});
 
 // ─── POST /api/clearspeak/profile ─────────────────────────────────────────────
 

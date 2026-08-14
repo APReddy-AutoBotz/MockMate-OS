@@ -9,14 +9,14 @@
  * Source of truth: implementation_plan.md §14 — Audio Privacy Policy
  */
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 
-export type RecorderState = 'idle' | 'recording' | 'stopped' | 'error';
+export type RecorderState = 'preflight' | 'requesting_permission' | 'recording' | 'preview_ready' | 'scoring_uploading' | 'canceled' | 'permission_denied' | 'permission_revoked' | 'device_lost' | 'offline' | 'unsupported' | 'error' | 'result' | 'idle' | 'stopped';
 
 export interface UseAudioRecorderResult {
   state: RecorderState;
   durationMs: number;
-  startRecording: () => Promise<void>;
+  startRecording: (limits?: { maxDurationMs?: number; maxBytes?: number }) => Promise<void>;
   stopRecording: () => void;
   abortRecording: () => void;
   audioBlob: Blob | null;
@@ -42,14 +42,53 @@ export function useAudioRecorder(): UseAudioRecorderResult {
   const chunksRef = useRef<Blob[]>([]);
   const startTimeRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
+  const generationRef = useRef(0);
+  const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retainedBytesRef = useRef(0);
+  const maxBytesRef = useRef(5 * 1024 * 1024);
+  const maxDurationRef = useRef(120_000);
+  const maxChunksRef = useRef(482);
 
-  const startRecording = useCallback(async () => {
+  const releaseRecorder = useCallback(() => {
+    generationRef.current += 1;
+    if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+    stopTimerRef.current = null;
+    const recorder = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      recorder.onerror = null;
+      if (recorder.state === 'recording') recorder.stop();
+    }
+    streamRef.current?.getTracks().forEach(track => { track.onended = null; track.stop(); });
+    streamRef.current = null;
+    chunksRef.current = [];
+    retainedBytesRef.current = 0;
+  }, []);
+
+  const startRecording = useCallback(async (limits?: { maxDurationMs?: number; maxBytes?: number }) => {
+    releaseRecorder();
+    const generation = generationRef.current;
     setErrorMessage(null);
     chunksRef.current = [];
+    retainedBytesRef.current = 0;
+    const maxDurationMs = Math.max(250, Math.min(limits?.maxDurationMs ?? 120_000, 120_000));
+    maxDurationRef.current = maxDurationMs;
+    maxChunksRef.current = Math.ceil(maxDurationMs / 250) + 2;
+    maxBytesRef.current = Math.max(1, Math.min(limits?.maxBytes ?? 5 * 1024 * 1024, 5 * 1024 * 1024));
 
+    if (!navigator.onLine) { const message='You are offline. Recording cannot be submitted.'; setState('offline'); setErrorMessage(message); throw new Error(message); }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') { const message='Microphone recording is not supported in this browser.'; setState('unsupported'); setErrorMessage(message); throw new Error(message); }
+    setState('requesting_permission');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      if (generation !== generationRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        throw new Error('Microphone request was canceled.');
+      }
       streamRef.current = stream;
+      stream.getAudioTracks().forEach(track => { track.onended = () => { if (generation !== generationRef.current) return; releaseRecorder(); setAudioBlob(null); setDurationMs(0); setState('device_lost'); setErrorMessage('Microphone access was revoked or the device was disconnected. Please reconnect it and retry.'); }; });
 
       const mimeType = PREFERRED_MIME_TYPES.find(t => MediaRecorder.isTypeSupported(t)) ?? '';
 
@@ -57,14 +96,27 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
+        if (generation !== generationRef.current || e.data.size <= 0) return;
+        if (chunksRef.current.length >= maxChunksRef.current || retainedBytesRef.current + e.data.size > maxBytesRef.current) {
+          releaseRecorder();
+          setState('error');
+          setErrorMessage('Recording reached the safe memory limit. Please record a shorter response.');
+          return;
+        }
+        retainedBytesRef.current += e.data.size;
+        chunksRef.current.push(e.data);
       };
 
       recorder.onstop = () => {
+        if (generation !== generationRef.current) return;
         const blob = new Blob(chunksRef.current, { type: mimeType || 'audio/webm' });
+        chunksRef.current = [];
+        retainedBytesRef.current = 0;
+        if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+        stopTimerRef.current = null;
         setAudioBlob(blob);
-        setDurationMs(Date.now() - startTimeRef.current);
-        setState('stopped');
+        setDurationMs(Math.min(Date.now() - startTimeRef.current, maxDurationRef.current));
+        setState('preview_ready');
 
         // Stop microphone tracks to release hardware indicator
         streamRef.current?.getTracks().forEach(t => t.stop());
@@ -72,6 +124,8 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       };
 
       recorder.onerror = () => {
+        if (generation !== generationRef.current) return;
+        releaseRecorder();
         setState('error');
         setErrorMessage('Recording failed. Please check microphone permissions.');
         streamRef.current?.getTracks().forEach(t => t.stop());
@@ -79,16 +133,21 @@ export function useAudioRecorder(): UseAudioRecorderResult {
 
       recorder.start(250); // Collect chunks every 250ms
       startTimeRef.current = Date.now();
+      stopTimerRef.current = setTimeout(() => {
+        if (generation === generationRef.current && recorder.state === 'recording') recorder.stop();
+      }, maxDurationMs);
       setState('recording');
     } catch (err: any) {
-      setState('error');
+      if (generation !== generationRef.current) throw err;
+      releaseRecorder();
+      setState(err?.name === 'NotAllowedError' ? 'permission_denied' : err?.name === 'NotFoundError' ? 'device_lost' : 'error');
       const msg = err?.name === 'NotAllowedError'
           ? 'Microphone access denied. Please allow microphone in your browser settings.'
           : 'Could not access microphone. Please try again.';
       setErrorMessage(msg);
       throw new Error(msg);
     }
-  }, []);
+  }, [releaseRecorder]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current?.state === 'recording') {
@@ -97,26 +156,22 @@ export function useAudioRecorder(): UseAudioRecorderResult {
   }, []);
 
   const abortRecording = useCallback(() => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.onstop = null;
-      if (mediaRecorderRef.current.state === 'recording') {
-        mediaRecorderRef.current.stop();
-      }
-    }
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
+    releaseRecorder();
     setAudioBlob(null);
     chunksRef.current = [];
     setDurationMs(0);
-    setState('idle');
-  }, []);
+    setState('canceled');
+  }, [releaseRecorder]);
+
+  useEffect(() => () => releaseRecorder(), [releaseRecorder]);
 
   const clearAudio = useCallback(() => {
+    releaseRecorder();
     setAudioBlob(null);
     chunksRef.current = [];
     setDurationMs(0);
     setState('idle');
-  }, []);
+  }, [releaseRecorder]);
 
   return {
     state,

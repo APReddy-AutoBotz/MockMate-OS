@@ -1641,6 +1641,93 @@ export const ClearSpeakScoreResponseSchema = z.object({
 }).strict();
 export type ClearSpeakScoreResponse = z.infer<typeof ClearSpeakScoreResponseSchema>;
 
+// ClearSpeak Accent Training V1 is additive: legacy session scores above retain
+// their original meaning. Accent preference is a learner-selected practice
+// target, never a language-quality, identity, or native-ness classification.
+export const AccentProfileIdSchema = z.enum(['en-GB-general-v1', 'en-US-general-v1']);
+export const AccentProfileV1Schema = z.object({
+  contractVersion: z.literal('accent-profile.v1'),
+  profileId: AccentProfileIdSchema,
+  profileVersion: z.literal(1),
+  locale: z.enum(['en-GB', 'en-US']),
+  displayName: z.string().min(1).max(80),
+  description: z.string().min(1).max(400),
+  referenceSetVersion: z.string().min(1).max(80),
+  scoringPolicyVersion: z.string().min(1).max(80),
+  safetyStatement: z.string().min(1).max(400),
+}).strict();
+export type AccentProfileV1 = z.infer<typeof AccentProfileV1Schema>;
+
+export const PracticeModeSchema = z.enum(['word', 'phrase', 'sentence_reading', 'free_response']);
+export const PracticePromptV1Schema = z.object({
+  contractVersion: z.literal('practice-prompt.v1'),
+  promptId: z.string().uuid(),
+  promptVersion: z.number().int().positive(),
+  mode: PracticeModeSchema,
+  profileId: AccentProfileIdSchema,
+  profileVersion: z.literal(1),
+  referenceSetVersion: z.string().min(1).max(80),
+  displayText: z.string().min(1).max(1200),
+  expectedText: z.string().min(1).max(1200).optional(),
+  maxDurationMs: z.number().int().min(1000).max(120000),
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  referenceLabel: z.literal('Synthetic CI fixture — not human- or provider-validated pronunciation.'),
+}).strict().superRefine((value, ctx) => {
+  if (value.mode !== 'free_response' && !value.expectedText) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['expectedText'], message: 'Expected text is required for read-aloud modes' });
+  }
+});
+export type PracticePromptV1 = z.infer<typeof PracticePromptV1Schema>;
+
+export const EvidenceStatusSchema = z.enum(['sufficient', 'limited', 'insufficient', 'unsupported']);
+export const AccentDimensionV1Schema = z.object({
+  score: z.number().int().min(0).max(100).nullable(),
+  confidence: z.number().min(0).max(1),
+  evidenceStatus: EvidenceStatusSchema,
+  summary: z.string().min(1).max(400),
+}).strict().superRefine((value, ctx) => {
+  if ((value.evidenceStatus === 'insufficient' || value.evidenceStatus === 'unsupported') && value.score !== null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['score'], message: 'Unsupported evidence cannot have a precise score' });
+  }
+});
+
+export const AccentScoreV1Schema = z.object({
+  contractVersion: z.literal('accent-score.v1'),
+  attemptId: z.string().uuid(),
+  resultId: z.string().uuid(),
+  promptId: z.string().uuid(),
+  promptVersion: z.number().int().positive(),
+  promptContentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  profileId: AccentProfileIdSchema,
+  profileVersion: z.literal(1),
+  referenceSetVersion: z.string().min(1).max(80),
+  scoringPolicyVersion: z.string().min(1).max(80),
+  evidenceProvenance: z.enum(['synthetic_fixture_scored', 'user_recording_unscored']),
+  fixture: z.boolean(),
+  dimensions: z.object({
+    intelligibility: AccentDimensionV1Schema,
+    pronunciation: AccentDimensionV1Schema,
+    prosody: AccentDimensionV1Schema,
+    fluency: AccentDimensionV1Schema,
+    targetStyle: AccentDimensionV1Schema,
+  }).strict(),
+  coaching: z.array(z.object({
+    rank: z.number().int().min(1).max(3),
+    dimension: z.enum(['intelligibility', 'pronunciation', 'prosody', 'fluency', 'targetStyle']),
+    action: z.string().min(1).max(400),
+  }).strict()).max(3),
+  disclaimer: z.string().min(1).max(400),
+}).strict().superRefine((value, ctx) => {
+  if (value.evidenceProvenance === 'user_recording_unscored') {
+    if (value.fixture || value.scoringPolicyVersion !== 'scoring-unavailable.v1') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['fixture'], message: 'User recordings cannot be synthetic fixtures' });
+    for (const [name, dimension] of Object.entries(value.dimensions)) {
+      if (dimension.score !== null || dimension.evidenceStatus !== 'unsupported') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['dimensions', name], message: 'Unscored user recordings require unsupported null dimensions' });
+    }
+  }
+  if (value.evidenceProvenance === 'synthetic_fixture_scored' && !value.fixture) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['fixture'], message: 'Synthetic scored evidence must be a fixture' });
+});
+export type AccentScoreV1 = z.infer<typeof AccentScoreV1Schema>;
+
 export const BridgeTriggerStateSchema = z.object({
   streakMet: z.boolean(),
   rollingAvgMet: z.boolean(),

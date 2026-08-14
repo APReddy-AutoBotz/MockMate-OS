@@ -118,6 +118,37 @@ async function runRuntimeVerification() {
       console.log(`[Runtime Verification] Executing migration: ${file}`);
       const sql = await readFile(path.join(migrationsDir, file), 'utf8');
       await client.query(sql);
+
+      // Model Supabase's default result-table mutation grants before the
+      // forward authority hardening is applied. The final migration must close
+      // both service and browser bypasses without removing owner history reads.
+      if (file === '20260811090000_clearspeak_accent_v1.sql') {
+        await client.query(`
+          GRANT INSERT, UPDATE, DELETE, TRUNCATE
+            ON TABLE public.clearspeak_accent_attempts
+            TO PUBLIC, service_role, authenticated, anon;
+        `);
+      }
+
+      // Model Supabase's service_role default table grants after the lifecycle
+      // table is created and before the forward hardening migration is applied.
+      // A bare PostgreSQL role would otherwise conceal a direct-DML bypass.
+      if (file === '20260812150000_clearspeak_attempt_lifecycle.sql') {
+        await client.query(`
+          GRANT INSERT, UPDATE, DELETE, TRUNCATE
+            ON TABLE public.clearspeak_accent_attempt_lifecycle
+            TO PUBLIC, service_role, authenticated, anon;
+        `);
+        const modeledLifecycleDml = await client.query(`
+          SELECT
+            has_table_privilege('service_role', 'public.clearspeak_accent_attempt_lifecycle', 'INSERT') AS service_insert,
+            has_table_privilege('authenticated', 'public.clearspeak_accent_attempt_lifecycle', 'TRUNCATE') AS authenticated_truncate,
+            has_table_privilege('anon', 'public.clearspeak_accent_attempt_lifecycle', 'DELETE') AS anon_delete
+        `);
+        if (!Object.values(modeledLifecycleDml.rows[0]).every(Boolean)) {
+          throw new Error('Could not model Supabase service_role lifecycle DML defaults');
+        }
+      }
     }
     console.log('[Runtime Verification] All migration SQL compiled and executed cleanly!');
 
@@ -966,6 +997,335 @@ async function runRuntimeVerification() {
     if (policyStages.rows.length!==policyModes.length || policyStages.rows.some(row=>{ const policy=policyModes.find(([mode,,difficulty])=>mode===row.mode && difficulty===(row.adaptive_policy.maxTurns===10?'expert':'intermediate')); return !policy || row.current_stage!==policy[1] || Number(row.adaptive_policy.maxTurns)!==policy[3] || Number(row.adaptive_policy.maxProbesPerRoot)!==1 || Number(row.adaptive_policy.maxChallenges)!==2 || row.adaptive_policy.requireReflection!==true; })) throw new Error('Atomic grounded session initialization did not persist the selected reasoning-mode stage and canonical adaptive policy');
     console.log('  ✓ Supplemental reasoning-mode initial-stage assertions passed');
 
+    // ClearSpeak lifecycle: these are executable transaction/RLS assertions,
+    // not migration-string checks.
+    await setRole(client, 'service_role');
+    const lifecyclePayload = JSON.stringify({
+      prompt_id:'10000000-0000-4000-a000-000000000001',prompt_version:1,prompt_content_hash:'a'.repeat(64),
+      profile_id:'en-GB-general-v1',profile_version:1,reference_set_version:'uk-general-reference.v1',
+      scoring_policy_version:'scoring-unavailable.v1',scoring_contract_version:'accent-score.v1',
+      evidence_provenance:'user_recording_unscored',fixture:false,duration_ms:1000,mime_type:'audio/webm',coaching:[],
+      dimensions:{intelligibility:{score:null},pronunciation:{score:null},prosody:{score:null},fluency:{score:null},targetStyle:{score:null}},
+      result:{contractVersion:'accent-score.v1',evidenceProvenance:'user_recording_unscored',scoringPolicyVersion:'scoring-unavailable.v1',fixture:false,
+        dimensions:{intelligibility:{score:null},pronunciation:{score:null},prosody:{score:null},fluency:{score:null},targetStyle:{score:null}}},
+    }).replaceAll("'", "''");
+    const cancelledId='aaaaaaaa-0000-4000-a000-000000000001';
+    const committedId='aaaaaaaa-0000-4000-a000-000000000002';
+    const expiredId='aaaaaaaa-0000-4000-a000-000000000003';
+    const expiredReservedId='aaaaaaaa-0000-4000-a000-000000000005';
+    const hashA='a'.repeat(64), hashB='b'.repeat(64), selectorA='e'.repeat(64), selectorB='f'.repeat(64);
+    const capabilityA='c'.repeat(64), capabilityB='d'.repeat(64), rotatedCapability='1'.repeat(64);
+    const expiry=`now()+interval '5 minutes'`;
+    const legacyCommitAcl=(await client.query(`select
+      has_function_privilege('service_role','public.commit_clearspeak_accent_attempt(uuid,uuid,text,jsonb)','EXECUTE') service_role,
+      has_function_privilege('authenticated','public.commit_clearspeak_accent_attempt(uuid,uuid,text,jsonb)','EXECUTE') authenticated,
+      has_function_privilege('anon','public.commit_clearspeak_accent_attempt(uuid,uuid,text,jsonb)','EXECUTE') anon`)).rows[0];
+    if(Object.values(legacyCommitAcl).some(Boolean)) throw new Error('Legacy capability-free ClearSpeak commit remains executable');
+    const arbitraryCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','aaaaaaaa-0000-4000-a000-000000000099','${capabilityA}') result`)).rows[0].result;
+    if(arbitraryCancel.status!=='missing') throw new Error('Arbitrary cancellation UUID minted a lifecycle tombstone');
+    await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${capabilityA}',${expiry},'${selectorA}')`);
+    // Treat the first issuance response as lost, then recover the same row and
+    // selector with a replacement capability. Rotation is atomic and leaves
+    // exactly one lifecycle identity.
+    const recovered=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${rotatedCapability}',${expiry},'${selectorA}') result`)).rows[0].result;
+    const changedSelector=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${capabilityA}',${expiry},'${selectorB}') result`)).rows[0].result;
+    const staleCapability=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${capabilityA}') result`)).rows[0].result;
+    await resetRole(client);
+    // Cardinality is a physical invariant, not runtime application authority.
+    // Inspect it only as the trusted disposable database owner, then restore
+    // service_role before continuing through the sanctioned lifecycle RPCs.
+    const lifecycleRows=(await client.query(`select count(*)::int count from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${cancelledId}'`)).rows[0].count;
+    await setRole(client, 'service_role');
+    if(recovered.status!=='pending'||changedSelector.status!=='conflict'||staleCapability.status!=='missing'||lifecycleRows!==1) throw new Error('ClearSpeak authority response-loss recovery failed');
+
+    // A lost issuance response remains recoverable after expiry when and only
+    // when the same row is pending, unreserved, and selector-identical.
+    await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredId}','${capabilityA}',now()+interval '100 milliseconds','${selectorA}')`);
+    await client.query(`select pg_sleep(0.15)`);
+    const expiredChangedSelector=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredId}','${capabilityB}',${expiry},'${selectorB}') result`)).rows[0].result;
+    const expiredRecovered=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredId}','${rotatedCapability}',${expiry},'${selectorA}') result`)).rows[0].result;
+    const expiredStaleCapability=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredId}','${hashA}','${capabilityA}') result`)).rows[0].result;
+    const expiredReserve=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredId}','${hashA}','${rotatedCapability}') result`)).rows[0].result;
+    const expiredRotateAfterReserve=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredId}','${capabilityB}',${expiry},'${selectorA}') result`)).rows[0].result;
+    if(expiredChangedSelector.status!=='conflict'||expiredRecovered.status!=='pending'||expiredStaleCapability.status!=='missing'||expiredReserve.status!=='pending'||expiredRotateAfterReserve.status!=='conflict') throw new Error('ClearSpeak expired authority recovery/fencing failed');
+
+    // Reservation response loss must remain recoverable through capability
+    // expiry without changing the canonical request hash. Exact content can
+    // continue, while stale capabilities and changed content remain fenced.
+    await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredReservedId}','${capabilityA}',now()+interval '100 milliseconds','${selectorA}')`);
+    await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredReservedId}','${hashA}','${capabilityA}')`);
+    await client.query(`select pg_sleep(0.15)`);
+    const reservedChangedSelector=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredReservedId}','${capabilityB}',${expiry},'${selectorB}') result`)).rows[0].result;
+    const reservedRecovered=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${expiredReservedId}','${rotatedCapability}',${expiry},'${selectorA}') result`)).rows[0].result;
+    const reservedStaleCapability=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredReservedId}','${hashA}','${capabilityA}') result`)).rows[0].result;
+    const reservedChangedContent=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredReservedId}','${hashB}','${rotatedCapability}') result`)).rows[0].result;
+    const reservedExactContent=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${expiredReservedId}','${hashA}','${rotatedCapability}') result`)).rows[0].result;
+    const reservedCancelled=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${expiredReservedId}','${rotatedCapability}') result`)).rows[0].result;
+    if(reservedChangedSelector.status!=='conflict'||reservedRecovered.status!=='pending'||reservedRecovered.requestHash!==hashA||reservedStaleCapability.status!=='missing'||reservedChangedContent.status!=='conflict'||reservedExactContent.status!=='pending'||reservedCancelled.status!=='cancelled') throw new Error('ClearSpeak reserved-expiry exact-content recovery failed');
+    await resetRole(client);
+    const reservedHash=(await client.query(`select request_hash from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${expiredReservedId}'`)).rows[0]?.request_hash;
+    await setRole(client, 'service_role');
+    if(reservedHash!==hashA) throw new Error('ClearSpeak reserved recovery changed the canonical request hash');
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${expiredReservedId}')`);
+
+    // Reclaim only expired, unreserved pending ghosts before applying quota.
+    // Trusted-owner setup creates the otherwise unreachable expired fixtures;
+    // issuance itself performs the production cleanup under the owner lock.
+    await resetRole(client);
+    await client.query(`insert into public.clearspeak_accent_attempt_lifecycle(user_id,attempt_id,status,capability_hash,capability_expires_at,authority_selector_hash)
+      select '${userA}', ('aaaaaaaa-0000-4000-a000-'||lpad(n::text,12,'0'))::uuid, 'pending', '${capabilityA}', now()-interval '1 minute', '${selectorA}'
+      from generate_series(90,92) n`);
+    await setRole(client, 'service_role');
+    const postReclaimId='aaaaaaaa-0000-4000-a000-000000000004';
+    const postReclaim=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${postReclaimId}','${capabilityB}',${expiry},'${selectorA}') result`)).rows[0].result;
+    await resetRole(client);
+    const issuanceGhosts=(await client.query(`select count(*)::int count from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and status='pending' and request_hash is null and capability_expires_at < now()`)).rows[0].count;
+    await setRole(client, 'service_role');
+    if(postReclaim.status!=='pending'||issuanceGhosts!==0) throw new Error('ClearSpeak expired issuance ghosts were not reclaimed');
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${expiredId}')`);
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${postReclaimId}')`);
+    const firstCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
+    const duplicateCancel=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
+    if(firstCancel.status!=='cancelled'||duplicateCancel.status!=='cancelled') throw new Error('Authorized cancel-before-reserve was not idempotent');
+    // Cancellation is terminal but does not consume active issuance capacity.
+    // Exercise beyond the old whole-row ceiling, then prove a fresh authority
+    // still succeeds and cancellation response-loss replays after expiry.
+    for (let n=200; n<305; n++) {
+      const id=`aaaaaaaa-0000-4000-a000-${String(n).padStart(12,'0')}`;
+      const issued=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${id}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;
+      const cancelled=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${id}','${capabilityA}') result`)).rows[0].result;
+      if(issued.status!=='pending'||cancelled.status!=='cancelled') throw new Error('Sequential ClearSpeak cancellation lifecycle failed');
+    }
+    const afterCancellationId='aaaaaaaa-0000-4000-a000-000000000006';
+    const afterCancellations=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${afterCancellationId}','${capabilityB}',${expiry},'${selectorA}') result`)).rows[0].result;
+    if(afterCancellations.status!=='pending') throw new Error('Terminal cancellations exhausted active lifecycle capacity');
+    await resetRole(client);
+    await client.query(`update public.clearspeak_accent_attempt_lifecycle
+      set capability_expires_at=now()-interval '1 minute'
+      where user_id='${userA}' and attempt_id='${cancelledId}'`);
+    await setRole(client, 'service_role');
+    const lostCancelReplay=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${rotatedCapability}') result`)).rows[0].result;
+    if(lostCancelReplay.status!=='cancelled') throw new Error('Expired cancellation response did not replay exactly');
+    await resetRole(client);
+    await client.query(`update public.clearspeak_accent_attempt_lifecycle
+      set updated_at=now()-interval '11 minutes'
+      where user_id='${userA}' and status='cancelled' and attempt_id<>'${cancelledId}'`);
+    await setRole(client, 'service_role');
+    const postCompactionId='aaaaaaaa-0000-4000-a000-000000000007';
+    const postCompaction=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${postCompactionId}','${capabilityB}',${expiry},'${selectorA}') result`)).rows[0].result;
+    await resetRole(client);
+    const retainedOldCancellations=(await client.query(`select count(*)::int count from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and status='cancelled' and updated_at < now()-interval '10 minutes'`)).rows[0].count;
+    await setRole(client, 'service_role');
+    if(postCompaction.status!=='pending'||retainedOldCancellations!==0) throw new Error('Cancelled lifecycle retention was not bounded');
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${afterCancellationId}')`);
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${postCompactionId}')`);
+    const cancelReserveReplay=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${rotatedCapability}') result`)).rows[0].result;
+    const cancelWins=(await client.query(`select public.commit_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashA}','${rotatedCapability}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
+    const cancelChangedRequest=(await client.query(`select public.commit_clearspeak_accent_attempt_v2('${userA}','${cancelledId}','${hashB}','${rotatedCapability}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
+    if(cancelReserveReplay.status!=='cancelled'||cancelWins.status!=='cancelled'||cancelChangedRequest.status!=='cancelled') throw new Error('ClearSpeak cancel-before-reserve/expiry did not replay atomically');
+    const rotateCancelled=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${cancelledId}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;
+    if(rotateCancelled.status!=='conflict') throw new Error('Cancelled ClearSpeak authority rotated');
+    await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${committedId}','${capabilityB}',${expiry},'${selectorA}')`);
+    try {
+      await client.query(`select public.commit_clearspeak_accent_attempt('${userA}','${committedId}','${hashA}','${lifecyclePayload}'::jsonb)`);
+      throw new Error('Legacy capability-free commit executed against an unreserved authority row');
+    } catch (error) {
+      if (!error.message.includes('permission denied')) throw error;
+    }
+    await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}')`);
+    const rotateReserved=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${committedId}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;
+    if(rotateReserved.status!=='conflict') throw new Error('Reserved ClearSpeak authority rotated');
+    const commitWins=(await client.query(`select public.commit_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
+    const cancelAfter=(await client.query(`select public.cancel_clearspeak_accent_attempt_v2('${userA}','${committedId}','${capabilityB}') result`)).rows[0].result;
+    if(commitWins.status!=='committed'||cancelAfter.status!=='committed'||!cancelAfter.result) throw new Error('ClearSpeak commit-before-cancel outcome was not authoritative');
+    const rotateCommitted=(await client.query(`select public.issue_clearspeak_accent_attempt_authority('${userA}','${committedId}','${capabilityA}',${expiry},'${selectorA}') result`)).rows[0].result;
+    if(rotateCommitted.status!=='conflict') throw new Error('Committed ClearSpeak authority rotated');
+    const replay=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}') result`)).rows[0].result;
+    const conflict=(await client.query(`select public.reserve_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashB}','${capabilityB}') result`)).rows[0].result;
+    const commitReplay=(await client.query(`select public.commit_clearspeak_accent_attempt_v2('${userA}','${committedId}','${hashA}','${capabilityB}','${lifecyclePayload}'::jsonb) result`)).rows[0].result;
+    if(replay.status!=='committed'||commitReplay.status!=='committed'||commitReplay.replayed!==true||conflict.status!=='conflict') throw new Error('ClearSpeak terminal replay/conflict lifecycle failed');
+
+    // Supabase-like default DML was granted before the hardening migration.
+    // Prove the final service role cannot bypass capability checks or row locks,
+    // while the sanctioned SECURITY DEFINER lifecycle RPCs above still work.
+    for (const [privilege, statement] of [
+      ['INSERT', `insert into public.clearspeak_accent_attempt_lifecycle(user_id,attempt_id,status) values('${userA}','aaaaaaaa-0000-4000-a000-000000000097','pending')`],
+      ['UPDATE', `update public.clearspeak_accent_attempt_lifecycle set status='cancelled' where user_id='${userA}' and attempt_id='${committedId}'`],
+      ['DELETE', `delete from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${committedId}'`],
+      ['TRUNCATE', 'truncate table public.clearspeak_accent_attempt_lifecycle'],
+    ]) {
+      try {
+        await client.query(statement);
+        throw new Error(`service_role direct lifecycle ${privilege} succeeded`);
+      } catch (error) {
+        if (!error.message.includes('permission denied')) throw error;
+      }
+    }
+
+    // Results and lifecycle state are one mutation authority family. Direct
+    // result-table writes must not bypass capability-bound commit/delete RPCs.
+    for (const [privilege, statement] of [
+      ['INSERT', `insert into public.clearspeak_accent_attempts(user_id,attempt_id,request_hash,prompt_id,prompt_version,prompt_content_hash,profile_id,profile_version,reference_set_version,scoring_policy_version,scoring_contract_version,fixture,dimensions,coaching,duration_ms,mime_type,result,evidence_provenance) values('${userA}','aaaaaaaa-0000-4000-a000-000000000096','${hashA}','8bb701a7-1901-4ef0-b72f-86b93331ee5e',1,'${hashA}','en-GB-general-v1',1,'safe-reference.v1','scoring-unavailable.v1','accent-score.v1',false,'{}','[]',1000,'audio/webm','{}','user_recording_unscored')`],
+      ['UPDATE', `update public.clearspeak_accent_attempts set duration_ms=1001 where user_id='${userA}' and attempt_id='${committedId}'`],
+      ['DELETE', `delete from public.clearspeak_accent_attempts where user_id='${userA}' and attempt_id='${committedId}'`],
+      ['TRUNCATE', 'truncate table public.clearspeak_accent_attempts'],
+    ]) {
+      try {
+        await client.query(statement);
+        throw new Error(`service_role direct result ${privilege} succeeded`);
+      } catch (error) {
+        if (!error.message.includes('permission denied')) throw error;
+      }
+    }
+
+    // Exercise browser roles too. These roles inherited the modeled PUBLIC
+    // defaults, so successful denial also proves PUBLIC cannot provide an
+    // indirect mutation path. TRUNCATE is included because it bypasses RLS.
+    for (const role of ['authenticated', 'anon']) {
+      for (const [table, statements] of Object.entries({
+        clearspeak_accent_attempt_lifecycle: [
+          `insert into public.clearspeak_accent_attempt_lifecycle(user_id,attempt_id,status) values('${userA}','aaaaaaaa-0000-4000-a000-000000000095','pending')`,
+          `update public.clearspeak_accent_attempt_lifecycle set status='cancelled' where user_id='${userA}' and attempt_id='${committedId}'`,
+          `delete from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${committedId}'`,
+          'truncate table public.clearspeak_accent_attempt_lifecycle',
+        ],
+        clearspeak_accent_attempts: [
+          `insert into public.clearspeak_accent_attempts(user_id) values('${userA}')`,
+          `update public.clearspeak_accent_attempts set duration_ms=1001 where user_id='${userA}' and attempt_id='${committedId}'`,
+          `delete from public.clearspeak_accent_attempts where user_id='${userA}' and attempt_id='${committedId}'`,
+          'truncate table public.clearspeak_accent_attempts',
+        ],
+      })) {
+        for (const statement of statements) {
+          try {
+            await resetRole(client);
+            await setRole(client, role, userA);
+            await client.query(statement);
+            throw new Error(`${role} direct ${table} mutation succeeded`);
+          } catch (error) {
+            await resetRole(client);
+            if (!error.message.includes('permission denied')) throw error;
+          }
+        }
+      }
+    }
+
+    await resetRole(client);
+    const directMutationAcl = await client.query(`
+      select coalesce(role.rolname, 'PUBLIC') role_name, table_acl.relname table_name,
+             grant_acl.privilege_type privilege
+      from pg_class table_acl
+      cross join lateral aclexplode(coalesce(table_acl.relacl, acldefault('r', table_acl.relowner))) grant_acl
+      left join pg_roles role on role.oid=grant_acl.grantee
+      where table_acl.relnamespace='public'::regnamespace
+        and table_acl.relname in ('clearspeak_accent_attempts','clearspeak_accent_attempt_lifecycle')
+        and coalesce(role.rolname, 'PUBLIC') in ('service_role','authenticated','anon','PUBLIC')
+        and grant_acl.privilege_type in ('INSERT','UPDATE','DELETE','TRUNCATE')
+    `);
+    if (directMutationAcl.rows.length) {
+      const leaked = directMutationAcl.rows
+        .map(row => `${row.role_name}:${row.table_name}:${row.privilege}`).join(', ');
+      throw new Error(`ClearSpeak direct mutation ACL remained: ${leaked}`);
+    }
+
+    const sanctionedRpcAcl = await client.query(`
+      select role_name, function_name, allowed
+      from (values
+        ('service_role','issue',has_function_privilege('service_role','public.issue_clearspeak_accent_attempt_authority(uuid,uuid,text,timestamptz,text)','EXECUTE')),
+        ('service_role','reserve_v2',has_function_privilege('service_role','public.reserve_clearspeak_accent_attempt_v2(uuid,uuid,text,text)','EXECUTE')),
+        ('service_role','commit_v2',has_function_privilege('service_role','public.commit_clearspeak_accent_attempt_v2(uuid,uuid,text,text,jsonb)','EXECUTE')),
+        ('service_role','cancel_v2',has_function_privilege('service_role','public.cancel_clearspeak_accent_attempt_v2(uuid,uuid,text)','EXECUTE')),
+        ('service_role','delete',has_function_privilege('service_role','public.delete_clearspeak_accent_attempt(uuid,uuid)','EXECUTE')),
+        ('authenticated','commit_v2',has_function_privilege('authenticated','public.commit_clearspeak_accent_attempt_v2(uuid,uuid,text,text,jsonb)','EXECUTE')),
+        ('anon','commit_v2',has_function_privilege('anon','public.commit_clearspeak_accent_attempt_v2(uuid,uuid,text,text,jsonb)','EXECUTE'))
+      ) acl(role_name,function_name,allowed)
+    `);
+    const badRpcAcl = sanctionedRpcAcl.rows.filter(row =>
+      row.role_name === 'service_role' ? !row.allowed : row.allowed);
+    if (badRpcAcl.length) throw new Error(`ClearSpeak sanctioned RPC ACL mismatch: ${JSON.stringify(badRpcAcl)}`);
+    const publicMutationRpcAcl = await client.query(`
+      select p.proname
+      from pg_proc p
+      join pg_namespace n on n.oid=p.pronamespace
+      cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) grant_acl
+      where n.nspname='public' and grant_acl.grantee=0
+        and grant_acl.privilege_type='EXECUTE'
+        and p.proname in (
+          'issue_clearspeak_accent_attempt_authority',
+          'reserve_clearspeak_accent_attempt_v2',
+          'commit_clearspeak_accent_attempt_v2',
+          'cancel_clearspeak_accent_attempt_v2',
+          'delete_clearspeak_accent_attempt',
+          'reserve_clearspeak_accent_attempt',
+          'commit_clearspeak_accent_attempt',
+          'cancel_clearspeak_accent_attempt'
+        )
+    `);
+    if (publicMutationRpcAcl.rows.length) throw new Error(`PUBLIC ClearSpeak mutation RPC remained executable: ${publicMutationRpcAcl.rows.map(row => row.proname).join(', ')}`);
+    await setRole(client, 'service_role');
+
+    // Runtime application authority ends at the SECURITY DEFINER RPC boundary.
+    // Prove owner/foreign RLS and denied browser mutations independently from
+    // the trusted owner session used for physical postcondition inspection.
+    await resetRole(client);
+    await setRole(client,'authenticated',userA);
+    const ownerLifecycle=await client.query(`select attempt_id,status from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' order by attempt_id`);
+    if(ownerLifecycle.rows.length!==2) throw new Error('ClearSpeak lifecycle owner could not read their rows');
+    await resetRole(client);
+    await setRole(client,'authenticated',userB);
+    const foreignLifecycle=await client.query(`select * from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}'`);
+    await resetRole(client);
+    if(foreignLifecycle.rows.length) throw new Error('ClearSpeak lifecycle RLS exposed another user');
+    await setRole(client,'authenticated',userA);
+    const ownerAttempts=await client.query(`select attempt_id,result from public.clearspeak_accent_attempts where user_id='${userA}'`);
+    await resetRole(client);
+    if(ownerAttempts.rows.length!==1) throw new Error('ClearSpeak result owner could not read history');
+    await setRole(client,'authenticated',userB);
+    const foreignAttempts=await client.query(`select * from public.clearspeak_accent_attempts where user_id='${userA}'`);
+    await resetRole(client);
+    if(foreignAttempts.rows.length) throw new Error('ClearSpeak result RLS exposed another user');
+    for (const statement of [
+      `insert into public.clearspeak_accent_attempts(user_id) values('${userA}')`,
+      `update public.clearspeak_accent_attempts set duration_ms=1001 where user_id='${userA}' and attempt_id='${committedId}'`,
+      `delete from public.clearspeak_accent_attempts where user_id='${userA}' and attempt_id='${committedId}'`,
+    ]) {
+      try {
+        await setRole(client,'authenticated',userA);
+        await client.query(statement);
+        throw new Error('Authenticated direct result mutation succeeded');
+      } catch (error) {
+        await resetRole(client);
+        if (!error.message.includes('permission denied')) throw error;
+      }
+    }
+    for (const statement of [
+      `insert into public.clearspeak_accent_attempt_lifecycle(user_id,attempt_id,status) values('${userA}','aaaaaaaa-0000-4000-a000-000000000098','pending')`,
+      `update public.clearspeak_accent_attempt_lifecycle set status='cancelled' where user_id='${userA}' and attempt_id='${cancelledId}'`,
+      `delete from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${cancelledId}'`,
+    ]) {
+      try {
+        await setRole(client,'authenticated',userA);
+        await client.query(statement);
+        throw new Error('Authenticated direct lifecycle mutation succeeded');
+      } catch (error) {
+        await resetRole(client);
+        if (!error.message.includes('permission denied') && !error.message.includes('violates row-level security policy')) throw error;
+      }
+    }
+
+    await setRole(client, 'service_role');
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${committedId}')`);
+    await resetRole(client);
+    // Physical deletion is an internal database invariant, not service-role
+    // read authority. Inspect it only as the disposable database owner.
+    const deletedLifecycle=await client.query(`select 1 from public.clearspeak_accent_attempt_lifecycle where user_id='${userA}' and attempt_id='${committedId}'`);
+    const deletedAttempt=await client.query(`select 1 from public.clearspeak_accent_attempts where user_id='${userA}' and attempt_id='${committedId}'`);
+    if(deletedLifecycle.rowCount||deletedAttempt.rowCount) throw new Error('ClearSpeak transactional deletion left lifecycle or result identity');
+    await setRole(client, 'service_role');
+    await client.query(`select public.delete_clearspeak_accent_attempt('${userA}','${cancelledId}')`);
+    await resetRole(client);
+    console.log('  ✓ Supplemental ClearSpeak cancel/commit/replay/conflict/RLS assertions passed');
+
     // 41. protected_account_deletion
     await setRole(client, 'service_role');
     await client.query(`SELECT public.delete_user_career_context('${userA}'::uuid);`);
@@ -978,12 +1338,16 @@ async function runRuntimeVerification() {
     const orphanSnaps = await client.query(`SELECT count(*) FROM public.career_context_snapshots WHERE user_id = '${userA}'`);
     const orphanBridges = await client.query(`SELECT count(*) FROM public.career_context_bridges WHERE user_id = '${userA}'`);
     const orphanState = await client.query(`SELECT count(*) FROM public.career_context_state WHERE user_id = '${userA}'`);
+    const orphanAccentLifecycle = await client.query(`SELECT count(*) FROM public.clearspeak_accent_attempt_lifecycle WHERE user_id = '${userA}'`);
+    const orphanAccentAttempts = await client.query(`SELECT count(*) FROM public.clearspeak_accent_attempts WHERE user_id = '${userA}'`);
 
     if (
       Number(orphanItems.rows[0].count) !== 0 ||
       Number(orphanSnaps.rows[0].count) !== 0 ||
       Number(orphanBridges.rows[0].count) !== 0 ||
-      Number(orphanState.rows[0].count) !== 0
+      Number(orphanState.rows[0].count) !== 0 ||
+      Number(orphanAccentLifecycle.rows[0].count) !== 0 ||
+      Number(orphanAccentAttempts.rows[0].count) !== 0
     ) {
       throw new Error('Account deletion left orphan rows for User A!');
     }

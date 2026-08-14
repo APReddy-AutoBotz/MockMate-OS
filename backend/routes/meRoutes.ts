@@ -68,7 +68,9 @@ router.delete('/data', async (req, res) => {
         'career_context_bridges',
         'career_context_snapshots',
         'career_context_items',
-        'career_context_state'
+        'career_context_state',
+        'clearspeak_accent_attempt_lifecycle',
+        'clearspeak_accent_attempts'
       );
     }
 
