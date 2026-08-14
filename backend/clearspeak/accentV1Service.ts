@@ -83,9 +83,21 @@ export function validatePromptSelector(input: any): PracticePromptV1 {
   return prompt;
 }
 
-const forbidden = ['provider', 'model', 'apiKey', 'key', 'retention', 'fixture', 'admin', 'scoringAdapter', 'scoringPolicy'];
+const allowedClientSelectorKeys = new Set([
+  'attemptId',
+  'durationMs',
+  'mode',
+  'profileId',
+  'profileVersion',
+  'promptId',
+  'promptVersion',
+  'promptContentHash',
+  'referenceSetVersion',
+  'scoringPolicyVersion',
+]);
 export function rejectClientAuthority(body: any): void {
-  if (!body || typeof body !== 'object' || forbidden.some(k => Object.prototype.hasOwnProperty.call(body, k))) throw new Error('client_authority_rejected');
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('client_authority_rejected');
+  if (Object.keys(body).some(key => !allowedClientSelectorKeys.has(key))) throw new Error('client_authority_rejected');
 }
 
 type AttemptDisposition = { status: 'pending' | 'cancelled' | 'committed' | 'conflict' | 'missing' | 'limit' | 'invalid'; requestHash?: string; result?: AccentAttemptScore; replayed?: boolean };
