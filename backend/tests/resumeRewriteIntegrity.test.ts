@@ -84,17 +84,32 @@ describe('resume rewrite integrity', () => {
     );
     expect(result.safe).toBe(false);
     expect(result.failures).toContain('unsupported_technical_fact');
+    expect(result.failures).toContain('unsupported_source_token');
   });
 
-  it('allows technical facts already evidenced elsewhere in the candidate resume', () => {
+  it('does not transplant a skill from another resume section into an unrelated role bullet', () => {
     const result = assessBulletRewrite(
       resume,
       0,
       1,
       resume.experience![0].bullets[1],
-      'Used SQL with finance stakeholders to improve exception handling.',
+      'Partnered with finance stakeholders using SQL to improve exception handling.',
     );
-    expect(result).toEqual({ safe: true, failures: [] });
+    expect(result.safe).toBe(false);
+    expect(result.failures).toContain('unsupported_technical_fact');
+    expect(result.failures).toContain('unsupported_source_token');
+  });
+
+  it('rejects non-allowlisted qualitative claims absent from the located source bullet', () => {
+    const result = assessBulletRewrite(
+      resume,
+      0,
+      1,
+      resume.experience![0].bullets[1],
+      'Partnered with finance stakeholders to improve enterprise strategy and exception handling.',
+    );
+    expect(result.safe).toBe(false);
+    expect(result.failures).toContain('unsupported_source_token');
   });
 
   it('rejects provider index/original tampering before a suggestion can be accepted', () => {
@@ -105,7 +120,7 @@ describe('resume rewrite integrity', () => {
   it('rejects newly introduced contact or URL data', () => {
     const result = assessResumeRewrite(
       resume.experience![0].bullets[1],
-      'Worked with finance stakeholders; portfolio: https://invented.example.com',
+      'Worked with finance stakeholders through https://invented.example.com',
       resume,
     );
     expect(result.safe).toBe(false);
@@ -116,16 +131,17 @@ describe('resume rewrite integrity', () => {
     expect(assessSummaryRewrite(
       resume,
       resume.summary!,
-      'Automation analyst with UiPath and SQL experience focused on reliable business process improvement.',
+      'Automation analyst with UiPath and SQL focused on reliable business process improvement.',
     ).safe).toBe(true);
 
     const unsafe = assessSummaryRewrite(
       resume,
       resume.summary!,
-      'Automation analyst with AWS experience focused on reliable business process improvement.',
+      'Automation analyst with AWS focused on reliable business process improvement.',
     );
     expect(unsafe.safe).toBe(false);
     expect(unsafe.failures).toContain('unsupported_technical_fact');
+    expect(unsafe.failures).toContain('unsupported_source_token');
   });
 
   it('grounds every provider-parsed structured fact in the extracted source resume', () => {
