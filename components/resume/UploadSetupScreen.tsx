@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { UploadCloud, PenTool, Loader2, FileText, X, Plus, Trash2 } from 'lucide-react';
-import { ResumeData, ResumeScoreResponseSchema } from 'mockmate-shared';
-import { ResumeParseResponseSchema } from 'mockmate-shared/resume-integrity';
+import { ResumeData } from 'mockmate-shared';
+import { GovernedResumeScoreResponseSchema, ResumeParseResponseSchema } from 'mockmate-shared/resume-integrity';
 import { apiClient, ApiError } from '../../services/apiClient';
 
 interface UploadSetupScreenProps {
@@ -18,7 +18,7 @@ const supportedResumeFile = (file: File) => {
 
 const friendlyResumeError = (error: unknown) => {
     const message = error instanceof Error ? error.message : '';
-    if (error instanceof ApiError && error.status === 429 || /429|quota|too many|rate/i.test(message)) {
+    if ((error instanceof ApiError && error.status === 429) || /429|quota|too many|rate/i.test(message)) {
         return "You've used today's free resume reviews. You can keep editing your resume here and try another review tomorrow.";
     }
     if (error instanceof ApiError && error.status === 503) {
@@ -74,7 +74,7 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
         formData.append('resume', file);
         try {
             const parsed = await apiClient.post('/api/resume/parse', ResumeParseResponseSchema, formData);
-            const score = await apiClient.post('/api/resume/score', ResumeScoreResponseSchema, {
+            const score = await apiClient.post('/api/resume/score', GovernedResumeScoreResponseSchema, {
                 resumeData: parsed.resumeData,
                 rawText: parsed.rawText,
                 jdText,
@@ -102,7 +102,7 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
                 education,
                 projects: [],
             };
-            const score = await apiClient.post('/api/resume/score', ResumeScoreResponseSchema, {
+            const score = await apiClient.post('/api/resume/score', GovernedResumeScoreResponseSchema, {
                 resumeData: builtData,
                 rawText: '',
                 jdText,
