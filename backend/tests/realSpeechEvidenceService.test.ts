@@ -164,6 +164,13 @@ describe('P0-5 governed real-speech evidence service', () => {
       .rejects.toThrow(/forbidden identity or employment inference/i);
   });
 
+  it('rejects direct employment inference in provider summaries', async () => {
+    const evidence = evidenceFor() as any;
+    evidence.dimensions.intelligibility.summary = 'This recording limits your employment prospects.';
+    await expect(scoreWithGovernedAccentAdapter(context, audio, adapter(evidence)))
+      .rejects.toThrow(/forbidden identity or employment inference/i);
+  });
+
   it('rejects employment inference in provider coaching', async () => {
     const evidence = evidenceFor() as any;
     evidence.dimensions.fluency.coachingAction = 'Improve this to become more hireable.';
