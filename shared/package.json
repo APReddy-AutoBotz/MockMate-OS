@@ -16,12 +16,21 @@
       "import": "./dist/resumeIntegrity.js",
       "require": "./dist-cjs/resumeIntegrity.js",
       "default": "./dist/resumeIntegrity.js"
+    },
+    "./accent-evidence": {
+      "types": "./dist/accentEvidence.d.ts",
+      "import": "./dist/accentEvidence.js",
+      "require": "./dist-cjs/accentEvidence.js",
+      "default": "./dist/accentEvidence.js"
     }
   },
   "typesVersions": {
     "*": {
       "resume-integrity": [
         "dist/resumeIntegrity.d.ts"
+      ],
+      "accent-evidence": [
+        "dist/accentEvidence.d.ts"
       ]
     }
   },
