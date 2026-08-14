@@ -125,14 +125,14 @@ const issueAuthority = async (userId, attemptId, capabilityHash, selectorHash) =
 
 const reserveAttempt = async (userId, attemptId, requestHash, capabilityHash) => (
   await client.query(
-    `select public.reserve_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4) result`,
+    `select public.reserve_clearspeak_accent_attempt_v3($1::uuid,$2::uuid,$3,$4) result`,
     [userId, attemptId, requestHash, capabilityHash],
   )
 ).rows[0].result;
 
 const commitAttempt = async (userId, attemptId, requestHash, capabilityHash, payload) => (
   await client.query(
-    `select public.commit_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4,$5::jsonb) result`,
+    `select public.commit_clearspeak_accent_attempt_v3($1::uuid,$2::uuid,$3,$4,$5::jsonb) result`,
     [userId, attemptId, requestHash, capabilityHash, JSON.stringify(payload)],
   )
 ).rows[0].result;
@@ -166,6 +166,19 @@ try {
   const user = await client.query('select id from auth.users order by id limit 1');
   if (!user.rows[0]?.id) throw new Error('Disposable runtime verification did not create an auth.users fixture');
   const userId = user.rows[0].id;
+
+  const acl = await client.query(`
+    select
+      has_function_privilege('service_role','public.reserve_clearspeak_accent_attempt_v3(uuid,uuid,text,text)','EXECUTE') as service_reserve,
+      has_function_privilege('service_role','public.commit_clearspeak_accent_attempt_v3(uuid,uuid,text,text,jsonb)','EXECUTE') as service_commit,
+      has_function_privilege('authenticated','public.reserve_clearspeak_accent_attempt_v3(uuid,uuid,text,text)','EXECUTE') as authenticated_reserve,
+      has_function_privilege('anon','public.commit_clearspeak_accent_attempt_v3(uuid,uuid,text,text,jsonb)','EXECUTE') as anon_commit
+  `);
+  if (!acl.rows[0]?.service_reserve || !acl.rows[0]?.service_commit
+      || acl.rows[0]?.authenticated_reserve || acl.rows[0]?.anon_commit) {
+    throw new Error('Real-speech v3 lifecycle RPC ACL is not service-role-only');
+  }
+  console.log('  ✓ real-speech v3 reserve/commit RPCs are service-role-only');
 
   await client.query('begin');
 
@@ -211,9 +224,6 @@ try {
   }
   console.log('  ✓ provider-evaluated low-evidence result accepted with all dimensions null and no coaching');
 
-  // Prove the same governed V2 payload can traverse the existing capability-bound
-  // issue -> reserve -> commit -> replay lifecycle. This reuses the hardened V1
-  // serialization machinery rather than inventing a parallel V2 state machine.
   const lifecycleAttemptId = '70000000-0000-4000-8000-000000000017';
   const lifecycleResult = buildResult(lifecycleAttemptId);
   const lifecyclePayload = buildLifecyclePayload(lifecycleResult);
@@ -239,13 +249,10 @@ try {
       || commitReplay.replayed !== true
       || changedRequest.status !== 'conflict'
       || cancelAfterCommit.status !== 'committed') {
-    throw new Error('Governed accent-score.v2 did not preserve the hardened lifecycle authority/replay contract');
+    throw new Error('Governed accent-score.v2 did not preserve the leased lifecycle authority/replay contract');
   }
-  console.log('  ✓ governed V2 result traversed issue/reserve/commit/replay/conflict/cancel authority unchanged');
+  console.log('  ✓ governed V2 result traversed v3 reserve/commit replay and shared terminal authority');
 
-  // A successful exact reserve creates a bounded execution lease. Simulate the
-  // issuance capability expiring while provider execution is in flight: commit
-  // must still succeed under the live lease rather than forcing a second scorer call.
   const leaseCommitId = '70000000-0000-4000-8000-000000000018';
   const leaseCommitCap = '1'.repeat(64);
   const leaseCommitSelector = '2'.repeat(64);
@@ -268,8 +275,6 @@ try {
   }
   console.log('  ✓ reserved provider execution committed after issuance capability expiry under bounded lease');
 
-  // Cancellation must be able to win the same in-flight race while the lease is
-  // live, even if the issuance capability timestamp elapsed after reservation.
   const leaseCancelId = '70000000-0000-4000-8000-000000000019';
   const leaseCancelCap = '4'.repeat(64);
   const leaseCancelSelector = '5'.repeat(64);
@@ -290,9 +295,6 @@ try {
   }
   console.log('  ✓ cancellation remained authoritative during the in-flight execution lease');
 
-  // Authority must not rotate under an active execution. After both clocks are
-  // over, recovery may rotate the capability but retains exact request identity;
-  // only a fresh exact reserve creates new execution authority.
   const leaseRotateId = '70000000-0000-4000-8000-000000000020';
   const leaseOldCap = '7'.repeat(64);
   const leaseSelector = '8'.repeat(64);
@@ -329,8 +331,6 @@ try {
   }
   console.log('  ✓ active lease blocked capability rotation; post-lease recovery required a fresh exact reserve');
 
-  // The lease is bounded. If both issuance and execution lease have expired,
-  // commit fails closed until the exact request is recovered and reserved again.
   const leaseExpiredId = '70000000-0000-4000-8000-000000000021';
   const leaseExpiredCap = 'b'.repeat(64);
   const leaseExpiredSelector = 'c'.repeat(64);
@@ -375,7 +375,7 @@ try {
   await expectProvenanceConstraintReject('evaluated_unscored_with_precise_score', { userId, attemptId: evaluatedWithScoreId, result: evaluatedWithScore });
 
   await client.query('rollback');
-  console.log('[ClearSpeak P0-5 DB] PASSED: governed real-speech persistence, lifecycle and execution-lease contracts verified in disposable PostgreSQL.');
+  console.log('[ClearSpeak P0-5 DB] PASSED: governed real-speech persistence, v3 lifecycle and execution-lease contracts verified in disposable PostgreSQL.');
 } catch (error) {
   try { await client.query('rollback'); } catch {}
   console.error('[ClearSpeak P0-5 DB] FAILED:', error);
