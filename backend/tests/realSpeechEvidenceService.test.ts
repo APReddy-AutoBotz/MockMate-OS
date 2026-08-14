@@ -25,12 +25,14 @@ const dimension = (
   evidenceStatus: 'sufficient' | 'limited' | 'insufficient' | 'unsupported',
   ref: string,
   coachingAction: string | null = null,
+  contradictions: string[] = [],
 ) => ({
   evidenceStatus,
   confidence,
   candidateScore,
   summary: candidateScore === null ? 'Evidence is unavailable for this dimension.' : 'Bounded evidence supports this dimension.',
   evidenceRefs: candidateScore === null ? [] : [ref],
+  contradictions,
   coachingAction,
 });
 
@@ -100,6 +102,35 @@ describe('P0-5 governed real-speech evidence service', () => {
     expect(result.score.coaching).toEqual([]);
   });
 
+  it('keeps contradictory dimension evidence unscored while other dimensions may score', async () => {
+    const evidence = evidenceFor() as any;
+    evidence.dimensions.pronunciation = dimension(
+      null,
+      0.45,
+      'insufficient',
+      'unused',
+      null,
+      ['alignment and timing signals disagree'],
+    );
+    const result = await scoreWithGovernedAccentAdapter(context, audio, adapter(evidence));
+    expect(result.score.dimensions.pronunciation).toMatchObject({
+      score: null,
+      evidenceStatus: 'insufficient',
+    });
+    expect(result.score.coaching.some(item => item.dimension === 'pronunciation')).toBe(false);
+    expect(result.score.dimensions.intelligibility.score).toBe(91);
+  });
+
+  it('rejects contradictory evidence that attempts to emit a precise score', async () => {
+    const evidence = evidenceFor() as any;
+    evidence.dimensions.pronunciation = {
+      ...dimension(90, 0.95, 'sufficient', 'pronunciation.segment.1', 'Act on conflicting evidence.'),
+      contradictions: ['two normalized signals disagree'],
+    };
+    await expect(scoreWithGovernedAccentAdapter(context, audio, adapter(evidence)))
+      .rejects.toThrow(/contradictory evidence/i);
+  });
+
   it('keeps result identity deterministic for an identical evidence envelope', async () => {
     const evidence = evidenceFor();
     const first = await scoreWithGovernedAccentAdapter(context, audio, adapter(evidence));
@@ -136,6 +167,20 @@ describe('P0-5 governed real-speech evidence service', () => {
   it('rejects employment inference in provider coaching', async () => {
     const evidence = evidenceFor() as any;
     evidence.dimensions.fluency.coachingAction = 'Improve this to become more hireable.';
+    await expect(scoreWithGovernedAccentAdapter(context, audio, adapter(evidence)))
+      .rejects.toThrow(/forbidden identity or employment inference/i);
+  });
+
+  it('rejects identity inference inside contradiction metadata', async () => {
+    const evidence = evidenceFor() as any;
+    evidence.dimensions.pronunciation = dimension(
+      null,
+      0.4,
+      'insufficient',
+      'unused',
+      null,
+      ['one signal infers nationality differently'],
+    );
     await expect(scoreWithGovernedAccentAdapter(context, audio, adapter(evidence)))
       .rejects.toThrow(/forbidden identity or employment inference/i);
   });
