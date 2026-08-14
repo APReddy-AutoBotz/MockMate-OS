@@ -41,7 +41,7 @@ const dimensionOrder: AccentEvidenceDimensionKey[] = [
   'targetStyle',
 ];
 
-const forbiddenIdentityOrEmploymentClaim = /\b(?:native(?:[- ]speaker)?|non[- ]?native|nationality|ethnicity|ethnic|mother tongue|native language|employab\w*|hireab\w*|hiring|correct accent|wrong accent|superior accent|infer(?:red|ring)? (?:identity|origin|nationality|language))\b/i;
+const forbiddenIdentityOrEmploymentClaim = /\b(?:native(?:[- ]speaker)?|non[- ]?native|nationality|ethnicity|ethnic|mother tongue|native language|employment|employab\w*|hireab\w*|hiring|correct accent|wrong accent|superior accent|infer(?:red|ring)? (?:identity|origin|nationality|language))\b/i;
 
 const assertNeutralEvidenceText = (value: string, label: string) => {
   if (forbiddenIdentityOrEmploymentClaim.test(value)) {
