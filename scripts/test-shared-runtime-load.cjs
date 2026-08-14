@@ -20,13 +20,35 @@ const assertResumeIntegrityModule = (resumeIntegrity, mode) => {
   );
 };
 
-const cjsModule = require('mockmate-shared/resume-integrity');
-assertResumeIntegrityModule(cjsModule, 'CommonJS require');
+const assertAccentEvidenceModule = (accentEvidence, mode) => {
+  assert.equal(
+    typeof accentEvidence.AccentScorerEvidenceV1Schema?.safeParse,
+    'function',
+    `accent-evidence scorer contract must be runtime-loadable from ${mode}`,
+  );
+  assert.equal(
+    typeof accentEvidence.AccentScoreV2Schema?.safeParse,
+    'function',
+    `accent-score.v2 contract must be runtime-loadable from ${mode}`,
+  );
+  assert.equal(
+    accentEvidence.AccentRealSpeechPolicyV1?.scoringPolicyVersion,
+    'real-speech-policy.v1',
+    `real speech policy must be exported in ${mode}`,
+  );
+};
+
+const cjsResumeIntegrity = require('mockmate-shared/resume-integrity');
+const cjsAccentEvidence = require('mockmate-shared/accent-evidence');
+assertResumeIntegrityModule(cjsResumeIntegrity, 'CommonJS require');
+assertAccentEvidenceModule(cjsAccentEvidence, 'CommonJS require');
 
 (async () => {
-  const esmModule = await import('mockmate-shared/resume-integrity');
-  assertResumeIntegrityModule(esmModule, 'ES module import');
-  console.log('[Shared Runtime Load] mockmate-shared/resume-integrity loaded through require + import.');
+  const esmResumeIntegrity = await import('mockmate-shared/resume-integrity');
+  const esmAccentEvidence = await import('mockmate-shared/accent-evidence');
+  assertResumeIntegrityModule(esmResumeIntegrity, 'ES module import');
+  assertAccentEvidenceModule(esmAccentEvidence, 'ES module import');
+  console.log('[Shared Runtime Load] resume-integrity + accent-evidence loaded through require + import.');
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;
