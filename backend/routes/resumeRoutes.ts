@@ -9,7 +9,7 @@ import {
   ResumeScoreRequestSchema,
   ResumeSuggestRequestSchema,
 } from 'mockmate-shared/resume-integrity';
-import { extractTextFromFile, parseResumeToSchema } from '../services/resumeParserService';
+import { extractTextFromFile, parseResumeToSchema, ResumeProviderUnavailableError } from '../services/resumeParserService';
 import { runATSDiagnostics, runJDMatch } from '../services/resumeScoringService';
 import {
   assessBulletRewrite,
@@ -29,10 +29,9 @@ const upload = multer({
     const allowed = new Set([
       'application/pdf',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/msword',
     ]);
     if (allowed.has(file.mimetype)) return cb(null, true);
-    cb(new Error('Please upload a PDF, DOC, or DOCX resume.'));
+    cb(new Error('Please upload a PDF or DOCX resume.'));
   },
 });
 
@@ -42,7 +41,7 @@ const providerClient = (): Groq | null => {
 };
 
 const providerUnavailable = (res: express.Response) => res.status(503).json({
-  error: 'Resume AI suggestions are unavailable because the configured provider is not available.',
+  error: 'Resume AI service is unavailable because the configured provider is not available.',
   code: 'SERVICE_UNAVAILABLE',
 });
 
@@ -63,6 +62,9 @@ router.post('/parse', upload.single('resume'), async (req, res) => {
     const payload = ResumeParseResponseSchema.parse({ success: true, rawText, resumeData });
     return res.json(payload);
   } catch (error: any) {
+    if (error instanceof ResumeProviderUnavailableError || error?.code === 'RESUME_PROVIDER_UNAVAILABLE') {
+      return providerUnavailable(res);
+    }
     console.error('[RESUME_PARSE_FAILED]', error?.message || 'unknown');
     return res.status(500).json({ error: 'Failed to parse resume', code: 'INTERNAL_ERROR' });
   }
