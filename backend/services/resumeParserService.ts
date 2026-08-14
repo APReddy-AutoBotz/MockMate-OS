@@ -57,7 +57,7 @@ NON-NEGOTIABLE RULES:
 1. Extract only information literally supported by the resume. Never infer or invent experience, tools, metrics, employers, dates, certifications, contact details, or achievements.
 2. If a field is absent, use an empty string or empty array. Never emit placeholders such as "not specified", "N/A", or example values.
 3. Skill category labels may be organizational, but every skill item itself must appear in the source resume.
-4. You may normalize whitespace and conventional month names, but do not change factual values.
+4. Preserve the candidate's factual field wording exactly apart from whitespace cleanup. Do not expand abbreviations, normalize dates, rename titles, paraphrase bullets, or rewrite summaries during parsing.
 5. Return only one valid JSON object matching the requested shape.
 
 RAW RESUME TEXT:
