@@ -26,6 +26,9 @@ const ids = {
 
 export type PracticeMode = keyof typeof fixtures;
 export type AccentAttemptScore = AccentScoreV1 | AccentScoreV2;
+export type AccentAdapterDescriptor =
+  | { status: 'unavailable'; adapterId: 'scoring-unavailable-v1' }
+  | { status: 'authorized'; adapterId: string; adapterVersion: string };
 
 export function promptFor(profile: AccentProfileV1, mode: PracticeMode): PracticePromptV1 {
   const displayText = fixtures[mode];
@@ -45,6 +48,17 @@ export const accentCatalog = () => ({
   retention: 'derived-results-only' as const,
   realSpeechScoringAvailable: realSpeechScoringAvailable(),
 });
+
+export function accentAdapterDescriptorForScore(score: AccentAttemptScore): AccentAdapterDescriptor {
+  if (score.contractVersion === 'accent-score.v2') {
+    return {
+      status: 'authorized',
+      adapterId: score.evidenceLineage.adapterId,
+      adapterVersion: score.evidenceLineage.adapterVersion,
+    };
+  }
+  return { status: 'unavailable', adapterId: 'scoring-unavailable-v1' };
+}
 
 export function projectAccentHistoryAttempt(attempt: any) {
   return {
