@@ -36,7 +36,7 @@ import { getSnapshotById } from '../services/groundingSnapshotService';
 import crypto from 'crypto';
 import { canonicalJsonValue, hashArtifactContent } from './artifactAuthority';
 import { ACCENT_PROFILES } from './accentProfiles';
-import { accentCatalog, cancelAccentAttempt, deleteAccentAttempt, getAccentAttemptStatus, issueAccentAttemptAuthority, projectAccentHistoryAttempt, promptFor, rejectClientAuthority, submitAccentAttempt } from './accentV1Service';
+import { accentAdapterDescriptorForScore, accentCatalog, cancelAccentAttempt, deleteAccentAttempt, getAccentAttemptStatus, issueAccentAttemptAuthority, projectAccentHistoryAttempt, promptFor, rejectClientAuthority, submitAccentAttempt } from './accentV1Service';
 import { getAccentProfile } from './accentProfiles';
 
 const router = Router();
@@ -212,10 +212,15 @@ router.post('/v1/accent/attempts', upload.single('audio'), handleMulterError, as
     let metadata: any;
     try { metadata = JSON.parse(String(req.body.metadata || '')); } catch { return res.status(400).json({ error: 'Malformed attempt metadata' }); }
     const result = await submitAccentAttempt(userId, metadata, req.file.buffer, req.file.mimetype);
-    return res.status(result.replayed ? 200 : 201).json({ ...result, adapter: 'scoring-unavailable-v1', retention: 'derived-results-only' });
+    return res.status(result.replayed ? 200 : 201).json({
+      ...result,
+      adapter: accentAdapterDescriptorForScore(result.score),
+      retention: 'derived-results-only',
+    });
   } catch (error: any) {
-    const status = error.message === 'idempotency_conflict' ? 409 : error.message === 'authoritative_persistence_unavailable' ? 503 : 422;
-    const publicErrors = new Set(['idempotency_conflict', 'submission_canceled', 'authoritative_persistence_unavailable', 'unsupported_audio_type', 'invalid_audio_evidence', 'invalid_attempt_id', 'stale_or_unknown_profile', 'unsupported_practice_mode', 'stale_or_mismatched_server_selector', 'client_authority_rejected', 'real_speech_provider_not_authorized']);
+    const retryable = error.message === 'authoritative_persistence_unavailable' || error.message === 'real_speech_evidence_unavailable';
+    const status = error.message === 'idempotency_conflict' ? 409 : retryable ? 503 : 422;
+    const publicErrors = new Set(['idempotency_conflict', 'submission_canceled', 'authoritative_persistence_unavailable', 'real_speech_evidence_unavailable', 'unsupported_audio_type', 'invalid_audio_evidence', 'invalid_attempt_id', 'stale_or_unknown_profile', 'unsupported_practice_mode', 'stale_or_mismatched_server_selector', 'client_authority_rejected', 'real_speech_provider_not_authorized']);
     return res.status(status).json({ error: publicErrors.has(error.message) ? error.message : 'accent_attempt_rejected' });
   } finally {
     // Memory-storage buffers are ephemeral evidence. Wipe them for every exit,
