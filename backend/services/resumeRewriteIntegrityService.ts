@@ -21,6 +21,12 @@ const TECHNICAL_FACTS = [
 ] as const;
 
 const normalize = (value: string): string => value.replace(/\s+/g, ' ').trim().toLowerCase();
+const normalizeFact = (value: string): string => value
+  .normalize('NFKC')
+  .toLocaleLowerCase()
+  .replace(/[^\p{L}\p{N}]+/gu, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
 const unique = (values: string[]): string[] => [...new Set(values.map(normalize).filter(Boolean))];
 
 const extract = (value: string, pattern: RegExp): string[] => {
@@ -43,6 +49,37 @@ const technicalFactsIn = (value: string): string[] => {
   });
 };
 
+const structuredFactsIn = (resume: ResumeData): string[] => {
+  const values: Array<string | undefined> = [
+    resume.basics.name,
+    resume.basics.email,
+    resume.basics.phone,
+    resume.basics.location,
+    resume.basics.linkedinUrl,
+    resume.basics.portfolioUrl,
+    resume.summary,
+  ];
+
+  for (const group of resume.skills || []) values.push(...group.items);
+  for (const experience of resume.experience || []) {
+    values.push(experience.company, experience.position, experience.startDate, experience.endDate, ...experience.bullets);
+  }
+  for (const project of resume.projects || []) {
+    values.push(project.name, project.description, project.url, ...(project.tools || []));
+  }
+  for (const education of resume.education || []) {
+    values.push(education.institution, education.degree, education.year);
+  }
+  for (const certification of resume.certifications || []) {
+    values.push(certification.name, certification.issuer, certification.year);
+  }
+  for (const award of resume.awards || []) values.push(award.title, award.description);
+
+  return values
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map(value => value.trim());
+};
+
 export type ResumeRewriteIntegrityFailure =
   | 'empty_or_unchanged'
   | 'source_location_mismatch'
@@ -57,6 +94,7 @@ export interface ResumeRewriteAssessment {
 }
 
 export type ResumeExtractionIntegrityFailure =
+  | 'unsupported_structured_fact'
   | 'unsupported_numeric_fact'
   | 'unsupported_contact_or_url'
   | 'unsupported_technical_fact';
@@ -69,6 +107,13 @@ export interface ResumeExtractionAssessment {
 export const assessResumeExtraction = (sourceText: string, resume: ResumeData): ResumeExtractionAssessment => {
   const target = resumeCorpus(resume);
   const failures: ResumeExtractionIntegrityFailure[] = [];
+  const normalizedSource = normalizeFact(sourceText);
+
+  const hasUnsupportedStructuredFact = structuredFactsIn(resume).some(fact => {
+    const normalizedFact = normalizeFact(fact);
+    return normalizedFact.length > 0 && !normalizedSource.includes(normalizedFact);
+  });
+  if (hasUnsupportedStructuredFact) failures.push('unsupported_structured_fact');
 
   if (introduced(sourceText, target, value => extract(value, NUMBER_FACT)).length > 0) {
     failures.push('unsupported_numeric_fact');
