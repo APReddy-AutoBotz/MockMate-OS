@@ -23,13 +23,14 @@
     "test:resume-clearspeak-journey": "node scripts/test-resume-clearspeak-grounding-journey.mjs",
     "test:clearspeak-interview-journey": "node scripts/test-clearspeak-interview-grounding-journey.mjs",
     "test:career-context-journeys": "npm run test:rejection-checks && npm run test:career-context-api-journey && npm run test:resume-interview-journey && npm run test:resume-clearspeak-journey && npm run test:clearspeak-interview-journey && npm run test:career-context-account-deletion",
+    "test:shared-runtime-load": "node scripts/test-shared-runtime-load.cjs",
     "scan:secrets": "node scripts/scan-git-history.mjs",
     "smoke:deployed": "node scripts/deployed-smoke.mjs",
     "test:preview-security": "node scripts/production-preview-security.mjs",
     "test:runtime-mode-authority": "node scripts/test-runtime-mode-authority.mjs",
     "manifest:readiness": "node scripts/readiness-manifest.mjs",
     "check:preview-readiness": "npm run check:production && npm run audit:production && npm run check:mobile && npm run test:preview-security && npm run smoke:deployed && npm run manifest:readiness",
-    "check:production": "npm run check:contracts && npm run shared:test && npm run shared:build && npm run typecheck && npm test -- --runInBand && npm run verify:supabase && npm run verify:supabase:runtime && npm run build && cd backend && npm run build && cd .. && npm run test:runtime-config-static && npm run test:browser-runtime && npm run test:adaptive-api-journey && npm run test:adaptive-ui-journey && npm run test:career-context-journeys && cd backend && npm test && cd .. && npm run smoke:production && npm run scan:secrets",
+    "check:production": "npm run check:contracts && npm run shared:test && npm run shared:build && npm run test:shared-runtime-load && npm run typecheck && npm test -- --runInBand && npm run verify:supabase && npm run verify:supabase:runtime && npm run build && cd backend && npm run build && cd .. && npm run test:runtime-config-static && npm run test:browser-runtime && npm run test:adaptive-api-journey && npm run test:adaptive-ui-journey && npm run test:career-context-journeys && cd backend && npm test && cd .. && npm run smoke:production && npm run scan:secrets",
     "audit:production": "npm audit --omit=dev && cd backend && npm audit --omit=dev",
     "mobile:typecheck": "cd mobile && npx tsc --noEmit",
     "mobile:lint": "cd mobile && npm run lint",
@@ -41,8 +42,8 @@
     "test:coverage": "jest --coverage",
     "shared:build": "npm run build --workspace=mockmate-shared",
     "shared:test": "npm run test --workspace=mockmate-shared",
-    "check:contracts": "npm run typecheck --workspace=mockmate-shared"
-    ,"check:clearspeak-v1": "npm run check:contracts && npm run shared:test && npm run shared:build && npm run typecheck && cd backend && npm run build && npm test -- --runTestsByPath tests/clearSpeakAccentV1.test.ts"
+    "check:contracts": "npm run typecheck --workspace=mockmate-shared",
+    "check:clearspeak-v1": "npm run check:contracts && npm run shared:test && npm run shared:build && npm run typecheck && cd backend && npm run build && npm test -- --runTestsByPath tests/clearSpeakAccentV1.test.ts"
   },
   "dependencies": {
     "@google/genai": "^1.40.0",
