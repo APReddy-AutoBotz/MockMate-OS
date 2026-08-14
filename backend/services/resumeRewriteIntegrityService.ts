@@ -9,8 +9,6 @@ const NUMBER_FACT = /(?:[$€£₹]\s*)?\b\d+(?:[.,]\d+)*(?:\s*%|\+)?\b/g;
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const URL = /(?:https?:\/\/|www\.)[^\s)\]}>,]+/gi;
 
-// High-risk technologies/tools that AI must never add unless the candidate
-// already supplied them somewhere in the source resume.
 const TECHNICAL_FACTS = [
   'react', 'node', 'node.js', 'typescript', 'javascript', 'python', 'java', 'c++', 'c#', '.net',
   'aws', 'azure', 'gcp', 'sql', 'nosql', 'postgres', 'postgresql', 'mysql', 'mongodb', 'redis',
@@ -19,6 +17,24 @@ const TECHNICAL_FACTS = [
   'agile', 'scrum', 'machine learning', 'artificial intelligence', 'generative ai', 'llm', 'rag',
   'supabase', 'vercel', 'netlify', 'openai', 'gemini', 'groq', 'anthropic', 'claude',
 ] as const;
+
+// Deliberately narrow vocabulary that may be introduced for grammar or low-risk
+// wording polish. Candidate-specific nouns, technologies, domains, outcomes and
+// scope words must already occur in the located source evidence.
+const SAFE_REWRITE_TERMS = new Set([
+  'the', 'and', 'but', 'for', 'with', 'within', 'across', 'through', 'using', 'via', 'from', 'into',
+  'that', 'which', 'while', 'where', 'when', 'this', 'these', 'those', 'their', 'your', 'our', 'its',
+  'result', 'results', 'resulting', 'streamline', 'streamlined', 'streamlining', 'optimize', 'optimized',
+  'optimizing', 'improve', 'improved', 'improving', 'enhance', 'enhanced', 'enhancing', 'simplify',
+  'simplified', 'simplifying', 'partner', 'partnered', 'partnering', 'collaborate', 'collaborated',
+  'collaborating', 'coordinate', 'coordinated', 'coordinating', 'support', 'supported', 'supporting',
+  'deliver', 'delivered', 'delivering', 'implement', 'implemented', 'implementing', 'develop', 'developed',
+  'developing', 'design', 'designed', 'designing', 'build', 'built', 'building', 'automate', 'automated',
+  'automating', 'analyze', 'analyzed', 'analyzing', 'manage', 'managed', 'managing', 'reduce', 'reduced',
+  'reducing', 'increase', 'increased', 'increasing', 'maintain', 'maintained', 'maintaining', 'resolve',
+  'resolved', 'resolving', 'enable', 'enabled', 'enabling', 'ensure', 'ensured', 'ensuring', 'effectively',
+  'efficiently', 'successfully',
+]);
 
 const normalize = (value: string): string => value.replace(/\s+/g, ' ').trim().toLowerCase();
 const normalizeFact = (value: string): string => value
@@ -80,13 +96,23 @@ const structuredFactsIn = (resume: ResumeData): string[] => {
     .map(value => value.trim());
 };
 
+const unsupportedSourceTokens = (sourceText: string, suggestedText: string): string[] => {
+  const sourceTokens = new Set(normalizeFact(sourceText).split(' ').filter(Boolean));
+  return [...new Set(
+    normalizeFact(suggestedText)
+      .split(' ')
+      .filter(token => token.length >= 3 && !sourceTokens.has(token) && !SAFE_REWRITE_TERMS.has(token)),
+  )];
+};
+
 export type ResumeRewriteIntegrityFailure =
   | 'empty_or_unchanged'
   | 'source_location_mismatch'
   | 'metric_placeholder'
   | 'new_numeric_fact'
   | 'new_contact_or_url'
-  | 'unsupported_technical_fact';
+  | 'unsupported_technical_fact'
+  | 'unsupported_source_token';
 
 export interface ResumeRewriteAssessment {
   safe: boolean;
@@ -136,7 +162,7 @@ export const assessResumeExtraction = (sourceText: string, resume: ResumeData): 
 export const assessResumeRewrite = (
   sourceText: string,
   suggestedText: string,
-  resume: ResumeData,
+  _resume: ResumeData,
 ): ResumeRewriteAssessment => {
   const source = normalize(sourceText);
   const suggested = normalize(suggestedText);
@@ -148,16 +174,20 @@ export const assessResumeRewrite = (
     failures.push('new_numeric_fact');
   }
 
-  const sourceContacts = `${sourceText}\n${resumeCorpus(resume)}`;
   const newContacts = [
-    ...introduced(sourceContacts, suggestedText, value => extract(value, EMAIL)),
-    ...introduced(sourceContacts, suggestedText, value => extract(value, URL)),
+    ...introduced(sourceText, suggestedText, value => extract(value, EMAIL)),
+    ...introduced(sourceText, suggestedText, value => extract(value, URL)),
   ];
   if (newContacts.length > 0) failures.push('new_contact_or_url');
 
-  const candidateTech = technicalFactsIn(suggestedText);
-  const evidencedTech = new Set(technicalFactsIn(resumeCorpus(resume)));
-  if (candidateTech.some(fact => !evidencedTech.has(fact))) failures.push('unsupported_technical_fact');
+  const evidencedTech = new Set(technicalFactsIn(sourceText));
+  if (technicalFactsIn(suggestedText).some(fact => !evidencedTech.has(fact))) {
+    failures.push('unsupported_technical_fact');
+  }
+
+  if (unsupportedSourceTokens(sourceText, suggestedText).length > 0) {
+    failures.push('unsupported_source_token');
+  }
 
   return { safe: failures.length === 0, failures };
 };
@@ -173,6 +203,8 @@ export const assessBulletRewrite = (
   if (!actual || normalize(actual) !== normalize(providerOriginal)) {
     return { safe: false, failures: ['source_location_mismatch'] };
   }
+  // Bullet evidence is deliberately local: a skill or claim that appears in a
+  // different role or in the global skills list cannot be transplanted here.
   return assessResumeRewrite(actual, suggestedText, resume);
 };
 
@@ -185,9 +217,9 @@ export const assessSummaryRewrite = (
   if (normalize(actual) !== normalize(providerOriginal)) {
     return { safe: false, failures: ['source_location_mismatch'] };
   }
-  // A professional summary may legitimately restate facts from anywhere in the
-  // resume, so numeric/contact checks use the whole candidate-provided corpus.
-  return assessResumeRewrite(resumeCorpus(resume), suggestedText, resume);
+  // A summary is global by nature, so it may restate facts from anywhere in the
+  // candidate-provided resume, but still cannot introduce an unevidenced token.
+  return assessResumeRewrite(structuredFactsIn(resume).join('\n'), suggestedText, resume);
 };
 
 export const passedResumeRewriteIntegrity = (): ResumeRewriteIntegrity => ({
@@ -199,5 +231,6 @@ export const passedResumeRewriteIntegrity = (): ResumeRewriteIntegrity => ({
     'no_metric_placeholder',
     'no_new_contact_or_url',
     'no_unsupported_technical_fact',
+    'no_unsupported_source_token',
   ],
 });
