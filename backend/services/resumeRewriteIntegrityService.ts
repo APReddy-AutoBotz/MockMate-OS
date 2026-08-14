@@ -18,9 +18,6 @@ const TECHNICAL_FACTS = [
   'supabase', 'vercel', 'netlify', 'openai', 'gemini', 'groq', 'anthropic', 'claude',
 ] as const;
 
-// Only grammar/linking terms may be introduced freely. Verbs/adverbs that can
-// assert delivery, scale, quality or outcomes must be evidenced by the located
-// source text (or be a morphological form of an evidenced source token).
 const GRAMMAR_ONLY_TERMS = new Set([
   'the', 'and', 'but', 'for', 'with', 'within', 'across', 'through', 'using', 'via', 'from', 'into',
   'that', 'which', 'while', 'where', 'when', 'this', 'these', 'those', 'their', 'your', 'our', 'its',
@@ -99,6 +96,13 @@ const structuredFactsIn = (resume: ResumeData): string[] => {
     .map(value => value.trim());
 };
 
+const containsNormalizedPhrase = (sourceText: string, fact: string): boolean => {
+  const normalizedSource = normalizeFact(sourceText);
+  const normalizedFact = normalizeFact(fact);
+  if (!normalizedFact) return true;
+  return ` ${normalizedSource} `.includes(` ${normalizedFact} `);
+};
+
 const unsupportedSourceTokens = (sourceText: string, suggestedText: string): string[] => {
   const sourceTokens = normalizeFact(sourceText).split(' ').filter(Boolean);
   const sourceTokenSet = new Set(sourceTokens);
@@ -142,13 +146,10 @@ export interface ResumeExtractionAssessment {
 export const assessResumeExtraction = (sourceText: string, resume: ResumeData): ResumeExtractionAssessment => {
   const target = resumeCorpus(resume);
   const failures: ResumeExtractionIntegrityFailure[] = [];
-  const normalizedSource = normalizeFact(sourceText);
 
-  const hasUnsupportedStructuredFact = structuredFactsIn(resume).some(fact => {
-    const normalizedFact = normalizeFact(fact);
-    return normalizedFact.length > 0 && !normalizedSource.includes(normalizedFact);
-  });
-  if (hasUnsupportedStructuredFact) failures.push('unsupported_structured_fact');
+  if (structuredFactsIn(resume).some(fact => !containsNormalizedPhrase(sourceText, fact))) {
+    failures.push('unsupported_structured_fact');
+  }
 
   if (introduced(sourceText, target, value => extract(value, NUMBER_FACT)).length > 0) {
     failures.push('unsupported_numeric_fact');
