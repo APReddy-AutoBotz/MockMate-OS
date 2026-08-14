@@ -37,7 +37,7 @@ describe('P0-5 ephemeral accent audio privacy boundary', () => {
 
   it('aborts browser upload work before issuing authoritative cancellation', () => {
     const cancellationBlock = browserSource.match(
-      /const cancelSubmission[\s\S]*?const terminal=/,
+      /const cancelSubmission[\s\S]*?const terminal\s*=/,
     )?.[0] ?? '';
     expect(cancellationBlock).toMatch(/uploadController\.current\?\.abort\(\)/);
     expect(cancellationBlock).toMatch(/\/cancel`/);
