@@ -9,8 +9,8 @@ const NUMBER_FACT = /(?:[$€£₹]\s*)?\b\d+(?:[.,]\d+)*(?:\s*%|\+)?\b/g;
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const URL = /(?:https?:\/\/|www\.)[^\s)\]}>,]+/gi;
 
-// High-risk technologies/tools that an ATS rewrite must never add unless the
-// candidate already supplied them somewhere in the resume.
+// High-risk technologies/tools that AI must never add unless the candidate
+// already supplied them somewhere in the source resume.
 const TECHNICAL_FACTS = [
   'react', 'node', 'node.js', 'typescript', 'javascript', 'python', 'java', 'c++', 'c#', '.net',
   'aws', 'azure', 'gcp', 'sql', 'nosql', 'postgres', 'postgresql', 'mysql', 'mongodb', 'redis',
@@ -55,6 +55,38 @@ export interface ResumeRewriteAssessment {
   safe: boolean;
   failures: ResumeRewriteIntegrityFailure[];
 }
+
+export type ResumeExtractionIntegrityFailure =
+  | 'unsupported_numeric_fact'
+  | 'unsupported_contact_or_url'
+  | 'unsupported_technical_fact';
+
+export interface ResumeExtractionAssessment {
+  safe: boolean;
+  failures: ResumeExtractionIntegrityFailure[];
+}
+
+export const assessResumeExtraction = (sourceText: string, resume: ResumeData): ResumeExtractionAssessment => {
+  const target = resumeCorpus(resume);
+  const failures: ResumeExtractionIntegrityFailure[] = [];
+
+  if (introduced(sourceText, target, value => extract(value, NUMBER_FACT)).length > 0) {
+    failures.push('unsupported_numeric_fact');
+  }
+
+  const introducedContacts = [
+    ...introduced(sourceText, target, value => extract(value, EMAIL)),
+    ...introduced(sourceText, target, value => extract(value, URL)),
+  ];
+  if (introducedContacts.length > 0) failures.push('unsupported_contact_or_url');
+
+  const sourceTech = new Set(technicalFactsIn(sourceText));
+  if (technicalFactsIn(target).some(fact => !sourceTech.has(fact))) {
+    failures.push('unsupported_technical_fact');
+  }
+
+  return { safe: failures.length === 0, failures };
+};
 
 export const assessResumeRewrite = (
   sourceText: string,
