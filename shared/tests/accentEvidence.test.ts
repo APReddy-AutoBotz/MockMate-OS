@@ -93,9 +93,26 @@ const scoredResult = () => ({
   disclaimer: 'Scores describe evidence from this recording against the selected practice reference; they do not classify identity, native-ness, employability, or correctness.',
 });
 
+const evaluatedUnscoredResult = () => {
+  const value = scoredResult() as any;
+  value.evidenceProvenance = 'user_recording_evaluated_unscored';
+  for (const key of Object.keys(value.dimensions)) {
+    value.dimensions[key] = { score: null, confidence: 0.2, evidenceStatus: 'insufficient', summary: 'Not enough reliable evidence to score this dimension.', evidenceRefs: [] };
+  }
+  value.coaching = [];
+  return value;
+};
+
 describe('P0-5 governed accent evidence contracts', () => {
   it('accepts partial provider evidence with independently unsupported dimensions', () => {
     expect(AccentScorerEvidenceV1Schema.parse(partialEvidence()).providerExecutionState).toBe('partial');
+  });
+
+  it('accepts completed provider execution even when evidence is insufficient to score', () => {
+    const value = partialEvidence() as any;
+    value.providerExecutionState = 'completed';
+    for (const key of Object.keys(value.dimensions)) value.dimensions[key] = unsupported();
+    expect(AccentScorerEvidenceV1Schema.parse(value).providerExecutionState).toBe('completed');
   });
 
   it('rejects provider-owned unknown keys', () => {
@@ -134,19 +151,29 @@ describe('P0-5 governed accent evidence contracts', () => {
     expect((parsed as any).nativeAccentScore).toBeUndefined();
   });
 
+  it('accepts a provider-evaluated recording with zero fabricated dimension scores', () => {
+    const parsed = AccentScoreV2Schema.parse(evaluatedUnscoredResult());
+    expect(parsed.evidenceProvenance).toBe('user_recording_evaluated_unscored');
+    expect(Object.values(parsed.dimensions).every(dimension => dimension.score === null)).toBe(true);
+    expect(parsed.coaching).toEqual([]);
+  });
+
+  it('rejects a scored provenance label when every dimension is null', () => {
+    const value = evaluatedUnscoredResult();
+    value.evidenceProvenance = 'user_recording_scored';
+    expect(() => AccentScoreV2Schema.parse(value)).toThrow(/must be labeled evaluated-unscored/i);
+  });
+
+  it('rejects an evaluated-unscored label when any dimension is scored', () => {
+    const value = scoredResult() as any;
+    value.evidenceProvenance = 'user_recording_evaluated_unscored';
+    expect(() => AccentScoreV2Schema.parse(value)).toThrow(/must be labeled user-recording-scored/i);
+  });
+
   it('rejects coaching that cites another dimension evidence', () => {
     const value = scoredResult() as any;
     value.coaching[0].evidenceRefs = ['fluency.window.1'];
     expect(() => AccentScoreV2Schema.parse(value)).toThrow(/coaching must be grounded/i);
-  });
-
-  it('rejects a v2 result with no scored dimensions', () => {
-    const value = scoredResult() as any;
-    for (const key of Object.keys(value.dimensions)) {
-      value.dimensions[key] = { score: null, confidence: 0, evidenceStatus: 'unsupported', summary: 'Unsupported.', evidenceRefs: [] };
-    }
-    value.coaching = [];
-    expect(() => AccentScoreV2Schema.parse(value)).toThrow(/at least one scored dimension/i);
   });
 
   it('keeps policy confidence thresholds server-owned and dimension-specific', () => {
