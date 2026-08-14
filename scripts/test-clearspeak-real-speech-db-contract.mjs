@@ -58,6 +58,17 @@ const buildResult = (attemptId) => ({
   disclaimer: 'Evidence describes this recording against the learner-selected practice reference only.',
 });
 
+const buildEvaluatedUnscoredResult = (attemptId) => {
+  const result = buildResult(attemptId);
+  result.evidenceProvenance = 'user_recording_evaluated_unscored';
+  result.evidenceLineage.providerExecutionState = 'completed';
+  for (const key of Object.keys(result.dimensions)) {
+    result.dimensions[key] = dimension(null, 'insufficient', 0.2, 'unused');
+  }
+  result.coaching = [];
+  return result;
+};
+
 const client = new Client({ connectionString });
 
 const insertAttempt = async ({ userId, attemptId, result }) => {
@@ -71,7 +82,7 @@ const insertAttempt = async ({ userId, attemptId, result }) => {
       $1::uuid, $2::uuid, $3, $4::uuid, 1,
       $5, 'en-GB-general-v1', 1, 'uk-general-reference.v1',
       'real-speech-policy.v1', 'accent-score.v2', false,
-      'user_recording_scored', $6::jsonb, $7::jsonb, 1800, 'audio/webm', $8::jsonb
+      $6, $7::jsonb, $8::jsonb, 1800, 'audio/webm', $9::jsonb
     )`,
     [
       userId,
@@ -79,6 +90,7 @@ const insertAttempt = async ({ userId, attemptId, result }) => {
       HASH_A,
       PROMPT_ID,
       HASH_A,
+      result.evidenceProvenance,
       JSON.stringify(result.dimensions),
       JSON.stringify(result.coaching),
       JSON.stringify(result),
@@ -133,7 +145,25 @@ try {
       || row.has_native_accent_score) {
     throw new Error('Valid governed real-speech row did not preserve the required derived-only lineage');
   }
-  console.log('  ✓ governed accent-score.v2 derived result accepted with lineage and no aggregate/native score');
+  console.log('  ✓ governed accent-score.v2 scored result accepted with lineage and no aggregate/native score');
+
+  const evaluatedId = '70000000-0000-4000-8000-000000000015';
+  const evaluated = buildEvaluatedUnscoredResult(evaluatedId);
+  await insertAttempt({ userId, attemptId: evaluatedId, result: evaluated });
+  const evaluatedStored = await client.query(
+    `select evidence_provenance,
+            result #> '{dimensions,intelligibility,score}' as intelligibility_score,
+            jsonb_array_length(result->'coaching') as coaching_count
+       from public.clearspeak_accent_attempts
+      where user_id = $1::uuid and attempt_id = $2::uuid`,
+    [userId, evaluatedId],
+  );
+  if (evaluatedStored.rows[0]?.evidence_provenance !== 'user_recording_evaluated_unscored'
+      || evaluatedStored.rows[0]?.intelligibility_score !== null
+      || evaluatedStored.rows[0]?.coaching_count !== 0) {
+    throw new Error('Evaluated-unscored row did not retain truthful null-score semantics');
+  }
+  console.log('  ✓ provider-evaluated low-evidence result accepted with all dimensions null and no coaching');
 
   const missingLineageId = '70000000-0000-4000-8000-000000000011';
   const missingLineage = buildResult(missingLineageId);
@@ -149,12 +179,14 @@ try {
   await expectProvenanceConstraintReject('forbidden_native_accent_score', { userId, attemptId: nativeId, result: withNative });
 
   const allNullId = '70000000-0000-4000-8000-000000000014';
-  const allNull = buildResult(allNullId);
-  for (const key of Object.keys(allNull.dimensions)) {
-    allNull.dimensions[key] = dimension(null, 'unsupported', 0, 'unused');
-  }
-  allNull.coaching = [];
-  await expectProvenanceConstraintReject('all_null_claimed_scored_result', { userId, attemptId: allNullId, result: allNull });
+  const allNullClaimedScored = buildEvaluatedUnscoredResult(allNullId);
+  allNullClaimedScored.evidenceProvenance = 'user_recording_scored';
+  await expectProvenanceConstraintReject('all_null_claimed_scored_result', { userId, attemptId: allNullId, result: allNullClaimedScored });
+
+  const evaluatedWithScoreId = '70000000-0000-4000-8000-000000000016';
+  const evaluatedWithScore = buildResult(evaluatedWithScoreId);
+  evaluatedWithScore.evidenceProvenance = 'user_recording_evaluated_unscored';
+  await expectProvenanceConstraintReject('evaluated_unscored_with_precise_score', { userId, attemptId: evaluatedWithScoreId, result: evaluatedWithScore });
 
   await client.query('rollback');
   console.log('[ClearSpeak P0-5 DB] PASSED: governed real-speech persistence contract verified in disposable PostgreSQL.');
