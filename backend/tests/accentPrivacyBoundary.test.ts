@@ -26,11 +26,15 @@ describe('P0-5 ephemeral accent audio privacy boundary', () => {
   });
 
   it('never includes raw audio in the immutable lifecycle commit payload', () => {
+    // The service now selects v2 or real-speech-only v3 through `commitRpc`.
+    // Inspect the shared payload rather than hard-coding either RPC name.
     const commitBlock = serviceSource.match(
-      /commit_clearspeak_accent_attempt_v2[\s\S]*?p_attempt:\s*\{[\s\S]*?result:\s*score\s*\}\s*\}\);/,
+      /const committed = await lifecycleRpc\(commitRpc,\s*\{[\s\S]*?if \(committed\.status/,
     )?.[0] ?? '';
+    expect(commitBlock).toContain('p_attempt');
     expect(commitBlock).toContain('duration_ms');
     expect(commitBlock).toContain('mime_type');
+    expect(commitBlock).toContain('result: score');
     expect(commitBlock).not.toMatch(/\baudio\s*:/);
     expect(commitBlock).not.toMatch(/audioBuffer|audioBlob|rawAudio|transcript/i);
   });
