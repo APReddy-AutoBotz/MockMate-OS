@@ -53,6 +53,9 @@ jobs:
       - name: 4. Shared build
         run: npm run shared:build
 
+      - name: 4a. Shared CommonJS runtime load
+        run: npm run test:shared-runtime-load
+
       - name: 5. Frontend typecheck
         run: npm run typecheck
 
