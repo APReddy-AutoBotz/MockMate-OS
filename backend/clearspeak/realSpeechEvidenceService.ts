@@ -8,6 +8,8 @@ import {
   type AccentScorerEvidenceV1,
 } from 'mockmate-shared/accent-evidence';
 
+export const REAL_SPEECH_SCORING_TIMEOUT_MS = 90_000;
+
 export interface AccentRealSpeechContextV1 {
   attemptId: string;
   promptId: string;
@@ -26,6 +28,7 @@ export interface GovernedAccentScoringAdapterV1 {
   score(input: {
     context: Readonly<AccentRealSpeechContextV1>;
     audio: Buffer;
+    signal: AbortSignal;
   }): Promise<unknown>;
 }
 
@@ -43,7 +46,11 @@ const dimensionOrder: AccentEvidenceDimensionKey[] = [
 
 const forbiddenIdentityOrEmploymentClaim = /\b(?:native(?:[- ]speaker)?|non[- ]?native|nationality|ethnicity|ethnic|mother tongue|native language|employment|employab\w*|hireab\w*|hiring|correct accent|wrong accent|superior accent|infer(?:red|ring)? (?:identity|origin|nationality|language))\b/i;
 const directOriginInference = /\b(?:speaker|user|person|you|recording|voice|accent|speech|your (?:voice|accent|speech|recording))\b[^.!?\n]{0,48}\b(?:is|are|sounds?|seems?|appears?)\b[^.!?\n]{0,24}\bfrom\b/i;
-const directNationalityDescriptor = /\b(?:speaker|user|person|you|recording|voice|accent|speech|your (?:voice|accent|speech|recording))\b[^.!?\n]{0,48}\b(?:is|are|sounds?|seems?|appears?)\b\s*(?:(?:very|quite|distinctly|typically|like)\s+)*(?:an?\s+)?(?:[a-z]{3,}(?:ish|ian|ean|ese|istani|an|i)|french|dutch|greek|thai|swiss)\b/i;
+const nationalityDescriptor = '(?:[a-z]{3,}(?:ish|ese|ian|ean|istani|ican)|french|dutch|greek|thai|swiss|german|israeli|iraqi|saudi|emirati|afghan|arab|filipino|nepali|bangladeshi|sri\\s+lankan|new\\s+zealander|czech|slovak|cypriot|icelander|kazakh|uzbek|kyrgyz)';
+const directNationalityDescriptor = new RegExp(
+  `\\b(?:speaker|user|person|you|recording|voice|accent|speech|your (?:voice|accent|speech|recording))\\b[^.!?\\n]{0,48}\\b(?:is|are|sounds?|seems?|appears?)\\b\\s*(?:(?:to be|very|quite|distinctly|typically|like)\\s+)*(?:an?\\s+)?${nationalityDescriptor}\\b`,
+  'i',
+);
 
 const assertNeutralEvidenceText = (value: string, label: string) => {
   if (forbiddenIdentityOrEmploymentClaim.test(value)
@@ -160,23 +167,45 @@ const mapDimension = (
   };
 };
 
+type GovernedScoringOptions = { timeoutMs?: number };
+
 export const scoreWithGovernedAccentAdapter = async (
   context: AccentRealSpeechContextV1,
   audio: Buffer,
   adapter: GovernedAccentScoringAdapterV1,
+  options: GovernedScoringOptions = {},
 ): Promise<{ score: AccentScoreV2; evidenceSha256: string }> => {
   if (!audio.length) throw new Error('Accent scoring requires non-empty audio evidence');
   if (audio.length > 5 * 1024 * 1024) throw new Error('Accent scoring audio evidence exceeds the bounded size');
+
+  const timeoutMs = options.timeoutMs ?? REAL_SPEECH_SCORING_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > REAL_SPEECH_SCORING_TIMEOUT_MS) {
+    throw new Error('Accent scoring timeout exceeds server authority');
+  }
 
   // Capture authoritative lineage before adapter code can observe a buffer. The
   // adapter receives a disposable copy so mutation cannot rewrite request truth.
   const authoritativeAudioSha256 = sha256Buffer(audio);
   const authoritativeByteLength = audio.length;
   const adapterAudio = Buffer.from(audio);
+  const controller = new AbortController();
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      controller.abort();
+      reject(new Error('Accent real-speech adapter timed out'));
+    }, timeoutMs);
+  });
+
   let rawEvidence: unknown;
   try {
-    rawEvidence = await adapter.score({ context: Object.freeze({ ...context }), audio: adapterAudio });
+    rawEvidence = await Promise.race([
+      adapter.score({ context: Object.freeze({ ...context }), audio: adapterAudio, signal: controller.signal }),
+      timeout,
+    ]);
   } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    controller.abort();
     adapterAudio.fill(0);
   }
 
