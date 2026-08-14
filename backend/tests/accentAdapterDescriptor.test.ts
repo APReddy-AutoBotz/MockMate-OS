@@ -3,9 +3,10 @@ import { AccentScoreV2Schema } from 'mockmate-shared/accent-evidence';
 import {
   accentAdapterDescriptorForScore,
   accentCatalog,
+  promptFor,
+  rejectClientAuthority,
 } from '../clearspeak/accentV1Service';
 import { unsupportedUserAudioResult } from '../clearspeak/scoringAdapter';
-import { promptFor } from '../clearspeak/accentV1Service';
 import { ACCENT_PROFILES } from '../clearspeak/accentProfiles';
 
 const v2 = AccentScoreV2Schema.parse({
@@ -68,5 +69,40 @@ describe('ClearSpeak accent adapter response envelope', () => {
       adapterId: 'mock-governed-scorer',
       adapterVersion: 'v1',
     });
+  });
+
+  it('accepts only the existing server-validated client selector vocabulary', () => {
+    expect(() => rejectClientAuthority({
+      attemptId: '30000000-0000-4000-8000-000000000005',
+      durationMs: 1000,
+      mode: 'word',
+      profileId: 'en-GB-general-v1',
+      profileVersion: 1,
+      promptId: '30000000-0000-4000-8000-000000000006',
+      promptVersion: 1,
+      promptContentHash: 'a'.repeat(64),
+      referenceSetVersion: 'synthetic-reference.v1',
+      scoringPolicyVersion: 'synthetic-policy.v1',
+    })).not.toThrow();
+  });
+
+  it.each([
+    'provider',
+    'model',
+    'apiKey',
+    'adapterId',
+    'adapterVersion',
+    'realSpeechAuthority',
+    'confidenceThreshold',
+    'fallbackBehavior',
+    'evidenceProvenance',
+    'evidenceLineage',
+    'dimensions',
+    'coaching',
+    'contradictions',
+    'unexpected',
+  ])('rejects client-selected or unknown %s metadata', key => {
+    expect(() => rejectClientAuthority({ mode: 'word', profileId: 'en-GB-general-v1', [key]: 'attacker' }))
+      .toThrow('client_authority_rejected');
   });
 });
