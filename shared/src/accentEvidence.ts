@@ -169,11 +169,19 @@ export const AccentScoredDimensionV2Schema = z.object({
   summary: z.string().min(1).max(400),
   evidenceRefs: z.array(z.string().regex(/^[a-z0-9][a-z0-9._:-]{0,79}$/)).max(12),
 }).strict().superRefine((value, ctx) => {
-  if ((value.evidenceStatus === 'insufficient' || value.evidenceStatus === 'unsupported') && value.score !== null) {
+  const unscored = value.evidenceStatus === 'insufficient' || value.evidenceStatus === 'unsupported';
+  if (unscored && value.score !== null) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['score'],
       message: 'Insufficient or unsupported evidence cannot have a precise score',
+    });
+  }
+  if (unscored && value.evidenceRefs.length !== 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['evidenceRefs'],
+      message: 'Insufficient or unsupported result dimensions cannot expose positive evidence references',
     });
   }
   if (value.score !== null && value.evidenceRefs.length === 0) {
