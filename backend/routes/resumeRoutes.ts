@@ -1,8 +1,9 @@
 import express from 'express';
 import multer from 'multer';
 import Groq from 'groq-sdk';
-import { ResumeDataSchema, ResumeScoreResponseSchema } from 'mockmate-shared';
+import { ResumeDataSchema } from 'mockmate-shared';
 import {
+  GovernedResumeScoreResponseSchema,
   GovernedResumeSuggestionResponseSchema,
   RESUME_REWRITE_INTEGRITY_POLICY_VERSION,
   ResumeParseResponseSchema,
@@ -76,14 +77,14 @@ router.post('/score', enforceUsageLimit('resume_review'), async (req, res) => {
 
   try {
     const { resumeData, rawText, jdText } = request.data;
-    const cacheKey = hashText({ resumeData, rawText, jdText });
-    const cached = await getCachedResult<unknown>('resume_score', cacheKey);
-    const cachedParsed = ResumeScoreResponseSchema.safeParse(cached);
+    const cacheKey = hashText({ contract: 'governed-resume-score.v1', resumeData, rawText, jdText });
+    const cached = await getCachedResult<unknown>('resume_score_governed_v1', cacheKey);
+    const cachedParsed = GovernedResumeScoreResponseSchema.safeParse(cached);
     if (cachedParsed.success) return res.json(cachedParsed.data);
 
     const atsDiagnostics = runATSDiagnostics(resumeData, rawText);
     const jdMatch = jdText.trim() ? await runJDMatch(resumeData, jdText) : null;
-    const payload = ResumeScoreResponseSchema.parse({ success: true, atsDiagnostics, jdMatch });
+    const payload = GovernedResumeScoreResponseSchema.parse({ success: true, atsDiagnostics, jdMatch });
 
     if (supabaseAdmin) {
       const userId = (req as any).user?.uid;
@@ -98,7 +99,7 @@ router.post('/score', enforceUsageLimit('resume_review'), async (req, res) => {
       });
     }
 
-    await setCachedResult('resume_score', cacheKey, payload, 24);
+    await setCachedResult('resume_score_governed_v1', cacheKey, payload, 24);
     return res.json(payload);
   } catch (error: any) {
     console.error('[RESUME_SCORE_FAILED]', error?.message || 'unknown');
