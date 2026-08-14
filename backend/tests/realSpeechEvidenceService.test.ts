@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import {
+  REAL_SPEECH_SCORING_TIMEOUT_MS,
   scoreUserAccentRecording,
   scoreWithGovernedAccentAdapter,
   type AccentRealSpeechContextV1,
@@ -76,6 +77,17 @@ describe('P0-5 governed real-speech evidence service', () => {
       status: 'unavailable',
       reason: 'no_authorized_real_speech_adapter',
     });
+  });
+
+  it('bounds adapter execution below the two-minute database lease', async () => {
+    expect(REAL_SPEECH_SCORING_TIMEOUT_MS).toBeLessThan(120_000);
+    const hangingAdapter: GovernedAccentScoringAdapterV1 = {
+      adapterId: 'mock-governed-scorer',
+      adapterVersion: 'v1',
+      score: jest.fn(async () => new Promise<never>(() => undefined)),
+    };
+    await expect(scoreWithGovernedAccentAdapter(context, audio, hangingAdapter, { timeoutMs: 10 }))
+      .rejects.toThrow(/timed out/i);
   });
 
   it('scores only dimensions that satisfy the server-owned confidence threshold', async () => {
