@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { ATSDiagnosticsResultSchema, ResumeDataSchema } from './index';
+import { ATSDiagnosticsResultSchema, ResumeDataSchema } from './index.js';
 
-export const RESUME_REWRITE_INTEGRITY_POLICY_VERSION = 'resume-rewrite-integrity.v2' as const;
+export const RESUME_REWRITE_INTEGRITY_POLICY_VERSION = 'resume-rewrite-integrity.v3' as const;
 
 export const ResumeParseResponseSchema = z.object({
   success: z.literal(true),
