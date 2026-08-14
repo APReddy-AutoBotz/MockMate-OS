@@ -100,7 +100,7 @@ export function rejectClientAuthority(body: any): void {
   if (Object.keys(body).some(key => !allowedClientSelectorKeys.has(key))) throw new Error('client_authority_rejected');
 }
 
-type AttemptDisposition = { status: 'pending' | 'cancelled' | 'committed' | 'conflict' | 'missing' | 'limit' | 'invalid'; requestHash?: string; result?: AccentAttemptScore; replayed?: boolean };
+type AttemptDisposition = { status: 'pending' | 'cancelled' | 'committed' | 'conflict' | 'missing' | 'limit' | 'invalid'; requestHash?: string; result?: AccentAttemptScore; replayed?: boolean; executionLeaseExpiresAt?: string };
 
 type SubmitAccentAttemptOptions = {
   /** Test-only/provider-integration seam. Route callers omit this so runtime
@@ -199,10 +199,21 @@ export async function submitAccentAttempt(
     return { score: prior.data.result, replayed: true, requestHash };
   }
 
-  // Reserve exact request identity before any future provider operation. This
-  // allows cancellation to win while scoring is in flight and prevents a retry
-  // from silently changing audio, adapter, policy or reference-set authority.
-  const reserved = await lifecycleRpc('reserve_clearspeak_accent_attempt_v2', { p_user_id: userId, p_attempt_id: body.attemptId, p_request_hash: requestHash, p_capability_hash: capabilityHash(submissionCapability) });
+  // V1/provider-unavailable work keeps the already proven v2 lifecycle. Only an
+  // authorized real-speech adapter uses the v3 execution lease, so today's path
+  // and its expiry/recovery semantics remain unchanged.
+  const reserveRpc = executionAuthority
+    ? 'reserve_clearspeak_accent_attempt_v3'
+    : 'reserve_clearspeak_accent_attempt_v2';
+  const commitRpc = executionAuthority
+    ? 'commit_clearspeak_accent_attempt_v3'
+    : 'commit_clearspeak_accent_attempt_v2';
+  const reserved = await lifecycleRpc(reserveRpc, {
+    p_user_id: userId,
+    p_attempt_id: body.attemptId,
+    p_request_hash: requestHash,
+    p_capability_hash: capabilityHash(submissionCapability),
+  });
   if (reserved.status === 'missing') throw new Error('submission_authority_rejected');
   if (reserved.status === 'conflict') throw new Error('idempotency_conflict');
   if (reserved.status === 'cancelled') throw new Error('submission_canceled');
@@ -228,7 +239,7 @@ export async function submitAccentAttempt(
       }, audio, executionAuthority.adapter)).score;
     } catch {
       // Never turn a malformed/failed authorized scorer call into a synthetic or
-      // guessed score. Keep the reserved request recoverable for an exact retry.
+      // guessed score. Keep the exact request recoverable under bounded authority.
       throw new Error('real_speech_evidence_unavailable');
     }
   } else {
@@ -237,14 +248,29 @@ export async function submitAccentAttempt(
     score = unsupportedUserAudioResult(body.attemptId, prompt);
   }
 
-  const committed = await lifecycleRpc('commit_clearspeak_accent_attempt_v2', { p_user_id: userId, p_attempt_id: body.attemptId, p_request_hash: requestHash,
+  const committed = await lifecycleRpc(commitRpc, {
+    p_user_id: userId,
+    p_attempt_id: body.attemptId,
+    p_request_hash: requestHash,
     p_capability_hash: capabilityHash(submissionCapability),
-    p_attempt: { prompt_id: prompt.promptId, prompt_version: prompt.promptVersion, prompt_content_hash: prompt.contentHash,
-      profile_id: prompt.profileId, profile_version: prompt.profileVersion,
+    p_attempt: {
+      prompt_id: prompt.promptId,
+      prompt_version: prompt.promptVersion,
+      prompt_content_hash: prompt.contentHash,
+      profile_id: prompt.profileId,
+      profile_version: prompt.profileVersion,
       reference_set_version: score.contractVersion === 'accent-score.v2' ? score.referenceSetVersion : prompt.referenceSetVersion,
-      scoring_policy_version: score.scoringPolicyVersion, scoring_contract_version: score.contractVersion,
-      evidence_provenance: score.evidenceProvenance, fixture: score.fixture, dimensions: score.dimensions, coaching: score.coaching,
-      duration_ms: body.durationMs, mime_type: normalizedMimeType, result: score } });
+      scoring_policy_version: score.scoringPolicyVersion,
+      scoring_contract_version: score.contractVersion,
+      evidence_provenance: score.evidenceProvenance,
+      fixture: score.fixture,
+      dimensions: score.dimensions,
+      coaching: score.coaching,
+      duration_ms: body.durationMs,
+      mime_type: normalizedMimeType,
+      result: score,
+    },
+  });
   if (committed.status === 'cancelled') throw new Error('submission_canceled');
   if (committed.status === 'conflict') throw new Error('idempotency_conflict');
   if (committed.status !== 'committed' || !committed.result) throw new Error('authoritative_persistence_unavailable');
