@@ -116,6 +116,34 @@ const insertAttempt = async ({ userId, attemptId, result }) => {
   );
 };
 
+const issueAuthority = async (userId, attemptId, capabilityHash, selectorHash) => (
+  await client.query(
+    `select public.issue_clearspeak_accent_attempt_authority($1::uuid,$2::uuid,$3,$4::timestamptz,$5) result`,
+    [userId, attemptId, capabilityHash, new Date(Date.now() + 5 * 60_000).toISOString(), selectorHash],
+  )
+).rows[0].result;
+
+const reserveAttempt = async (userId, attemptId, requestHash, capabilityHash) => (
+  await client.query(
+    `select public.reserve_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4) result`,
+    [userId, attemptId, requestHash, capabilityHash],
+  )
+).rows[0].result;
+
+const commitAttempt = async (userId, attemptId, requestHash, capabilityHash, payload) => (
+  await client.query(
+    `select public.commit_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4,$5::jsonb) result`,
+    [userId, attemptId, requestHash, capabilityHash, JSON.stringify(payload)],
+  )
+).rows[0].result;
+
+const cancelAttempt = async (userId, attemptId, capabilityHash) => (
+  await client.query(
+    `select public.cancel_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3) result`,
+    [userId, attemptId, capabilityHash],
+  )
+).rows[0].result;
+
 const expectProvenanceConstraintReject = async (name, input) => {
   await client.query(`savepoint ${name}`);
   let rejected = false;
@@ -192,39 +220,18 @@ try {
   const capabilityHash = 'd'.repeat(64);
   const selectorHash = 'e'.repeat(64);
   const requestHash = 'f'.repeat(64);
-  const expiry = new Date(Date.now() + 5 * 60_000).toISOString();
 
-  const issued = (await client.query(
-    `select public.issue_clearspeak_accent_attempt_authority($1::uuid,$2::uuid,$3,$4::timestamptz,$5) result`,
-    [userId, lifecycleAttemptId, capabilityHash, expiry, selectorHash],
-  )).rows[0].result;
-  const reserved = (await client.query(
-    `select public.reserve_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4) result`,
-    [userId, lifecycleAttemptId, requestHash, capabilityHash],
-  )).rows[0].result;
-  const committed = (await client.query(
-    `select public.commit_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4,$5::jsonb) result`,
-    [userId, lifecycleAttemptId, requestHash, capabilityHash, JSON.stringify(lifecyclePayload)],
-  )).rows[0].result;
-  const reserveReplay = (await client.query(
-    `select public.reserve_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4) result`,
-    [userId, lifecycleAttemptId, requestHash, capabilityHash],
-  )).rows[0].result;
-  const commitReplay = (await client.query(
-    `select public.commit_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4,$5::jsonb) result`,
-    [userId, lifecycleAttemptId, requestHash, capabilityHash, JSON.stringify(lifecyclePayload)],
-  )).rows[0].result;
-  const changedRequest = (await client.query(
-    `select public.reserve_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3,$4) result`,
-    [userId, lifecycleAttemptId, HASH_B, capabilityHash],
-  )).rows[0].result;
-  const cancelAfterCommit = (await client.query(
-    `select public.cancel_clearspeak_accent_attempt_v2($1::uuid,$2::uuid,$3) result`,
-    [userId, lifecycleAttemptId, capabilityHash],
-  )).rows[0].result;
+  const issued = await issueAuthority(userId, lifecycleAttemptId, capabilityHash, selectorHash);
+  const reserved = await reserveAttempt(userId, lifecycleAttemptId, requestHash, capabilityHash);
+  const committed = await commitAttempt(userId, lifecycleAttemptId, requestHash, capabilityHash, lifecyclePayload);
+  const reserveReplay = await reserveAttempt(userId, lifecycleAttemptId, requestHash, capabilityHash);
+  const commitReplay = await commitAttempt(userId, lifecycleAttemptId, requestHash, capabilityHash, lifecyclePayload);
+  const changedRequest = await reserveAttempt(userId, lifecycleAttemptId, HASH_B, capabilityHash);
+  const cancelAfterCommit = await cancelAttempt(userId, lifecycleAttemptId, capabilityHash);
 
   if (issued.status !== 'pending'
       || reserved.status !== 'pending'
+      || !reserved.executionLeaseExpiresAt
       || committed.status !== 'committed'
       || committed.result?.contractVersion !== 'accent-score.v2'
       || reserveReplay.status !== 'committed'
@@ -235,6 +242,114 @@ try {
     throw new Error('Governed accent-score.v2 did not preserve the hardened lifecycle authority/replay contract');
   }
   console.log('  ✓ governed V2 result traversed issue/reserve/commit/replay/conflict/cancel authority unchanged');
+
+  // A successful exact reserve creates a bounded execution lease. Simulate the
+  // issuance capability expiring while provider execution is in flight: commit
+  // must still succeed under the live lease rather than forcing a second scorer call.
+  const leaseCommitId = '70000000-0000-4000-8000-000000000018';
+  const leaseCommitCap = '1'.repeat(64);
+  const leaseCommitSelector = '2'.repeat(64);
+  const leaseCommitRequest = '3'.repeat(64);
+  const leaseCommitPayload = buildLifecyclePayload(buildResult(leaseCommitId));
+  const leaseCommitIssued = await issueAuthority(userId, leaseCommitId, leaseCommitCap, leaseCommitSelector);
+  const leaseCommitReserved = await reserveAttempt(userId, leaseCommitId, leaseCommitRequest, leaseCommitCap);
+  await client.query(
+    `update public.clearspeak_accent_attempt_lifecycle
+        set capability_expires_at=now()-interval '1 second'
+      where user_id=$1::uuid and attempt_id=$2::uuid`,
+    [userId, leaseCommitId],
+  );
+  const leaseCommit = await commitAttempt(userId, leaseCommitId, leaseCommitRequest, leaseCommitCap, leaseCommitPayload);
+  if (leaseCommitIssued.status !== 'pending'
+      || leaseCommitReserved.status !== 'pending'
+      || !leaseCommitReserved.executionLeaseExpiresAt
+      || leaseCommit.status !== 'committed') {
+    throw new Error('Execution lease did not preserve commit authority after issuance capability expiry');
+  }
+  console.log('  ✓ reserved provider execution committed after issuance capability expiry under bounded lease');
+
+  // Cancellation must be able to win the same in-flight race while the lease is
+  // live, even if the issuance capability timestamp elapsed after reservation.
+  const leaseCancelId = '70000000-0000-4000-8000-000000000019';
+  const leaseCancelCap = '4'.repeat(64);
+  const leaseCancelSelector = '5'.repeat(64);
+  const leaseCancelRequest = '6'.repeat(64);
+  await issueAuthority(userId, leaseCancelId, leaseCancelCap, leaseCancelSelector);
+  const leaseCancelReserved = await reserveAttempt(userId, leaseCancelId, leaseCancelRequest, leaseCancelCap);
+  await client.query(
+    `update public.clearspeak_accent_attempt_lifecycle
+        set capability_expires_at=now()-interval '1 second'
+      where user_id=$1::uuid and attempt_id=$2::uuid`,
+    [userId, leaseCancelId],
+  );
+  const leaseCancel = await cancelAttempt(userId, leaseCancelId, leaseCancelCap);
+  if (leaseCancelReserved.status !== 'pending'
+      || !leaseCancelReserved.executionLeaseExpiresAt
+      || leaseCancel.status !== 'cancelled') {
+    throw new Error('Execution lease did not preserve cancellation authority after issuance capability expiry');
+  }
+  console.log('  ✓ cancellation remained authoritative during the in-flight execution lease');
+
+  // Authority must not rotate under an active execution. After both clocks are
+  // over, recovery may rotate the capability but retains exact request identity;
+  // only a fresh exact reserve creates new execution authority.
+  const leaseRotateId = '70000000-0000-4000-8000-000000000020';
+  const leaseOldCap = '7'.repeat(64);
+  const leaseSelector = '8'.repeat(64);
+  const leaseRequest = '9'.repeat(64);
+  const leaseNewCap = 'a'.repeat(64);
+  const leaseRotatePayload = buildLifecyclePayload(buildResult(leaseRotateId));
+  await issueAuthority(userId, leaseRotateId, leaseOldCap, leaseSelector);
+  const leaseRotateReserved = await reserveAttempt(userId, leaseRotateId, leaseRequest, leaseOldCap);
+  await client.query(
+    `update public.clearspeak_accent_attempt_lifecycle
+        set capability_expires_at=now()-interval '1 second'
+      where user_id=$1::uuid and attempt_id=$2::uuid`,
+    [userId, leaseRotateId],
+  );
+  const rotationWhileActive = await issueAuthority(userId, leaseRotateId, leaseNewCap, leaseSelector);
+  await client.query(
+    `update public.clearspeak_accent_attempt_lifecycle
+        set execution_lease_expires_at=now()-interval '1 second'
+      where user_id=$1::uuid and attempt_id=$2::uuid`,
+    [userId, leaseRotateId],
+  );
+  const rotationAfterLease = await issueAuthority(userId, leaseRotateId, leaseNewCap, leaseSelector);
+  const reserveAfterRotation = await reserveAttempt(userId, leaseRotateId, leaseRequest, leaseNewCap);
+  const oldCapabilityCommit = await commitAttempt(userId, leaseRotateId, leaseRequest, leaseOldCap, leaseRotatePayload);
+  const newCapabilityCommit = await commitAttempt(userId, leaseRotateId, leaseRequest, leaseNewCap, leaseRotatePayload);
+  if (leaseRotateReserved.status !== 'pending'
+      || rotationWhileActive.status !== 'conflict'
+      || rotationAfterLease.status !== 'pending'
+      || rotationAfterLease.requestHash !== leaseRequest
+      || reserveAfterRotation.status !== 'pending'
+      || oldCapabilityCommit.status !== 'missing'
+      || newCapabilityCommit.status !== 'committed') {
+    throw new Error('Execution lease rotation/recovery did not preserve exact request and capability authority');
+  }
+  console.log('  ✓ active lease blocked capability rotation; post-lease recovery required a fresh exact reserve');
+
+  // The lease is bounded. If both issuance and execution lease have expired,
+  // commit fails closed until the exact request is recovered and reserved again.
+  const leaseExpiredId = '70000000-0000-4000-8000-000000000021';
+  const leaseExpiredCap = 'b'.repeat(64);
+  const leaseExpiredSelector = 'c'.repeat(64);
+  const leaseExpiredRequest = 'd'.repeat(64);
+  const leaseExpiredPayload = buildLifecyclePayload(buildResult(leaseExpiredId));
+  await issueAuthority(userId, leaseExpiredId, leaseExpiredCap, leaseExpiredSelector);
+  await reserveAttempt(userId, leaseExpiredId, leaseExpiredRequest, leaseExpiredCap);
+  await client.query(
+    `update public.clearspeak_accent_attempt_lifecycle
+        set capability_expires_at=now()-interval '1 second',
+            execution_lease_expires_at=now()-interval '1 second'
+      where user_id=$1::uuid and attempt_id=$2::uuid`,
+    [userId, leaseExpiredId],
+  );
+  const expiredLeaseCommit = await commitAttempt(userId, leaseExpiredId, leaseExpiredRequest, leaseExpiredCap, leaseExpiredPayload);
+  if (expiredLeaseCommit.status !== 'missing') {
+    throw new Error('Expired execution lease unexpectedly retained commit authority');
+  }
+  console.log('  ✓ expired execution lease fails closed instead of granting indefinite commit authority');
 
   const missingLineageId = '70000000-0000-4000-8000-000000000011';
   const missingLineage = buildResult(missingLineageId);
@@ -260,7 +375,7 @@ try {
   await expectProvenanceConstraintReject('evaluated_unscored_with_precise_score', { userId, attemptId: evaluatedWithScoreId, result: evaluatedWithScore });
 
   await client.query('rollback');
-  console.log('[ClearSpeak P0-5 DB] PASSED: governed real-speech persistence and lifecycle contracts verified in disposable PostgreSQL.');
+  console.log('[ClearSpeak P0-5 DB] PASSED: governed real-speech persistence, lifecycle and execution-lease contracts verified in disposable PostgreSQL.');
 } catch (error) {
   try { await client.query('rollback'); } catch {}
   console.error('[ClearSpeak P0-5 DB] FAILED:', error);
