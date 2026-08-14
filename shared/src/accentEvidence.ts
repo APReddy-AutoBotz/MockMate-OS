@@ -48,9 +48,32 @@ export const AccentDimensionEvidenceV1Schema = z.object({
   candidateScore: z.number().int().min(0).max(100).nullable(),
   summary: z.string().min(1).max(400),
   evidenceRefs: z.array(z.string().regex(/^[a-z0-9][a-z0-9._:-]{0,79}$/)).max(12),
+  contradictions: z.array(z.string().min(1).max(200)).max(8),
   coachingAction: z.string().min(1).max(400).nullable(),
 }).strict().superRefine((value, ctx) => {
   const scoreable = value.evidenceStatus === 'sufficient' || value.evidenceStatus === 'limited';
+  const contradictory = value.contradictions.length > 0;
+  if (contradictory && value.evidenceStatus !== 'insufficient') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['evidenceStatus'],
+      message: 'Contradictory evidence must be marked insufficient',
+    });
+  }
+  if (contradictory && value.candidateScore !== null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['candidateScore'],
+      message: 'Contradictory evidence cannot contain a candidate score',
+    });
+  }
+  if (contradictory && value.coachingAction !== null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['coachingAction'],
+      message: 'Contradictory evidence cannot produce evidence-specific coaching',
+    });
+  }
   if (!scoreable && value.candidateScore !== null) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
