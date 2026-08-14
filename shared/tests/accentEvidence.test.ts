@@ -192,6 +192,12 @@ describe('P0-5 governed accent evidence contracts', () => {
     expect(parsed.coaching).toEqual([]);
   });
 
+  it('rejects positive evidence references on an unscored result dimension', () => {
+    const value = evaluatedUnscoredResult();
+    value.dimensions.pronunciation.evidenceRefs = ['pronunciation.segment.1'];
+    expect(() => AccentScoreV2Schema.parse(value)).toThrow(/cannot expose positive evidence references/i);
+  });
+
   it('rejects a scored provenance label when every dimension is null', () => {
     const value = evaluatedUnscoredResult();
     value.evidenceProvenance = 'user_recording_scored';
