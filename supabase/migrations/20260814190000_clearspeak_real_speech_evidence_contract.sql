@@ -31,7 +31,8 @@ alter table public.clearspeak_accent_attempts
       and result ->> 'scoringPolicyVersion' = 'synthetic-policy.v1'
       and (result ->> 'fixture')::boolean = true)
     or
-    -- Existing ordinary learner recordings continue to persist truthful nulls.
+    -- Existing ordinary learner recordings continue to persist truthful nulls
+    -- when no authorized real-speech scorer exists.
     (fixture = false
       and evidence_provenance = 'user_recording_unscored'
       and scoring_policy_version = 'scoring-unavailable.v1'
@@ -46,16 +47,16 @@ alter table public.clearspeak_accent_attempts
       and result #> '{dimensions,fluency,score}' = 'null'::jsonb
       and result #> '{dimensions,targetStyle,score}' = 'null'::jsonb)
     or
-    -- P0-5 governed real-speech results: derived evidence only. At least one
-    -- dimension must be scored, while any other dimension may truthfully remain
-    -- null. Adapter/evidence/audio hashes are mandatory lineage; identity/native
-    -- accent aggregates are explicitly forbidden at the storage boundary.
+    -- P0-5 governed real-speech results: derived evidence only. A provider may
+    -- either produce at least one policy-authorized dimension score or complete
+    -- evaluation with every dimension left null because the evidence is not
+    -- reliable enough. Those states have different provenance labels.
     (fixture = false
-      and evidence_provenance = 'user_recording_scored'
+      and evidence_provenance in ('user_recording_scored', 'user_recording_evaluated_unscored')
       and scoring_policy_version = 'real-speech-policy.v1'
       and scoring_contract_version = 'accent-score.v2'
       and result ->> 'contractVersion' = 'accent-score.v2'
-      and result ->> 'evidenceProvenance' = 'user_recording_scored'
+      and result ->> 'evidenceProvenance' = evidence_provenance
       and result ->> 'scoringPolicyVersion' = 'real-speech-policy.v1'
       and (result ->> 'fixture')::boolean = false
       and coalesce(result #>> '{evidenceLineage,evidenceContractVersion}', '') = 'accent-scorer-evidence.v1'
@@ -66,13 +67,24 @@ alter table public.clearspeak_accent_attempts
       and not (result ? 'overallScore')
       and not (result ? 'nativeAccentScore')
       and (
-        result #> '{dimensions,intelligibility,score}' <> 'null'::jsonb
-        or result #> '{dimensions,pronunciation,score}' <> 'null'::jsonb
-        or result #> '{dimensions,prosody,score}' <> 'null'::jsonb
-        or result #> '{dimensions,fluency,score}' <> 'null'::jsonb
-        or result #> '{dimensions,targetStyle,score}' <> 'null'::jsonb
+        (evidence_provenance = 'user_recording_scored' and (
+          result #> '{dimensions,intelligibility,score}' <> 'null'::jsonb
+          or result #> '{dimensions,pronunciation,score}' <> 'null'::jsonb
+          or result #> '{dimensions,prosody,score}' <> 'null'::jsonb
+          or result #> '{dimensions,fluency,score}' <> 'null'::jsonb
+          or result #> '{dimensions,targetStyle,score}' <> 'null'::jsonb
+        ))
+        or
+        (evidence_provenance = 'user_recording_evaluated_unscored'
+          and result #> '{dimensions,intelligibility,score}' = 'null'::jsonb
+          and result #> '{dimensions,pronunciation,score}' = 'null'::jsonb
+          and result #> '{dimensions,prosody,score}' = 'null'::jsonb
+          and result #> '{dimensions,fluency,score}' = 'null'::jsonb
+          and result #> '{dimensions,targetStyle,score}' = 'null'::jsonb
+          and jsonb_typeof(result->'coaching') = 'array'
+          and jsonb_array_length(result->'coaching') = 0)
       ))
   );
 
 comment on constraint clearspeak_accent_attempts_provenance_check on public.clearspeak_accent_attempts is
-  'Allows only synthetic accent-score.v1 fixtures, truthful unscored user accent-score.v1 results, or governed derived-only accent-score.v2 real-speech evidence. No provider is authorized by this constraint.';
+  'Allows only synthetic accent-score.v1 fixtures, truthful provider-unavailable V1 nulls, or governed derived-only accent-score.v2 scored/evaluated-unscored evidence. No provider is authorized by this constraint.';
