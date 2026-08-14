@@ -18,6 +18,7 @@ const supported = (score = 82, confidence = 0.9, ref = 'pronunciation.segment.1'
   candidateScore: score,
   summary: 'Bounded evidence supports this dimension.',
   evidenceRefs: [ref],
+  contradictions: [],
   coachingAction: 'Repeat the marked segment and compare it with the selected reference.',
 });
 const unsupported = () => ({
@@ -26,6 +27,16 @@ const unsupported = () => ({
   candidateScore: null,
   summary: 'This dimension is not supported by the available evidence.',
   evidenceRefs: [],
+  contradictions: [],
+  coachingAction: null,
+});
+const contradictory = () => ({
+  evidenceStatus: 'insufficient' as const,
+  confidence: 0.45,
+  candidateScore: null,
+  summary: 'Available signals conflict, so this dimension cannot be scored reliably.',
+  evidenceRefs: [],
+  contradictions: ['alignment and timing signals disagree'],
   coachingAction: null,
 });
 
@@ -113,6 +124,29 @@ describe('P0-5 governed accent evidence contracts', () => {
     value.providerExecutionState = 'completed';
     for (const key of Object.keys(value.dimensions)) value.dimensions[key] = unsupported();
     expect(AccentScorerEvidenceV1Schema.parse(value).providerExecutionState).toBe('completed');
+  });
+
+  it('accepts contradictory normalized evidence only as an unscored insufficient dimension', () => {
+    const value = partialEvidence() as any;
+    value.dimensions.pronunciation = contradictory();
+    const parsed = AccentScorerEvidenceV1Schema.parse(value);
+    expect(parsed.dimensions.pronunciation).toMatchObject({
+      evidenceStatus: 'insufficient',
+      candidateScore: null,
+      coachingAction: null,
+    });
+  });
+
+  it('rejects a precise score or coaching when contradictions are declared', () => {
+    const value = partialEvidence() as any;
+    value.dimensions.pronunciation = {
+      ...contradictory(),
+      evidenceStatus: 'sufficient',
+      candidateScore: 90,
+      evidenceRefs: ['pronunciation.segment.1'],
+      coachingAction: 'Act on a conflicting signal.',
+    };
+    expect(() => AccentScorerEvidenceV1Schema.parse(value)).toThrow(/contradictory evidence/i);
   });
 
   it('rejects provider-owned unknown keys', () => {
