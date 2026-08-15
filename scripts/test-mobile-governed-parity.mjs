@@ -22,6 +22,9 @@ const requireBefore = (source, first, second, label) => {
 };
 
 const dashboard = read('mobile/src/app/(app)/index.tsx');
+const rootLayout = read('mobile/src/app/_layout.tsx');
+const onboarding = read('mobile/src/app/onboarding.tsx');
+const supabaseClient = read('mobile/src/services/supabaseClient.ts');
 const resume = read('mobile/src/app/(app)/resume.tsx');
 const speak = read('mobile/src/app/(app)/speak.tsx');
 const interview = read('mobile/src/app/(app)/interview.tsx');
@@ -57,6 +60,21 @@ requireBefore(
 );
 rejectText(dashboard, 'getAccessToken', 'Dashboard account authority');
 rejectText(dashboard, 'API_BASE', 'Dashboard account authority');
+
+requireText(supabaseClient, 'getCurrentUserId', 'Mobile authenticated local owner resolver');
+requireText(onboarding, 'getCurrentUserId', 'Mobile profile ownership');
+requireText(onboarding, 'userId,', 'Mobile profile ownership');
+requireBefore(
+  onboarding,
+  'const userId = await getCurrentUserId();',
+  "await AsyncStorage.setItem('mockmate_user_profile', JSON.stringify(profile));",
+  'Mobile profile ownership ordering',
+);
+requireText(rootLayout, 'profile.userId === currentUser.id', 'Mobile auth-change local ownership');
+requireText(rootLayout, 'LOCAL_USER_DATA_KEYS.map((key) => AsyncStorage.removeItem(key))', 'Mobile auth-change local ownership');
+requireText(rootLayout, 'mockmate_pending_grounded_interview_v1', 'Mobile auth-change grounded recovery isolation');
+requireText(rootLayout, 'isolationError', 'Mobile auth-change fail-closed isolation');
+requireText(rootLayout, 'authGeneration', 'Mobile auth-change stale callback guard');
 
 requireText(resume, 'ResumeParseResponseSchema', 'Resume');
 requireText(resume, 'GovernedResumeScoreResponseSchema', 'Resume');
