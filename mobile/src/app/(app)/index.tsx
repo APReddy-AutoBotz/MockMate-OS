@@ -19,7 +19,7 @@ const LOCAL_APP_DATA_KEYS = [
   'mockmate_session_history',
   'mockmate_question_usage',
   'mockmate_user_profile',
-  'mockmate_pending_grounding_v1',
+  'mockmate_pending_grounded_interview_v1',
 ] as const;
 
 export default function DashboardScreen() {
