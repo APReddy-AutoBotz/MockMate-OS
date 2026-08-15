@@ -154,7 +154,12 @@ function validateAdapterDescriptor(
 }
 
 function resultLabel(score: AccentScore): string {
-  if (score.contractVersion === 'accent-score.v1') return 'Scorer unavailable — recording saved as unscored';
+  if (score.contractVersion === 'accent-score.v1') {
+    if (score.evidenceProvenance === 'synthetic_fixture_scored' || score.fixture) {
+      return 'Synthetic fixture — test evidence only';
+    }
+    return 'Scorer unavailable — recording saved as unscored';
+  }
   if (score.evidenceProvenance === 'user_recording_scored') return 'Evidence-scored recording';
   return 'Evaluated recording — evidence insufficient for scoring';
 }
