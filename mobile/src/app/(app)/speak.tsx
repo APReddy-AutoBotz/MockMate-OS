@@ -71,10 +71,10 @@ const AccentAttemptSubmissionResponseSchema = z.object({
 
 const AccentAttemptStatusSchema = z.object({
   status: z.enum(['pending', 'cancelled', 'committed', 'conflict', 'missing', 'limit', 'invalid']),
-  requestHash: z.string().optional(),
-  result: AccentScoreSchema.optional(),
-  replayed: z.boolean().optional(),
-  executionLeaseExpiresAt: z.string().optional(),
+  requestHash: z.string().nullish(),
+  result: AccentScoreSchema.nullish(),
+  replayed: z.boolean().nullish(),
+  executionLeaseExpiresAt: z.string().nullish(),
 }).strict();
 
 const AccentHistoryAttemptSchema = z.object({
@@ -103,9 +103,10 @@ type PendingAttempt = {
   attemptId: string;
   capability: string;
   uri: string;
-  durationMs: number;
   metadata: Record<string, unknown>;
 };
+
+type CancelOutcome = 'none' | 'cancelled' | 'committed' | 'missing' | 'failed';
 
 const DIMENSIONS = [
   ['intelligibility', 'Intelligibility'],
@@ -116,6 +117,8 @@ const DIMENSIONS = [
 ] as const;
 
 function createUuidV4(): string {
+  const randomUuid = (globalThis as any)?.crypto?.randomUUID;
+  if (typeof randomUuid === 'function') return randomUuid.call((globalThis as any).crypto);
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
     const random = Math.floor(Math.random() * 16);
     const value = char === 'x' ? random : (random & 0x3) | 0x8;
@@ -197,22 +200,23 @@ export default function SpeakScreen() {
       const catalog = await apiClient.get('/clearspeak/v1/accent/catalog', AccentCatalogSchema);
       setProfiles(catalog.profiles);
       setRealSpeechScoringAvailable(catalog.realSpeechScoringAvailable);
-      if (!catalog.profiles.some((profile) => profile.profileId === selectedProfileId)) {
-        setSelectedProfileId(catalog.profiles[0].profileId);
-      }
+      setSelectedProfileId((current) => (
+        catalog.profiles.some((profile) => profile.profileId === current)
+          ? current
+          : catalog.profiles[0].profileId
+      ));
       await loadHistory();
     } catch (error: any) {
       setErrorText(error?.message || 'Accent practice is unavailable.');
     } finally {
       setLoading(false);
     }
-  }, [loadHistory, selectedProfileId]);
+  }, [loadHistory]);
 
   const loadPrompt = useCallback(async () => {
-    if (!selectedProfile) return;
+    if (!selectedProfile || pendingAttemptRef.current) return;
     setErrorText('');
     setGovernedResult(null);
-    pendingAttemptRef.current = null;
     try {
       const response = await apiClient.post('/clearspeak/v1/accent/prompts', AccentPromptEnvelopeSchema, {
         profileId: selectedProfile.profileId,
@@ -235,21 +239,51 @@ export default function SpeakScreen() {
     if (profiles.length > 0) void loadPrompt();
   }, [profiles.length, loadPrompt]);
 
-  const cancelPendingAuthority = useCallback(async () => {
+  const cancelPendingAuthority = useCallback(async (silent = false): Promise<CancelOutcome> => {
     const pending = pendingAttemptRef.current;
-    if (!pending) return;
+    if (!pending) return 'none';
     try {
-      await apiClient.post(
+      const outcome = await apiClient.post(
         `/clearspeak/v1/accent/attempts/${pending.attemptId}/cancel`,
         AccentAttemptStatusSchema,
         { submissionCapability: pending.capability },
       );
-    } catch {
-      // Cancellation is best-effort on route exit; server expiry remains fail-closed.
-    } finally {
-      pendingAttemptRef.current = null;
+
+      if (outcome.status === 'committed') {
+        let committed = outcome.result ?? null;
+        if (!committed) {
+          const status = await apiClient.get(
+            `/clearspeak/v1/accent/attempts/${pending.attemptId}/status`,
+            AccentAttemptStatusSchema,
+          );
+          committed = status.status === 'committed' ? status.result ?? null : null;
+        }
+        pendingAttemptRef.current = null;
+        if (!silent && committed) {
+          setGovernedResult(committed);
+          setErrorText('');
+          await loadHistory();
+        }
+        return 'committed';
+      }
+
+      if (outcome.status === 'cancelled') {
+        pendingAttemptRef.current = null;
+        return 'cancelled';
+      }
+
+      if (outcome.status === 'missing') {
+        pendingAttemptRef.current = null;
+        return 'missing';
+      }
+
+      if (!silent) setErrorText(`The pending attempt is still authoritative (${outcome.status}). Recover or retry it before changing practice settings.`);
+      return 'failed';
+    } catch (error: any) {
+      if (!silent) setErrorText(error?.message || 'The pending attempt could not be cancelled. Recover or retry it instead.');
+      return 'failed';
     }
-  }, []);
+  }, [loadHistory, setGovernedResult]);
 
   useEffect(() => () => {
     const active = recordingRef.current;
@@ -257,8 +291,30 @@ export default function SpeakScreen() {
       void active.stopAndUnloadAsync().catch(() => undefined);
       recordingRef.current = null;
     }
-    if (pendingAttemptRef.current && !resultRef.current) void cancelPendingAuthority();
+    if (pendingAttemptRef.current && !resultRef.current) void cancelPendingAuthority(true);
   }, [cancelPendingAuthority]);
+
+  const blockSettingChangeIfBusy = (): boolean => {
+    if (recording || isSubmitting) {
+      Alert.alert('Attempt in progress', 'Finish the current recording or submission before changing the target or practice mode.');
+      return true;
+    }
+    if (pendingAttemptRef.current) {
+      Alert.alert('Pending governed attempt', 'Recover, retry, or cancel the pending attempt before changing the target or practice mode.');
+      return true;
+    }
+    return false;
+  };
+
+  const chooseProfile = (profileId: AccentProfileV1['profileId']) => {
+    if (blockSettingChangeIfBusy()) return;
+    setSelectedProfileId(profileId);
+  };
+
+  const chooseMode = (nextMode: PracticeMode) => {
+    if (blockSettingChangeIfBusy()) return;
+    setMode(nextMode);
+  };
 
   const askForConsent = () => {
     Alert.alert(
@@ -273,6 +329,10 @@ export default function SpeakScreen() {
 
   const handleStartRecording = async () => {
     if (!prompt) return;
+    if (pendingAttemptRef.current) {
+      Alert.alert('Pending governed attempt', 'Recover, retry, or cancel the pending attempt before recording again.');
+      return;
+    }
     if (!consented) {
       askForConsent();
       return;
@@ -293,7 +353,6 @@ export default function SpeakScreen() {
       setSeconds(0);
       setErrorText('');
       setGovernedResult(null);
-      pendingAttemptRef.current = null;
     } catch (error: any) {
       Alert.alert('Recording unavailable', error?.message || 'Could not start microphone recording.');
     }
@@ -324,10 +383,11 @@ export default function SpeakScreen() {
       if (status.status === 'committed' && status.result) {
         setGovernedResult(status.result);
         pendingAttemptRef.current = null;
+        setErrorText('');
         await loadHistory();
         return true;
       }
-      if (status.status === 'cancelled' || status.status === 'conflict' || status.status === 'invalid') {
+      if (status.status === 'cancelled' || status.status === 'conflict' || status.status === 'invalid' || status.status === 'missing') {
         pendingAttemptRef.current = null;
       }
     } catch {
@@ -386,7 +446,6 @@ export default function SpeakScreen() {
       attemptId: authority.attemptId,
       capability: authority.capability,
       uri,
-      durationMs,
       metadata: selector,
     };
     pendingAttemptRef.current = pending;
@@ -430,6 +489,18 @@ export default function SpeakScreen() {
     await submitPendingAttempt(pending);
   };
 
+  const cancelPendingAttempt = async () => {
+    if (!pendingAttemptRef.current) return;
+    setIsSubmitting(true);
+    const outcome = await cancelPendingAuthority(false);
+    setIsSubmitting(false);
+    if (outcome === 'cancelled' || outcome === 'missing') {
+      setErrorText('Pending governed attempt cancelled. You can change the target or record again.');
+    } else if (outcome === 'committed') {
+      setErrorText('');
+    }
+  };
+
   const deleteHistoryAttempt = async (attemptId: string) => {
     try {
       await apiClient.delete(`/clearspeak/v1/accent/attempts/${attemptId}`, EmptyResponseSchema);
@@ -462,7 +533,8 @@ export default function SpeakScreen() {
             <TouchableOpacity
               key={profile.profileId}
               style={[styles.choice, selectedProfileId === profile.profileId && styles.choiceActive]}
-              onPress={() => setSelectedProfileId(profile.profileId)}
+              onPress={() => chooseProfile(profile.profileId)}
+              disabled={Boolean(recording) || isSubmitting}
             >
               <Text style={selectedProfileId === profile.profileId ? styles.choiceTextActive : styles.choiceText}>
                 {profile.displayName}
@@ -476,7 +548,8 @@ export default function SpeakScreen() {
             <TouchableOpacity
               key={item}
               style={[styles.choice, mode === item && styles.choiceActive]}
-              onPress={() => setMode(item)}
+              onPress={() => chooseMode(item)}
+              disabled={Boolean(recording) || isSubmitting}
             >
               <Text style={mode === item ? styles.choiceTextActive : styles.choiceText}>
                 {item.replace(/_/g, ' ')}
@@ -518,8 +591,8 @@ export default function SpeakScreen() {
         </View>
       ) : (
         <TouchableOpacity
-          style={[styles.primaryButton, (!prompt || isSubmitting) && styles.disabled]}
-          disabled={!prompt || isSubmitting}
+          style={[styles.primaryButton, (!prompt || isSubmitting || Boolean(pendingAttemptRef.current)) && styles.disabled]}
+          disabled={!prompt || isSubmitting || Boolean(pendingAttemptRef.current)}
           onPress={() => void handleStartRecording()}
         >
           <Text style={styles.primaryButtonText}>Record governed attempt</Text>
@@ -529,17 +602,22 @@ export default function SpeakScreen() {
       {isSubmitting && (
         <View style={styles.centerBlock}>
           <ActivityIndicator size="large" color="#d4af37" />
-          <Text style={styles.muted}>Validating evidence and authoritative result…</Text>
+          <Text style={styles.muted}>Validating authoritative attempt state…</Text>
         </View>
       )}
 
       {errorText ? (
         <View style={styles.errorCard}>
           <Text style={styles.errorText}>{errorText}</Text>
-          {pendingAttemptRef.current && (
-            <TouchableOpacity style={styles.secondaryButton} onPress={() => void retryPending()}>
-              <Text style={styles.secondaryButtonText}>Recover / retry same attempt</Text>
-            </TouchableOpacity>
+          {pendingAttemptRef.current && !isSubmitting && (
+            <>
+              <TouchableOpacity style={styles.secondaryButton} onPress={() => void retryPending()}>
+                <Text style={styles.secondaryButtonText}>Recover / retry same attempt</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.cancelButton} onPress={() => void cancelPendingAttempt()}>
+                <Text style={styles.cancelButtonText}>Cancel pending attempt</Text>
+              </TouchableOpacity>
+            </>
           )}
         </View>
       ) : null}
@@ -622,6 +700,8 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: '#0b1329', fontSize: 14, fontWeight: '800' },
   secondaryButton: { borderRadius: 12, borderWidth: 1, borderColor: 'rgba(212,175,55,0.35)', paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center', marginBottom: 14 },
   secondaryButtonText: { color: '#d4af37', fontSize: 13, fontWeight: '700' },
+  cancelButton: { borderRadius: 12, borderWidth: 1, borderColor: 'rgba(248,113,113,0.45)', paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center' },
+  cancelButtonText: { color: '#f87171', fontSize: 13, fontWeight: '700' },
   disabled: { opacity: 0.45 },
   centerBlock: { alignItems: 'center', gap: 12, paddingVertical: 18 },
   timer: { color: '#ffffff', fontSize: 36, fontWeight: '800' },
