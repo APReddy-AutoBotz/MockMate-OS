@@ -47,7 +47,7 @@ function createAuthoritativePersistenceDouble() {
     interview_generated_plans: [],
     interview_plan_generation_reservations: [],
     usage_ledger: [],
-    resume_reviews: [], clearspeak_profiles: [], clearspeak_sessions: [],
+    resume_reviews: [], clearspeak_profiles: [], clearspeak_sessions: [], clearspeak_accent_attempts: [],
   };
   const calls = [];
   const sourceErrors = {};
@@ -253,7 +253,7 @@ try {
   );
 
   // 3. Every authoritative rebuild source fails closed before the rebuild mutation.
-  for (const sourceTable of ['resume_reviews', 'clearspeak_profiles', 'clearspeak_sessions', 'interview_sessions']) {
+  for (const sourceTable of ['resume_reviews', 'clearspeak_profiles', 'clearspeak_sessions', 'clearspeak_accent_attempts', 'interview_sessions']) {
     authoritative.sourceErrors[sourceTable] = `${sourceTable} unavailable`;
     const callsBefore = authoritative.calls.filter(call => call.name === 'rebuild_career_context_tx').length;
     const versionBefore = authoritative.tables.career_context_state[0].context_version;
