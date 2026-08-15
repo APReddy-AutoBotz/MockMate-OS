@@ -45,6 +45,8 @@ for (const [label, source] of [
 rejectText(dashboard, 'fetch(', 'Dashboard account authority');
 requireText(dashboard, "apiClient.delete('/me/data', AccountDeletionResponseSchema)", 'Dashboard account authority');
 requireText(dashboard, 'failedTables.length > 0', 'Dashboard account authority');
+requireText(dashboard, 'mockmate_pending_grounded_interview_v1', 'Dashboard account data cleanup');
+rejectText(dashboard, 'mockmate_pending_grounding_v1', 'Dashboard stale grounding recovery cleanup');
 rejectText(dashboard, 'getAccessToken', 'Dashboard account authority');
 rejectText(dashboard, 'API_BASE', 'Dashboard account authority');
 
