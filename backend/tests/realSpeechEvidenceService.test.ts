@@ -105,6 +105,22 @@ describe('P0-5 governed real-speech evidence service', () => {
     expect((result.score as any).overallScore).toBeUndefined();
   });
 
+  it.each([
+    ['insufficient', /insufficient to score/i],
+    ['unsupported', /not supported by the available evidence/i],
+  ] as const)('sanitizes provider-declared %s summaries before persistence/rendering', async (status, expectedSummary) => {
+    const evidence = evidenceFor() as any;
+    evidence.dimensions.prosody = {
+      ...dimension(null, 0.2, status, 'unused'),
+      summary: 'Your pronunciation clearly matches the target.',
+    };
+    const result = await scoreWithGovernedAccentAdapter(context, audio, adapter(evidence));
+    expect(result.score.dimensions.prosody.score).toBeNull();
+    expect(result.score.dimensions.prosody.evidenceRefs).toEqual([]);
+    expect(result.score.dimensions.prosody.summary).toMatch(expectedSummary);
+    expect(result.score.dimensions.prosody.summary).not.toMatch(/clearly matches the target/i);
+  });
+
   it('returns evaluated-unscored when all provider evidence remains below scoring authority', async () => {
     const evidence = evidenceFor() as any;
     evidence.providerExecutionState = 'completed';
@@ -209,6 +225,8 @@ describe('P0-5 governed real-speech evidence service', () => {
     'The speaker sounds British.',
     'The speaker is from India.',
     'Your accent sounds Canadian.',
+    'You have an Indian accent.',
+    'Your accent resembles British speech.',
   ])('rejects direct nationality/origin inference: %s', async summary => {
     const evidence = evidenceFor() as any;
     evidence.dimensions.intelligibility.summary = summary;
