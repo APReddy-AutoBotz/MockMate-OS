@@ -51,11 +51,16 @@ const directNationalityDescriptor = new RegExp(
   `\\b(?:speaker|user|person|you|recording|voice|accent|speech|your (?:voice|accent|speech|recording))\\b[^.!?\\n]{0,48}\\b(?:is|are|sounds?|seems?|appears?)\\b\\s*(?:(?:to be|very|quite|distinctly|typically|like)\\s+)*(?:an?\\s+)?${nationalityDescriptor}\\b`,
   'i',
 );
+const possessiveOrResemblanceNationalityDescriptor = new RegExp(
+  `\\b(?:you|speaker|user|person|your (?:voice|accent|speech|recording)|(?:speaker|user|person)(?:'s|’s) (?:voice|accent|speech|recording))\\b[^.!?\\n]{0,32}\\b(?:have|has|carry|carries|show|shows|display|displays|demonstrate|demonstrates|resemble|resembles|match|matches)\\b[^.!?\\n]{0,20}(?:(?:an?|the)\\s+)?${nationalityDescriptor}\\b(?:\\s+(?:accent|speech|voice|pronunciation|speaker|features?|patterns?|characteristics?))?`,
+  'i',
+);
 
 const assertNeutralEvidenceText = (value: string, label: string) => {
   if (forbiddenIdentityOrEmploymentClaim.test(value)
       || directOriginInference.test(value)
-      || directNationalityDescriptor.test(value)) {
+      || directNationalityDescriptor.test(value)
+      || possessiveOrResemblanceNationalityDescriptor.test(value)) {
     throw new Error(`Accent evidence ${label} contains a forbidden identity or employment inference`);
   }
 };
@@ -148,7 +153,19 @@ const mapDimension = (
   const providerMarkedScoreable = evidence.evidenceStatus === 'sufficient' || evidence.evidenceStatus === 'limited';
   const meetsConfidence = providerMarkedScoreable && evidence.confidence >= minimumConfidence;
 
-  if (providerMarkedScoreable && !meetsConfidence) {
+  if (!providerMarkedScoreable) {
+    return {
+      score: null,
+      confidence: evidence.confidence,
+      evidenceStatus: evidence.evidenceStatus,
+      summary: evidence.evidenceStatus === 'unsupported'
+        ? 'This dimension is not supported by the available evidence.'
+        : 'The available evidence was insufficient to score this dimension.',
+      evidenceRefs: [],
+    };
+  }
+
+  if (!meetsConfidence) {
     return {
       score: null,
       confidence: evidence.confidence,
@@ -159,7 +176,7 @@ const mapDimension = (
   }
 
   return {
-    score: meetsConfidence ? evidence.candidateScore : null,
+    score: evidence.candidateScore,
     confidence: evidence.confidence,
     evidenceStatus: evidence.evidenceStatus,
     summary: evidence.summary,
