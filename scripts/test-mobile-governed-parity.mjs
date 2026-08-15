@@ -52,6 +52,8 @@ requireText(interview, 'InterviewPlanSchema', 'Interview');
 requireText(interview, 'InterviewSessionStartResponseSchema', 'Interview');
 requireText(interview, 'AdaptiveAnswerSubmissionResponseSchema', 'Interview');
 requireText(interview, 'FinalReportSchema', 'Interview');
+requireText(interview, 'sessionEpochRef.current += 1', 'Interview stale-response guard');
+requireText(interview, 'requestEpoch !== sessionEpochRef.current', 'Interview stale-response guard');
 rejectText(interview, 'Interview practice is not available in this internal build.', 'Interview');
 
 if (!process.exitCode) {
