@@ -11,8 +11,9 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { signOut, getAccessToken } from '../../services/supabaseClient';
-import { API_BASE } from '../../services/apiBase';
+import { AccountDeletionResponseSchema } from 'mockmate-shared';
+import { signOut } from '../../services/supabaseClient';
+import { apiClient } from '../../services/apiClient';
 
 export default function DashboardScreen() {
   const [profile, setProfile] = useState<any>(null);
@@ -53,45 +54,40 @@ export default function DashboardScreen() {
     ]);
   };
 
-  const handleDeleteAccount = () => {
+  const handleDeleteAppData = () => {
     Alert.alert(
-      'Delete Account & Data',
-      'This will permanently delete all your practice history, custom resume analyses, and progress reports. This action cannot be undone.\n\nAre you sure you want to proceed?',
+      'Delete App Data',
+      'This permanently deletes your MockMate app data, including saved practice, resume analyses, Career Context and progress. Your Supabase sign-in identity is retained so you can authenticate again later.\n\nContinue?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete Permanently',
+          text: 'Delete App Data',
           style: 'destructive',
           onPress: async () => {
             setLoading(true);
             try {
-              const token = await getAccessToken();
-              if (token) {
-                const res = await fetch(`${API_BASE}/me/data`, {
-                  method: 'DELETE',
-                  headers: {
-                    'Authorization': `Bearer ${token}`,
-                  },
-                });
-                if (!res.ok) {
-                  const errorData = await res.json().catch(() => null);
-                  throw new Error(errorData?.error || 'Failed to delete remote account data');
-                }
+              const result = await apiClient.delete('/me/data', AccountDeletionResponseSchema);
+              if (!result.success || result.failedTables.length > 0) {
+                const failed = result.failedTables.length ? ` (${result.failedTables.join(', ')})` : '';
+                throw new Error(`Server could not confirm complete app-data deletion${failed}. Your local session was kept so you can retry.`);
               }
-              
-              // Clear local database history & profiles
+
+              // Local cleanup happens only after the server confirms complete app-data deletion.
               await AsyncStorage.removeItem('mockmate_session_history');
               await AsyncStorage.removeItem('mockmate_question_usage');
               await AsyncStorage.removeItem('mockmate_user_profile');
-              
-              // Sign out from Auth provider
               await signOut();
-              
-              Alert.alert('Data Deleted', 'Your account and practice data have been successfully deleted.');
+
+              Alert.alert(
+                'App Data Deleted',
+                result.authIdentityDeleted
+                  ? 'Your MockMate app data and sign-in identity were deleted.'
+                  : result.authIdentityRetainedReason || 'Your MockMate app data was deleted. Your sign-in identity was retained.',
+              );
               router.replace('/(auth)/login');
             } catch (error: any) {
               console.error(error);
-              Alert.alert('Error', error.message || 'Failed to delete account. Please try again.');
+              Alert.alert('Deletion Not Confirmed', error?.message || 'MockMate could not confirm complete app-data deletion. Your local session was kept so you can retry.');
             } finally {
               setLoading(false);
             }
@@ -104,11 +100,12 @@ export default function DashboardScreen() {
   const handleAccountMenu = () => {
     Alert.alert(
       'Account Settings',
-      'Manage your MockMate account.',
+      'Manage your MockMate account and app data.',
       [
         { text: 'Cancel', style: 'cancel' },
+        { text: 'Career Context', style: 'default', onPress: () => router.push('/(app)/career-context') },
         { text: 'Sign Out', style: 'default', onPress: handleSignOut },
-        { text: 'Delete Account', style: 'destructive', onPress: handleDeleteAccount },
+        { text: 'Delete App Data', style: 'destructive', onPress: handleDeleteAppData },
       ]
     );
   };
@@ -151,7 +148,6 @@ export default function DashboardScreen() {
         <Text style={styles.sectionTitle}>Your practice home</Text>
 
         <View style={styles.cardsContainer}>
-          {/* Card 1: Interview practice */}
           <TouchableOpacity
             style={[styles.card, { borderColor: 'rgba(212,175,55,0.15)' }]}
             onPress={() => router.push('/(app)/interview')}
@@ -163,7 +159,7 @@ export default function DashboardScreen() {
               <Text style={styles.cardTitle}>Interview practice</Text>
             </View>
             <Text style={styles.cardDesc}>
-              Practice role-based questions, speak your answers, and get clear next steps.
+              Practice role-based questions with the server-authoritative adaptive interview engine. Career Context can be added explicitly during setup.
             </Text>
             <View style={styles.actionRow}>
               <Text style={styles.actionText}>Start interview practice</Text>
@@ -171,7 +167,6 @@ export default function DashboardScreen() {
             </View>
           </TouchableOpacity>
 
-          {/* Card 2: Speaking Coach */}
           <TouchableOpacity
             style={[styles.card, { borderColor: 'rgba(16,185,129,0.15)' }]}
             onPress={() => router.push('/(app)/speak')}
@@ -183,7 +178,7 @@ export default function DashboardScreen() {
               <Text style={styles.cardTitle}>ClearSpeak Coach</Text>
             </View>
             <Text style={styles.cardDesc}>
-              Practice spoken English with short prompts and simple feedback.
+              Practice spoken English with governed UK/US reference targets and evidence-labelled feedback.
             </Text>
             <View style={styles.actionRow}>
               <Text style={[styles.actionText, { color: '#10b981' }]}>Open speaking practice</Text>
@@ -191,7 +186,6 @@ export default function DashboardScreen() {
             </View>
           </TouchableOpacity>
 
-          {/* Card 3: Resume Reviewer */}
           <TouchableOpacity
             style={[styles.card, { borderColor: 'rgba(59,130,246,0.15)' }]}
             onPress={() => router.push('/(app)/resume')}
@@ -203,7 +197,7 @@ export default function DashboardScreen() {
               <Text style={styles.cardTitle}>ATS Resume Review</Text>
             </View>
             <Text style={styles.cardDesc}>
-              Upload your resume to check ATS fit and find simple improvements.
+              Upload your resume for governed ATS diagnostics and evidence-grounded job-description matching.
             </Text>
             <View style={styles.actionRow}>
               <Text style={[styles.actionText, { color: '#3b82f6' }]}>Review resume</Text>
@@ -211,7 +205,25 @@ export default function DashboardScreen() {
             </View>
           </TouchableOpacity>
 
-          {/* Card 4: Practice Journal */}
+          <TouchableOpacity
+            style={[styles.card, { borderColor: 'rgba(168,85,247,0.15)' }]}
+            onPress={() => router.push('/(app)/career-context')}
+          >
+            <View style={styles.cardHeader}>
+              <View style={[styles.badgeContainer, { backgroundColor: 'rgba(168,85,247,0.1)' }]}>
+                <Text style={[styles.badgeText, { color: '#c084fc' }]}>CONTEXT</Text>
+              </View>
+              <Text style={styles.cardTitle}>Career Context</Text>
+            </View>
+            <Text style={styles.cardDesc}>
+              Review the career facts MockMate may reuse. Confirm or reject pending facts and control personalization explicitly.
+            </Text>
+            <View style={styles.actionRow}>
+              <Text style={[styles.actionText, { color: '#c084fc' }]}>Manage Career Context</Text>
+              <Text style={[styles.actionArrow, { color: '#c084fc' }]}>→</Text>
+            </View>
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={[styles.card, { borderColor: 'rgba(148,163,184,0.15)' }]}
             onPress={() => router.push('/(app)/journal')}
