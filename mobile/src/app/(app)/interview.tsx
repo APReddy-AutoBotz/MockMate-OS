@@ -77,6 +77,7 @@ export default function InterviewScreen() {
   const [coachFeedback, setCoachFeedback] = useState<{ strength?: string; nextFocus?: string } | null>(null);
   const [report, setReport] = useState<FinalReport | null>(null);
   const [errorText, setErrorText] = useState('');
+  const [hasPendingTurn, setHasPendingTurn] = useState(false);
   const pendingTurnRef = useRef<PendingTurn | null>(null);
 
   const progressLabel = useMemo(() => {
@@ -102,6 +103,7 @@ export default function InterviewScreen() {
     setReport(null);
     setErrorText('');
     pendingTurnRef.current = null;
+    setHasPendingTurn(false);
   };
 
   const generateReport = async (activeSessionId: string) => {
@@ -186,6 +188,7 @@ export default function InterviewScreen() {
 
   const applyTurnResult = async (response: AdaptiveAnswerSubmissionResponse) => {
     pendingTurnRef.current = null;
+    setHasPendingTurn(false);
     setSessionVersion(response.sessionVersion);
     setRootQuestionIndex(response.rootQuestionIndex);
     setRootQuestionCount(response.rootQuestionCount);
@@ -225,7 +228,10 @@ export default function InterviewScreen() {
       await applyTurnResult(response);
     } catch (error: any) {
       const terminal = error instanceof ApiError && [400, 409, 422].includes(error.status);
-      if (terminal) pendingTurnRef.current = null;
+      if (terminal) {
+        pendingTurnRef.current = null;
+        setHasPendingTurn(false);
+      }
       setPhase('asking');
       setErrorText(
         terminal
@@ -263,6 +269,7 @@ export default function InterviewScreen() {
 
     const pending = { sessionId, payload };
     pendingTurnRef.current = pending;
+    setHasPendingTurn(true);
     await submitPendingTurn(pending);
   };
 
@@ -378,6 +385,7 @@ export default function InterviewScreen() {
                 const pending = pendingTurnRef.current;
                 if (pending && pending.payload.answerKind === 'answered' && pending.payload.answerText !== value.trim()) {
                   pendingTurnRef.current = null;
+                  setHasPendingTurn(false);
                 }
               }}
               placeholder="Type your answer here…"
@@ -415,7 +423,7 @@ export default function InterviewScreen() {
         {errorText ? (
           <View style={styles.errorCard}>
             <Text style={styles.errorText}>{errorText}</Text>
-            {pendingTurnRef.current ? (
+            {hasPendingTurn ? (
               <TouchableOpacity style={styles.secondaryButton} onPress={() => void retryPendingTurn()}>
                 <Text style={styles.secondaryButtonText}>Retry same turn</Text>
               </TouchableOpacity>
