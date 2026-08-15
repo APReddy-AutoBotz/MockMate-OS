@@ -345,7 +345,7 @@ export default function SpeakScreen() {
       return 'failed';
     } catch (error: any) {
       const current = pendingAttemptRef.current ?? pending;
-      if (await recoverCommittedAttempt(current, silent)) return 'committed';
+      if (current && await recoverCommittedAttempt(current, silent)) return 'committed';
       if (!silent) setErrorText(error?.message || 'The pending attempt could not be cancelled. Recover or retry it instead.');
       return 'failed';
     }
