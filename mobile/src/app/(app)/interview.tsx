@@ -20,6 +20,7 @@ import {
   PlanGenerationRequestSchema,
   SessionControlsSchema,
   type AdaptiveAnswerSubmissionRequest,
+  type AdaptiveAnswerSubmissionResponse,
   type FinalReport,
   type InterviewPlan,
   type QuestionBlueprint,
@@ -49,6 +50,8 @@ const MOBILE_PANEL_IDS = ['p1'];
 const INITIAL_ADAPTIVE_SESSION_VERSION = 1;
 
 function createUuidV4(): string {
+  const randomUuid = (globalThis as any)?.crypto?.randomUUID;
+  if (typeof randomUuid === 'function') return randomUuid.call((globalThis as any).crypto);
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
     const random = Math.floor(Math.random() * 16);
     const value = char === 'x' ? random : (random & 0x3) | 0x8;
@@ -164,7 +167,9 @@ export default function InterviewScreen() {
       setRootQuestionIndex(started.questionIndex);
       setRootQuestionCount(started.totalQuestions);
       setTurnIndex(0);
-      setMaxTurns(Math.max(started.totalQuestions, MOBILE_CONTROLS.totalQuestions));
+      // maxTurns is not part of the start response. Do not guess it client-side;
+      // display it only after the first authoritative adaptive response supplies it.
+      setMaxTurns(0);
       setStage(started.firstQuestion.stage || 'framing');
       setCoachFeedback(null);
       setAnswerText('');
@@ -179,7 +184,7 @@ export default function InterviewScreen() {
     }
   };
 
-  const applyTurnResult = async (response: ReturnType<typeof AdaptiveAnswerSubmissionResponseSchema.parse>) => {
+  const applyTurnResult = async (response: AdaptiveAnswerSubmissionResponse) => {
     pendingTurnRef.current = null;
     setSessionVersion(response.sessionVersion);
     setRootQuestionIndex(response.rootQuestionIndex);
@@ -191,6 +196,10 @@ export default function InterviewScreen() {
     setAnswerText('');
 
     if (response.isSessionComplete || !response.nextQuestion) {
+      // Clear the last question before report generation. If report generation
+      // fails, the UI must offer report retry rather than allowing a stale turn
+      // to be resubmitted against a completed authoritative session.
+      setCurrentQuestion(null);
       if (!sessionId) {
         setErrorText('The authoritative session identifier is missing.');
         setPhase('asking');
@@ -349,50 +358,59 @@ export default function InterviewScreen() {
         </View>
 
         {currentQuestion && (
-          <View style={styles.questionCard}>
-            <Text style={styles.questionKind}>{(currentQuestion.questionKind || 'root').replace(/_/g, ' ')}</Text>
-            <Text style={styles.questionText}>{currentQuestion.question}</Text>
-          </View>
+          <>
+            <View style={styles.questionCard}>
+              <Text style={styles.questionKind}>{(currentQuestion.questionKind || 'root').replace(/_/g, ' ')}</Text>
+              <Text style={styles.questionText}>{currentQuestion.question}</Text>
+            </View>
+
+            {coachFeedback && (coachFeedback.strength || coachFeedback.nextFocus) ? (
+              <View style={styles.coachCard}>
+                {coachFeedback.strength ? <Text style={styles.coachText}>Strength: {coachFeedback.strength}</Text> : null}
+                {coachFeedback.nextFocus ? <Text style={styles.coachText}>Next focus: {coachFeedback.nextFocus}</Text> : null}
+              </View>
+            ) : null}
+
+            <TextInput
+              value={answerText}
+              onChangeText={(value) => {
+                setAnswerText(value);
+                const pending = pendingTurnRef.current;
+                if (pending && pending.payload.answerKind === 'answered' && pending.payload.answerText !== value.trim()) {
+                  pendingTurnRef.current = null;
+                }
+              }}
+              placeholder="Type your answer here…"
+              placeholderTextColor="#64748b"
+              multiline
+              style={styles.answerInput}
+              editable={phase === 'asking'}
+            />
+
+            {(phase === 'submitting' || phase === 'reporting') ? (
+              <View style={styles.loadingBlock}>
+                <ActivityIndicator size="large" color="#d4af37" />
+                <Text style={styles.muted}>{phase === 'reporting' ? 'Compiling authoritative report…' : 'Submitting governed turn…'}</Text>
+              </View>
+            ) : (
+              <View style={styles.actionRow}>
+                <TouchableOpacity style={[styles.primaryButton, styles.flexButton]} onPress={() => void prepareAndSubmitTurn('answered')}>
+                  <Text style={styles.primaryButtonText}>Submit answer</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.secondaryButton, styles.flexButton]} onPress={() => void prepareAndSubmitTurn('skipped')}>
+                  <Text style={styles.secondaryButtonText}>Skip question</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </>
         )}
 
-        {coachFeedback && (coachFeedback.strength || coachFeedback.nextFocus) ? (
-          <View style={styles.coachCard}>
-            {coachFeedback.strength ? <Text style={styles.coachText}>Strength: {coachFeedback.strength}</Text> : null}
-            {coachFeedback.nextFocus ? <Text style={styles.coachText}>Next focus: {coachFeedback.nextFocus}</Text> : null}
-          </View>
-        ) : null}
-
-        <TextInput
-          value={answerText}
-          onChangeText={(value) => {
-            setAnswerText(value);
-            const pending = pendingTurnRef.current;
-            if (pending && pending.payload.answerKind === 'answered' && pending.payload.answerText !== value.trim()) {
-              pendingTurnRef.current = null;
-            }
-          }}
-          placeholder="Type your answer here…"
-          placeholderTextColor="#64748b"
-          multiline
-          style={styles.answerInput}
-          editable={phase === 'asking'}
-        />
-
-        {(phase === 'submitting' || phase === 'reporting') ? (
+        {phase === 'reporting' && !currentQuestion ? (
           <View style={styles.loadingBlock}>
             <ActivityIndicator size="large" color="#d4af37" />
-            <Text style={styles.muted}>{phase === 'reporting' ? 'Compiling authoritative report…' : 'Submitting governed turn…'}</Text>
+            <Text style={styles.muted}>Compiling authoritative report…</Text>
           </View>
-        ) : (
-          <View style={styles.actionRow}>
-            <TouchableOpacity style={[styles.primaryButton, styles.flexButton]} onPress={() => void prepareAndSubmitTurn('answered')}>
-              <Text style={styles.primaryButtonText}>Submit answer</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.secondaryButton, styles.flexButton]} onPress={() => void prepareAndSubmitTurn('skipped')}>
-              <Text style={styles.secondaryButtonText}>Skip question</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        ) : null}
 
         {errorText ? (
           <View style={styles.errorCard}>
@@ -405,7 +423,11 @@ export default function InterviewScreen() {
               <TouchableOpacity style={styles.secondaryButton} onPress={() => void generateReport(sessionId)}>
                 <Text style={styles.secondaryButtonText}>Retry report</Text>
               </TouchableOpacity>
-            ) : null}
+            ) : (
+              <TouchableOpacity style={styles.secondaryButton} onPress={resetSession}>
+                <Text style={styles.secondaryButtonText}>Start a new interview</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : null}
 
