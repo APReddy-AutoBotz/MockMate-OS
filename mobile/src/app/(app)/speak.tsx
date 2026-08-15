@@ -181,6 +181,7 @@ export default function SpeakScreen() {
   const [result, setResult] = useState<AccentScore | null>(null);
   const [history, setHistory] = useState<HistoryAttempt[]>([]);
   const [errorText, setErrorText] = useState('');
+  const [hasPendingAttempt, setHasPendingAttempt] = useState(false);
   const pendingAttemptRef = useRef<PendingAttempt | null>(null);
   const resultRef = useRef<AccentScore | null>(null);
 
@@ -244,11 +245,18 @@ export default function SpeakScreen() {
   }, [mode, selectedProfile, setGovernedResult]);
 
   useEffect(() => {
-    void loadCatalog();
+    const timer = setTimeout(() => {
+      void loadCatalog();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [loadCatalog]);
 
   useEffect(() => {
-    if (profiles.length > 0) void loadPrompt();
+    if (profiles.length === 0) return undefined;
+    const timer = setTimeout(() => {
+      void loadPrompt();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [profiles.length, loadPrompt]);
 
   const authorizePendingAttempt = useCallback(async (pending: PendingAttempt): Promise<PendingAttempt> => {
@@ -282,6 +290,7 @@ export default function SpeakScreen() {
         }
         pendingAttemptRef.current = null;
         if (!silent) {
+          setHasPendingAttempt(false);
           setGovernedResult(status.result);
           setErrorText('');
           await loadHistory();
@@ -290,6 +299,7 @@ export default function SpeakScreen() {
       }
       if (status.status === 'cancelled') {
         pendingAttemptRef.current = null;
+        if (!silent) setHasPendingAttempt(false);
       }
     } catch {
       // Preserve the pending attempt. Its exact selector/audio can still recover.
@@ -321,6 +331,7 @@ export default function SpeakScreen() {
         }
         pendingAttemptRef.current = null;
         if (!silent) {
+          setHasPendingAttempt(false);
           setGovernedResult(committed);
           setErrorText('');
           await loadHistory();
@@ -330,6 +341,7 @@ export default function SpeakScreen() {
 
       if (outcome.status === 'cancelled') {
         pendingAttemptRef.current = null;
+        if (!silent) setHasPendingAttempt(false);
         return 'cancelled';
       }
 
@@ -469,6 +481,7 @@ export default function SpeakScreen() {
       validateAdapterDescriptor(response.score, response.adapter);
       setGovernedResult(response.score);
       pendingAttemptRef.current = null;
+      setHasPendingAttempt(false);
       await loadHistory();
     } catch (error: any) {
       const current = pendingAttemptRef.current ?? pending;
@@ -501,6 +514,7 @@ export default function SpeakScreen() {
       metadata: selector,
     };
     pendingAttemptRef.current = pending;
+    setHasPendingAttempt(true);
     await processPendingAttempt(pending);
   }, [buildSelector, processPendingAttempt]);
 
@@ -585,7 +599,7 @@ export default function SpeakScreen() {
               key={profile.profileId}
               style={[styles.choice, selectedProfileId === profile.profileId && styles.choiceActive]}
               onPress={() => chooseProfile(profile.profileId)}
-              disabled={Boolean(recording) || isSubmitting}
+              disabled={Boolean(recording) || isSubmitting || hasPendingAttempt}
             >
               <Text style={selectedProfileId === profile.profileId ? styles.choiceTextActive : styles.choiceText}>
                 {profile.displayName}
@@ -600,7 +614,7 @@ export default function SpeakScreen() {
               key={item}
               style={[styles.choice, mode === item && styles.choiceActive]}
               onPress={() => chooseMode(item)}
-              disabled={Boolean(recording) || isSubmitting}
+              disabled={Boolean(recording) || isSubmitting || hasPendingAttempt}
             >
               <Text style={mode === item ? styles.choiceTextActive : styles.choiceText}>
                 {item.replace(/_/g, ' ')}
@@ -642,8 +656,8 @@ export default function SpeakScreen() {
         </View>
       ) : (
         <TouchableOpacity
-          style={[styles.primaryButton, (!prompt || isSubmitting || Boolean(pendingAttemptRef.current)) && styles.disabled]}
-          disabled={!prompt || isSubmitting || Boolean(pendingAttemptRef.current)}
+          style={[styles.primaryButton, (!prompt || isSubmitting || hasPendingAttempt) && styles.disabled]}
+          disabled={!prompt || isSubmitting || hasPendingAttempt}
           onPress={() => void handleStartRecording()}
         >
           <Text style={styles.primaryButtonText}>Record governed attempt</Text>
@@ -660,7 +674,7 @@ export default function SpeakScreen() {
       {errorText ? (
         <View style={styles.errorCard}>
           <Text style={styles.errorText}>{errorText}</Text>
-          {pendingAttemptRef.current && !isSubmitting && (
+          {hasPendingAttempt && !isSubmitting && (
             <>
               <TouchableOpacity style={styles.secondaryButton} onPress={() => void retryPending()}>
                 <Text style={styles.secondaryButtonText}>Recover / retry same attempt</Text>
