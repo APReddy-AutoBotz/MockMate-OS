@@ -148,6 +148,9 @@ jobs:
       - name: 16. Mobile lint
         run: npm run mobile:lint
 
+      - name: 16a. Mobile governed core parity guard
+        run: npm run test:mobile-governed-parity
+
       - name: 20. Recognized full-history secret scan
         uses: gitleaks/gitleaks-action@v2
         env:

@@ -1,8 +1,8 @@
 # MockMate Mobile Production Plan
 
-> P0-3 merged at `b08250538b3efaf040f6fa6f33523bdf0164a7f7`. Draft PR #4 validates mobile source parity only. Native Interview/Career Context scope remains unchanged; no disabled native feature is enabled to claim parity. `HOSTED_PREVIEW_NOT_AUTHORIZED` also blocks EAS and store actions.
+> P0-6 is the source-parity milestone for the existing Expo client. It brings native Resume, ClearSpeak Accent Practice, and Interview onto the same governed backend contracts as the browser. It does **not** authorize EAS builds, store submission, hosted infrastructure mutation, provider activation, or public mobile claims.
 
-MockMate should ship as a real browser app first, then Android with the same product quality and privacy defaults. The current `mobile/` folder is an Android-first Expo client prepared for internal testing, not a public Play Store release.
+MockMate remains browser-first for public release. The `mobile/` app is an Android-first Expo client that must prove the same auth, privacy, contract, and fail-closed behavior before any store rollout.
 
 ## Mobile Strategy
 
@@ -10,90 +10,138 @@ Use React Native with Expo for the first production mobile app.
 
 Why Expo:
 
-- Fast Android/iOS builds with EAS
-- Good Supabase Auth support with secure token storage
-- Mature audio recording APIs for ClearSpeak
-- Easier app-store release workflow than maintaining native projects manually
-- Still allows native modules later if ClearSpeak needs deeper audio controls
+- native document upload and microphone flows;
+- Supabase Auth with secure token storage;
+- one shared backend and contract package with the browser;
+- Android/iOS release paths through EAS when separately authorized;
+- room for deeper native audio controls later without using a WebView wrapper.
 
-Do not ship a simple WebView wrapper as the primary mobile app. MockMate depends on uploads, microphone practice, auth, reminders, and offline-friendly progress states; these should feel native.
+## Governed Shared Product Contract
 
-## Shared Product Contract
+Core mobile screens must use `mobile/src/services/apiClient.ts` with authenticated requests and shared Zod response schemas. The client never owns provider, model, scoring-policy, service-role, retention, or privileged adapter authority.
 
-Mobile must use the same backend APIs as the browser app:
+### Resume — P0-4 governed path
 
 - `POST /api/resume/parse`
+  - multipart PDF/DOCX only;
+  - validate `ResumeParseResponseSchema`;
+  - raw extracted text is transient and must not remain in component state after scoring.
 - `POST /api/resume/score`
+  - validate `GovernedResumeScoreResponseSchema`;
+  - render `atsDiagnostics` and governed JD `scoreStatus` / nullable `jdMatchScore` truthfully.
 - `POST /api/resume/suggest`
-- `POST /api/resume/rewrite`
+  - future mobile rewrite UX may consume `GovernedResumeSuggestionResponseSchema` with per-suggestion approval.
+
+Legacy bulk rewrite endpoints are not part of the mobile contract.
+
+### ClearSpeak Accent — P0-5 governed path
+
+- `GET /api/clearspeak/v1/accent/catalog`
+- `POST /api/clearspeak/v1/accent/prompts`
+- `POST /api/clearspeak/v1/accent/attempt-authority`
+- `POST /api/clearspeak/v1/accent/attempts`
+- `GET /api/clearspeak/v1/accent/attempts/:attemptId/status`
+- `POST /api/clearspeak/v1/accent/attempts/:attemptId/cancel`
+- `GET /api/clearspeak/v1/accent/attempts`
+- `DELETE /api/clearspeak/v1/accent/attempts/:attemptId`
+
+The legacy `/api/clearspeak/score` route is **not** a mobile Accent Practice API.
+
+Mobile must preserve P0-5 semantics:
+
+- explicit microphone consent;
+- server-issued attempt capability before upload;
+- authoritative prompt/profile/reference/scoring selectors;
+- same attempt ID + same audio/metadata for response-loss retry;
+- V1 unscored and V2 evidence-scored results validated separately;
+- no composite accent-quality, native-ness, nationality, identity, or employability score;
+- each dimension independently shows score or `No score`, confidence/evidence status, and server-owned explanation;
+- raw audio remains ephemeral and is never persisted by the app.
+
+Until a real speech scorer is separately authorized, ordinary user recordings are expected to complete as truthful V1 null-score results rather than synthetic estimates.
+
+### Interview — server-authoritative adaptive path
+
 - `POST /api/interview/plan`
-- `POST /api/interview/answer`
-- `POST /api/interview/report`
-- `GET /api/interview/history`
-- `GET/POST /api/clearspeak/profile`
-- `POST /api/clearspeak/generate`
-- `POST /api/clearspeak/score`
-- `GET /api/clearspeak/progress`
+  - validate `InterviewPlanSchema`.
+- `POST /api/interview/sessions`
+  - validate `InterviewSessionStartResponseSchema`.
+- `POST /api/interview/sessions/:sessionId/answers`
+  - use `AdaptiveAnswerSubmissionRequestSchema` with UUID `clientSubmissionId` and exact `expectedSessionVersion`;
+  - validate `AdaptiveAnswerSubmissionResponseSchema`;
+  - preserve the same submission ID for exact retry after response loss.
+- `POST /api/interview/sessions/:sessionId/report`
+  - validate `FinalReportSchema`.
+
+Mobile V1 may use typed answers and an ungrounded session. It must never invent a question, evaluation, next action, Career Context bridge, or report when the backend is unavailable.
+
+### Account lifecycle
+
 - `GET /api/me/usage`
 - `DELETE /api/me/data`
 
-Every protected request must send:
+Every protected request uses:
 
 ```http
 Authorization: Bearer <supabase_access_token>
 ```
 
-## Mobile Build Phases
+## Build Phases
 
-### Phase 1: App Foundation
+### Phase 1 — Foundation
 
-- Keep the Expo app identity as MockMate with Android package `com.mockmate.app`.
+- Keep package identity `com.mockmate.app`.
 - Use Supabase Auth with secure Expo token storage.
 - Set `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`, and `EXPO_PUBLIC_API_URL`.
-- Keep mock auth disabled for every store or internal testing build.
-- Set `EXPO_PUBLIC_RUNTIME_MODE=preview` for a future approved preview build. Release-like modes reject mock auth, malformed/non-HTTPS API and Supabase URLs, and missing auth configuration.
-- Public Expo environment values may contain only API origin, Supabase URL, and Supabase anon key; service-role/provider/admin authority is forbidden.
-- Build the same first-run flow as the browser app: onboarding to "Your practice home".
+- Keep mock auth disabled for preview/release-like builds.
+- Public Expo environment values may contain only public API origin, Supabase URL, and anon key.
 
-### Phase 2: Core User Journeys
+### Phase 2 — Governed Core Journeys
 
-- Resume:
-  - Pick PDF/DOC/DOCX from the device.
-  - Send auth-protected multipart upload to `/api/resume/parse`.
-  - Show ATS review and friendly suggestions.
-- Speaking:
-  - Record up to 60 seconds.
-  - Upload audio as multipart form data.
-  - Show score, clear feedback, and progress.
-- Interview:
-  - Quick setup.
-  - Practice question flow.
-  - Report and history.
+P0-6 source scope:
 
-### Phase 3: Premium Mobile Polish
+- Resume: governed parse + ATS/JD diagnostics.
+- ClearSpeak: governed Accent Practice attempt lifecycle and V1/V2 result rendering.
+- Interview: canonical plan → session → adaptive typed turns → report.
+- CI: `test:mobile-governed-parity` plus mobile TypeScript/lint must prevent return of stale paths/shapes/placeholders.
 
-- Native-feeling navigation, loading states, empty states, and error recovery.
-- Brand-consistent navy/gold theme with readable blue-gray secondary text.
-- Haptics only for meaningful actions.
-- No technical jargon in copy.
-- Accessible touch targets and visible focus/pressed states.
+### Phase 3 — Native QA & Polish
 
-### Phase 4: Release
+Only after source parity is merged:
 
-- EAS build for Android and iOS.
-- TestFlight and internal Play testing.
-- Privacy policy and account deletion flow verified.
-- Store screenshots for landing, practice home, resume review, speaking practice, interview report, and settings.
+- physical-device auth and token-refresh verification;
+- real document upload and microphone lifecycle testing;
+- interruption/background/permission-revocation recovery;
+- accessibility, touch targets, keyboard behavior and screen-reader review;
+- account deletion against an approved hosted test environment;
+- native history/progress polish and optional governed Career Context selectors.
 
-## Current Gap
+### Phase 4 — Release (separate approval)
 
-The mobile app is not ready for public Play Store release. Source type/lint/contract evidence does not prove secure hosted token exchange, real upload/audio behavior, EAS output, or account deletion against a hosted system. AP approval is required before the hosted/EAS/store commands below may be run. Before claiming native Android support in marketing or docs, verify:
+- EAS preview build;
+- TestFlight/internal Play testing;
+- privacy policy and account deletion verification;
+- store assets/screenshots;
+- production signing and store submission.
+
+## Current Release Boundary
+
+Passing source CI does **not** prove a public mobile release. Before claiming native Android/iOS availability, separately authorize and verify hosted token exchange, real file/audio behavior, approved provider boundaries, EAS output, account deletion, physical-device QA, signing, and store review.
+
+Source-only checks:
+
+```bash
+npm ci
+npm run test:mobile-governed-parity
+npm run mobile:typecheck
+npm run mobile:lint
+```
+
+The following remain explicitly gated and must not be run as part of P0-6 without separate approval:
 
 ```bash
 cd mobile
-npm install
-npx tsc --noEmit
-npm run lint
 npx expo start
 eas build --platform android --profile preview
+eas build --platform ios --profile preview
 ```
