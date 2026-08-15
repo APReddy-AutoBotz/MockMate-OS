@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -79,6 +79,7 @@ export default function InterviewScreen() {
   const [errorText, setErrorText] = useState('');
   const [hasPendingTurn, setHasPendingTurn] = useState(false);
   const pendingTurnRef = useRef<PendingTurn | null>(null);
+  const sessionEpochRef = useRef(0);
 
   const progressLabel = useMemo(() => {
     if (!rootQuestionCount) return 'Preparing session';
@@ -86,7 +87,15 @@ export default function InterviewScreen() {
     return `Scenario ${scenario} of ${rootQuestionCount}${maxTurns ? ` · Turn ${turnIndex + 1} of ${maxTurns}` : ''}`;
   }, [maxTurns, rootQuestionCount, rootQuestionIndex, turnIndex]);
 
+  useEffect(() => () => {
+    // Invalidate any in-flight plan/turn/report response after native route exit.
+    sessionEpochRef.current += 1;
+  }, []);
+
   const resetSession = () => {
+    // A request already in flight may still complete. Advancing the epoch makes
+    // that response stale so it cannot resurrect or overwrite a reset/new session.
+    sessionEpochRef.current += 1;
     setPhase('setup');
     setPlan(null);
     setSessionId('');
@@ -107,6 +116,7 @@ export default function InterviewScreen() {
   };
 
   const generateReport = async (activeSessionId: string) => {
+    const requestEpoch = sessionEpochRef.current;
     setPhase('reporting');
     setErrorText('');
     try {
@@ -115,9 +125,11 @@ export default function InterviewScreen() {
         FinalReportSchema,
         {},
       );
+      if (requestEpoch !== sessionEpochRef.current) return;
       setReport(finalReport);
       setPhase('complete');
     } catch (error: any) {
+      if (requestEpoch !== sessionEpochRef.current) return;
       setPhase('asking');
       setErrorText(error?.message || 'The authoritative report is unavailable. Retry report generation.');
     }
@@ -131,6 +143,7 @@ export default function InterviewScreen() {
       return;
     }
 
+    const requestEpoch = sessionEpochRef.current;
     setPhase('starting');
     setErrorText('');
     try {
@@ -141,6 +154,7 @@ export default function InterviewScreen() {
         selectedPanelIDs: MOBILE_PANEL_IDS,
       });
       const generatedPlan = await apiClient.post('/interview/plan', InterviewPlanSchema, planRequest);
+      if (requestEpoch !== sessionEpochRef.current) return;
 
       const sessionRequest = InterviewSessionStartRequestSchema.parse({
         context: {
@@ -158,6 +172,7 @@ export default function InterviewScreen() {
         InterviewSessionStartResponseSchema,
         sessionRequest,
       );
+      if (requestEpoch !== sessionEpochRef.current) return;
 
       setPlan(generatedPlan);
       setSessionId(started.sessionId);
@@ -177,6 +192,7 @@ export default function InterviewScreen() {
       setAnswerText('');
       setPhase('asking');
     } catch (error: any) {
+      if (requestEpoch !== sessionEpochRef.current) return;
       setPhase('setup');
       setErrorText(
         error instanceof ApiError && error.status === 429
@@ -217,6 +233,7 @@ export default function InterviewScreen() {
   };
 
   const submitPendingTurn = async (pending: PendingTurn) => {
+    const requestEpoch = sessionEpochRef.current;
     setPhase('submitting');
     setErrorText('');
     try {
@@ -225,8 +242,10 @@ export default function InterviewScreen() {
         AdaptiveAnswerSubmissionResponseSchema,
         pending.payload,
       );
+      if (requestEpoch !== sessionEpochRef.current) return;
       await applyTurnResult(response);
     } catch (error: any) {
+      if (requestEpoch !== sessionEpochRef.current) return;
       const terminal = error instanceof ApiError && [400, 409, 422].includes(error.status);
       if (terminal) {
         pendingTurnRef.current = null;
