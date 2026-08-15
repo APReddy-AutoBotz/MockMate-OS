@@ -55,10 +55,24 @@ export default function DashboardScreen() {
         onPress: async () => {
           try {
             await signOut();
-            await AsyncStorage.removeItem('mockmate_user_profile');
-            router.replace('/(auth)/login');
           } catch (error: any) {
-            Alert.alert('Sign Out Failed', error?.message || 'Your local sign-in session could not be cleared. Please retry.');
+            Alert.alert('Sign Out Failed', error?.message || 'Your sign-in session could not be cleared. Please retry.');
+            return;
+          }
+
+          // These keys are intentionally not user-scoped. Once auth sign-out
+          // succeeds, clear them before another account can use this device.
+          const cleanupResults = await Promise.allSettled(
+            LOCAL_APP_DATA_KEYS.map((key) => AsyncStorage.removeItem(key)),
+          );
+          const localCleanupFailed = cleanupResults.some((entry) => entry.status === 'rejected');
+          setProfile(null);
+          router.replace('/(auth)/login');
+          if (localCleanupFailed) {
+            Alert.alert(
+              'Signed Out',
+              'Your sign-in session was cleared, but some local MockMate data could not be removed. Reopen the app before another person signs in on this device.',
+            );
           }
         },
       },
