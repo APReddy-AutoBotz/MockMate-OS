@@ -55,12 +55,14 @@ const possessiveOrResemblanceNationalityDescriptor = new RegExp(
   `\\b(?:you|speaker|user|person|your (?:voice|accent|speech|recording)|(?:speaker|user|person)(?:'s|’s) (?:voice|accent|speech|recording))\\b[^.!?\\n]{0,32}\\b(?:have|has|carry|carries|show|shows|display|displays|demonstrate|demonstrates|resemble|resembles|match|matches)\\b[^.!?\\n]{0,20}(?:(?:an?|the)\\s+)?${nationalityDescriptor}\\b(?:\\s+(?:accent|speech|voice|pronunciation|speaker|features?|patterns?|characteristics?))?`,
   'i',
 );
+const resemblanceOriginInference = /\b(?:you|speaker|user|person|your (?:voice|accent|speech|recording)|(?:speaker|user|person)(?:'s|’s) (?:voice|accent|speech|recording))\b[^.!?\n]{0,40}\b(?:resemble|resembles|match|matches|mirror|mirrors)\b[^.!?\n]{0,32}\b(?:speech|voice|accent|pronunciation|features?|patterns?|characteristics?)\b[^.!?\n]{0,16}\bfrom\b/i;
 
 const assertNeutralEvidenceText = (value: string, label: string) => {
   if (forbiddenIdentityOrEmploymentClaim.test(value)
       || directOriginInference.test(value)
       || directNationalityDescriptor.test(value)
-      || possessiveOrResemblanceNationalityDescriptor.test(value)) {
+      || possessiveOrResemblanceNationalityDescriptor.test(value)
+      || resemblanceOriginInference.test(value)) {
     throw new Error(`Accent evidence ${label} contains a forbidden identity or employment inference`);
   }
 };
@@ -135,6 +137,8 @@ const assertEvidenceBinding = (
     throw new Error('Accent scorer evidence lineage does not match authoritative recording selectors');
   }
 
+  // Provider free-form text is never persisted or rendered, but reject known
+  // prohibited inferences here as an additional fail-closed adapter boundary.
   for (const key of dimensionOrder) {
     const dimension = evidence.dimensions[key];
     assertNeutralEvidenceText(dimension.summary, `${key} summary`);
@@ -144,6 +148,18 @@ const assertEvidenceBinding = (
     if (dimension.coachingAction) assertNeutralEvidenceText(dimension.coachingAction, `${key} coaching`);
   }
 };
+
+const scoredSummaryFor = (status: 'sufficient' | 'limited'): string => status === 'limited'
+  ? 'Limited but validated evidence met the server threshold for this dimension against the selected practice reference.'
+  : 'Validated evidence met the server threshold for this dimension against the selected practice reference.';
+
+const coachingActionFor = (key: AccentEvidenceDimensionKey): string => ({
+  intelligibility: 'Repeat the prompt with clear articulation and compare the marked evidence with the selected practice reference.',
+  pronunciation: 'Repeat the marked segment and compare its pronunciation with the selected practice reference.',
+  prosody: 'Repeat the marked segment while focusing on stress, rhythm, pauses, and intonation against the selected practice reference.',
+  fluency: 'Repeat the marked window at a steady pace while reducing avoidable hesitations.',
+  targetStyle: 'Repeat the marked segment and compare its pronunciation, stress, and rhythm with the learner-selected practice reference.',
+}[key]);
 
 const mapDimension = (
   key: AccentEvidenceDimensionKey,
@@ -179,7 +195,9 @@ const mapDimension = (
     score: evidence.candidateScore,
     confidence: evidence.confidence,
     evidenceStatus: evidence.evidenceStatus,
-    summary: evidence.summary,
+    // Provider prose is deliberately not a persistence/UI authority. Only the
+    // validated numeric/status/ref evidence crosses into the user-facing result.
+    summary: scoredSummaryFor(evidence.evidenceStatus),
     evidenceRefs: evidence.evidenceRefs,
   };
 };
@@ -235,18 +253,20 @@ export const scoreWithGovernedAccentAdapter = async (
   ) as AccentScoreV2['dimensions'];
   const scoredDimensionCount = dimensionOrder.filter(key => dimensions[key].score !== null).length;
 
-  const scoredCoachingCandidates = dimensionOrder
-    .map(key => ({ key, evidence: evidence.dimensions[key], score: dimensions[key].score }))
-    .filter((candidate): candidate is typeof candidate & { score: number } => candidate.score !== null && Boolean(candidate.evidence.coachingAction))
+  // Ranking is server-owned and uses only validated scores. Provider coaching
+  // prose never crosses into persistence/UI; actions are deterministic and
+  // traceable to the scored dimension's validated evidence references.
+  const coaching = dimensionOrder
+    .map(key => ({ key, score: dimensions[key].score, evidenceRefs: dimensions[key].evidenceRefs }))
+    .filter((candidate): candidate is typeof candidate & { score: number } => candidate.score !== null)
     .sort((left, right) => left.score - right.score || dimensionOrder.indexOf(left.key) - dimensionOrder.indexOf(right.key))
-    .slice(0, 3);
-
-  const coaching = scoredCoachingCandidates.map((candidate, index) => ({
-    rank: index + 1,
-    dimension: candidate.key,
-    evidenceRefs: candidate.evidence.evidenceRefs,
-    action: candidate.evidence.coachingAction!,
-  }));
+    .slice(0, 3)
+    .map((candidate, index) => ({
+      rank: index + 1,
+      dimension: candidate.key,
+      evidenceRefs: candidate.evidenceRefs,
+      action: coachingActionFor(candidate.key),
+    }));
 
   const resultSeed = stableSha256({ attemptId: context.attemptId, evidenceSha256 });
   const score = AccentScoreV2Schema.parse({
