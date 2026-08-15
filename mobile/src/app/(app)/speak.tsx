@@ -694,7 +694,7 @@ const styles = StyleSheet.create({
   choiceText: { color: '#94a3b8', fontSize: 12, textTransform: 'capitalize' },
   choiceTextActive: { color: '#d4af37', fontSize: 12, fontWeight: '700', textTransform: 'capitalize' },
   promptMeta: { color: '#d4af37', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', marginBottom: 10 },
-  promptText: { color: '#ffffff', fontSize: 20, lineHeight: 30, fontWeight: '650', marginBottom: 12 },
+  promptText: { color: '#ffffff', fontSize: 20, lineHeight: 30, fontWeight: '700', marginBottom: 12 },
   muted: { color: '#94a3b8', fontSize: 12, lineHeight: 18 },
   primaryButton: { backgroundColor: '#d4af37', borderRadius: 13, paddingVertical: 16, alignItems: 'center', marginBottom: 16 },
   primaryButtonText: { color: '#0b1329', fontSize: 14, fontWeight: '800' },
