@@ -166,10 +166,12 @@ const mapDimension = (
   evidence: AccentScorerEvidenceV1['dimensions'][AccentEvidenceDimensionKey],
 ) => {
   const minimumConfidence = AccentRealSpeechPolicyV1.minimumConfidence[key];
-  const providerMarkedScoreable = evidence.evidenceStatus === 'sufficient' || evidence.evidenceStatus === 'limited';
-  const meetsConfidence = providerMarkedScoreable && evidence.confidence >= minimumConfidence;
+  const scoreableStatus = evidence.evidenceStatus === 'sufficient' || evidence.evidenceStatus === 'limited'
+    ? evidence.evidenceStatus
+    : null;
+  const meetsConfidence = scoreableStatus !== null && evidence.confidence >= minimumConfidence;
 
-  if (!providerMarkedScoreable) {
+  if (scoreableStatus === null) {
     return {
       score: null,
       confidence: evidence.confidence,
@@ -194,10 +196,10 @@ const mapDimension = (
   return {
     score: evidence.candidateScore,
     confidence: evidence.confidence,
-    evidenceStatus: evidence.evidenceStatus,
+    evidenceStatus: scoreableStatus,
     // Provider prose is deliberately not a persistence/UI authority. Only the
     // validated numeric/status/ref evidence crosses into the user-facing result.
-    summary: scoredSummaryFor(evidence.evidenceStatus),
+    summary: scoredSummaryFor(scoreableStatus),
     evidenceRefs: evidence.evidenceRefs,
   };
 };
