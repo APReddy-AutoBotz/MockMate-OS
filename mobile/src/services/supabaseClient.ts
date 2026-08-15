@@ -46,7 +46,7 @@ let devMockUser: any = null;
 const createMockUser = (email: string, pass: string) => ({
   id: `mock_${Date.now()}`,
   email,
-  pass, 
+  pass,
   user_metadata: { full_name: email.split('@')[0] }
 });
 
@@ -57,7 +57,7 @@ export const auth = {
   },
   onAuthStateChanged(callback: (user: any) => void) {
     subscribers.add(callback);
-    
+
     if (isUsingMockAuth) {
       callback(devMockUser);
       return () => subscribers.delete(callback);
@@ -122,7 +122,8 @@ export const signOut = async () => {
     return;
   }
   if (supabase) {
-    await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut();
+    if (error) throw Object.assign(error, { code: 'auth/signout-failed' });
   }
 };
 
