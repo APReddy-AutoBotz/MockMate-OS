@@ -1,550 +1,644 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
   ActivityIndicator,
   Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { Audio } from 'expo-av';
-import { getAccessToken } from '../../services/supabaseClient';
-import { API_BASE } from '../../services/apiBase';
+import { z } from 'zod';
+import {
+  AccentProfileV1Schema,
+  AccentScoreV1Schema,
+  PracticeModeSchema,
+  PracticePromptV1Schema,
+  type AccentProfileV1,
+  type AccentScoreV1,
+  type PracticePromptV1,
+} from 'mockmate-shared';
+import {
+  AccentScoreV2Schema,
+  type AccentScoreV2,
+} from 'mockmate-shared/accent-evidence';
+import { apiClient, ApiError } from '../../services/apiClient';
 
-interface PassageToken {
-  text: string;
-  isStressed: boolean;
-  pauseType: 'none' | 'short' | 'stop';
+const AccentScoreSchema = z.union([AccentScoreV1Schema, AccentScoreV2Schema]);
+type AccentScore = AccentScoreV1 | AccentScoreV2;
+
+const AccentCatalogSchema = z.object({
+  contractVersion: z.literal('accent-profile-catalog.v1'),
+  profiles: z.array(AccentProfileV1Schema).min(1),
+  practiceModes: z.array(PracticeModeSchema).min(1),
+  fixture: z.boolean(),
+  retention: z.literal('derived-results-only'),
+  realSpeechScoringAvailable: z.boolean(),
+}).strict();
+
+const AccentPromptEnvelopeSchema = z.object({
+  prompt: PracticePromptV1Schema,
+  scoringPolicyVersion: z.string().min(1),
+  fixture: z.boolean(),
+}).strict();
+
+const AccentAttemptAuthoritySchema = z.object({
+  attemptId: z.string().uuid(),
+  capability: z.string().regex(/^[a-f0-9]{64}$/),
+  expiresAt: z.string().min(1),
+}).strict();
+
+const AccentAdapterDescriptorSchema = z.union([
+  z.object({
+    status: z.literal('unavailable'),
+    adapterId: z.literal('scoring-unavailable-v1'),
+  }).strict(),
+  z.object({
+    status: z.literal('authorized'),
+    adapterId: z.string().min(1),
+    adapterVersion: z.string().min(1),
+  }).strict(),
+]);
+
+const AccentAttemptSubmissionResponseSchema = z.object({
+  score: AccentScoreSchema,
+  replayed: z.boolean(),
+  requestHash: z.string().regex(/^[a-f0-9]{64}$/),
+  adapter: AccentAdapterDescriptorSchema,
+  retention: z.literal('derived-results-only'),
+}).strict();
+
+const AccentAttemptStatusSchema = z.object({
+  status: z.enum(['pending', 'cancelled', 'committed', 'conflict', 'missing', 'limit', 'invalid']),
+  requestHash: z.string().optional(),
+  result: AccentScoreSchema.optional(),
+  replayed: z.boolean().optional(),
+  executionLeaseExpiresAt: z.string().optional(),
+}).strict();
+
+const AccentHistoryAttemptSchema = z.object({
+  attempt_id: z.string().uuid(),
+  result: AccentScoreSchema,
+  fixture: z.boolean(),
+  evidence_provenance: z.string(),
+  duration_ms: z.number().int().nonnegative(),
+  mime_type: z.string(),
+  created_at: z.string(),
+  evidenceProvenance: z.string(),
+  evidenceStatus: z.record(z.enum(['sufficient', 'limited', 'insufficient', 'unsupported'])),
+}).strict();
+
+const AccentHistorySchema = z.object({
+  attempts: z.array(AccentHistoryAttemptSchema),
+  retention: z.literal('derived-results-only'),
+}).strict();
+
+const EmptyResponseSchema = z.object({}).strict();
+
+type PracticeMode = z.infer<typeof PracticeModeSchema>;
+type HistoryAttempt = z.infer<typeof AccentHistoryAttemptSchema>;
+
+type PendingAttempt = {
+  attemptId: string;
+  capability: string;
+  uri: string;
+  durationMs: number;
+  metadata: Record<string, unknown>;
+};
+
+const DIMENSIONS = [
+  ['intelligibility', 'Intelligibility'],
+  ['pronunciation', 'Pronunciation'],
+  ['prosody', 'Prosody'],
+  ['fluency', 'Fluency'],
+  ['targetStyle', 'Selected target style'],
+] as const;
+
+function createUuidV4(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = char === 'x' ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
 }
 
-interface SessionContent {
-  topicTag: string;
-  targetSkill: string;
-  keyVocab: string[];
-  passageData: PassageToken[];
-  repeatPhrase: string;
-  retrySentence: string;
-  interviewBridgeQuestion?: string;
+function validateAdapterDescriptor(
+  score: AccentScore,
+  adapter: z.infer<typeof AccentAdapterDescriptorSchema>,
+): void {
+  if (score.contractVersion === 'accent-score.v2') {
+    if (
+      adapter.status !== 'authorized' ||
+      adapter.adapterId !== score.evidenceLineage.adapterId ||
+      adapter.adapterVersion !== score.evidenceLineage.adapterVersion
+    ) {
+      throw new Error('Scoring adapter lineage does not match the governed result.');
+    }
+    return;
+  }
+
+  if (adapter.status !== 'unavailable' || adapter.adapterId !== 'scoring-unavailable-v1') {
+    throw new Error('Unexpected scoring authority for an unscored V1 result.');
+  }
+}
+
+function resultLabel(score: AccentScore): string {
+  if (score.contractVersion === 'accent-score.v1') return 'Scorer unavailable — recording saved as unscored';
+  if (score.evidenceProvenance === 'user_recording_scored') return 'Evidence-scored recording';
+  return 'Evaluated recording — evidence insufficient for scoring';
 }
 
 export default function SpeakScreen() {
-  const [, setProfile] = useState<any>(null);
-  const [content, setContent] = useState<SessionContent | null>(null);
+  const [profiles, setProfiles] = useState<AccentProfileV1[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<AccentProfileV1['profileId']>('en-GB-general-v1');
+  const [mode, setMode] = useState<PracticeMode>('sentence_reading');
+  const [prompt, setPrompt] = useState<PracticePromptV1 | null>(null);
+  const [scoringPolicyVersion, setScoringPolicyVersion] = useState('');
+  const [realSpeechScoringAvailable, setRealSpeechScoringAvailable] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [consented, setConsented] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [seconds, setSeconds] = useState(0);
-  const [isUploading, setIsUploading] = useState(false);
-  const [scoreResult, setScoreResult] = useState<any>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [result, setResult] = useState<AccentScore | null>(null);
+  const [history, setHistory] = useState<HistoryAttempt[]>([]);
+  const [errorText, setErrorText] = useState('');
+  const pendingAttemptRef = useRef<PendingAttempt | null>(null);
+  const resultRef = useRef<AccentScore | null>(null);
 
-  async function setupClearSpeak() {
+  const selectedProfile = useMemo(
+    () => profiles.find((item) => item.profileId === selectedProfileId) ?? null,
+    [profiles, selectedProfileId],
+  );
+
+  const setGovernedResult = useCallback((score: AccentScore | null) => {
+    resultRef.current = score;
+    setResult(score);
+  }, []);
+
+  const loadHistory = useCallback(async () => {
     try {
-      const token = await getAccessToken();
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      // 1. Fetch ClearSpeak profile. If 404, we'll create a default one
-      const profRes = await fetch(`${API_BASE}/clearspeak/profile`, {
-        headers,
+      const response = await apiClient.get('/clearspeak/v1/accent/attempts', AccentHistorySchema, {
+        params: { limit: '10' },
       });
+      setHistory(response.attempts);
+    } catch (error) {
+      if (__DEV__) console.warn('ClearSpeak Accent history unavailable', error);
+    }
+  }, []);
 
-      let currentProfile = null;
-      if (profRes.ok) {
-        const profData = await profRes.json();
-        currentProfile = profData.profile;
-      } else {
-        // Create default profile for the user
-        const newProf = {
-          role: 'General Corporate',
-          level: 2,
-          goal: 'Clearer articulation and professional pacing.',
-          audienceContext: 'Recruiters and hiring managers',
-          mainStruggle: 'vocabulary_loss',
-          comfortLanguage: 'English',
-          practiceDuration: 3,
-        };
-
-        const createHeaders: Record<string, string> = {
-          'Content-Type': 'application/json',
-        };
-        if (token) {
-          createHeaders['Authorization'] = `Bearer ${token}`;
-        }
-
-        const createRes = await fetch(`${API_BASE}/clearspeak/profile`, {
-          method: 'POST',
-          headers: createHeaders,
-          body: JSON.stringify(newProf),
-        });
-
-        if (createRes.ok) {
-          const createData = await createRes.json();
-          currentProfile = createData.profile;
-        }
+  const loadCatalog = useCallback(async () => {
+    setLoading(true);
+    setErrorText('');
+    try {
+      const catalog = await apiClient.get('/clearspeak/v1/accent/catalog', AccentCatalogSchema);
+      setProfiles(catalog.profiles);
+      setRealSpeechScoringAvailable(catalog.realSpeechScoringAvailable);
+      if (!catalog.profiles.some((profile) => profile.profileId === selectedProfileId)) {
+        setSelectedProfileId(catalog.profiles[0].profileId);
       }
-
-      setProfile(currentProfile);
-
-      // 2. Generate a custom passage
-      const genHeaders: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        genHeaders['Authorization'] = `Bearer ${token}`;
-      }
-
-      const genRes = await fetch(`${API_BASE}/clearspeak/generate`, {
-        method: 'POST',
-        headers: genHeaders,
-        body: JSON.stringify({
-          recentTopics: [],
-          sessionAttemptLength: 0,
-        }),
-      });
-
-      const genData = await genRes.json();
-      if (genRes.ok && genData.content) {
-        setContent(genData.content);
-      } else {
-        throw new Error('Failed to generate practice content.');
-      }
+      await loadHistory();
     } catch (error: any) {
-      console.error(error);
-      Alert.alert('Initialization Failed', error.message || 'Check connection.');
+      setErrorText(error?.message || 'Accent practice is unavailable.');
     } finally {
       setLoading(false);
     }
-  }
+  }, [loadHistory, selectedProfileId]);
+
+  const loadPrompt = useCallback(async () => {
+    if (!selectedProfile) return;
+    setErrorText('');
+    setGovernedResult(null);
+    pendingAttemptRef.current = null;
+    try {
+      const response = await apiClient.post('/clearspeak/v1/accent/prompts', AccentPromptEnvelopeSchema, {
+        profileId: selectedProfile.profileId,
+        profileVersion: selectedProfile.profileVersion,
+        mode,
+      });
+      setPrompt(response.prompt);
+      setScoringPolicyVersion(response.scoringPolicyVersion);
+    } catch (error: any) {
+      setPrompt(null);
+      setErrorText(error?.message || 'Practice prompt is unavailable.');
+    }
+  }, [mode, selectedProfile, setGovernedResult]);
+
+  useEffect(() => {
+    void loadCatalog();
+  }, [loadCatalog]);
+
+  useEffect(() => {
+    if (profiles.length > 0) void loadPrompt();
+  }, [profiles.length, loadPrompt]);
+
+  const cancelPendingAuthority = useCallback(async () => {
+    const pending = pendingAttemptRef.current;
+    if (!pending) return;
+    try {
+      await apiClient.post(
+        `/clearspeak/v1/accent/attempts/${pending.attemptId}/cancel`,
+        AccentAttemptStatusSchema,
+        { submissionCapability: pending.capability },
+      );
+    } catch {
+      // Cancellation is best-effort on route exit; server expiry remains fail-closed.
+    } finally {
+      pendingAttemptRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => {
+    const active = recordingRef.current;
+    if (active) {
+      void active.stopAndUnloadAsync().catch(() => undefined);
+      recordingRef.current = null;
+    }
+    if (pendingAttemptRef.current && !resultRef.current) void cancelPendingAuthority();
+  }, [cancelPendingAuthority]);
+
+  const askForConsent = () => {
+    Alert.alert(
+      'Microphone consent',
+      'Your recording is uploaded only for this governed practice attempt. MockMate does not persist raw audio; only derived results and bounded metadata are retained.',
+      [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'I consent', onPress: () => setConsented(true) },
+      ],
+    );
+  };
 
   const handleStartRecording = async () => {
+    if (!prompt) return;
+    if (!consented) {
+      askForConsent();
+      return;
+    }
     try {
       const permission = await Audio.requestPermissionsAsync();
       if (permission.status !== 'granted') {
-        Alert.alert('Permission Required', 'Microphone permissions are required to practice speaking.');
+        Alert.alert('Microphone permission required', 'Allow microphone access to record this practice attempt.');
         return;
       }
-
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
-      const { recording: newRecording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording: nextRecording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
       );
-
-      setRecording(newRecording);
-      recordingRef.current = newRecording;
-      setIsRecording(true);
+      recordingRef.current = nextRecording;
+      setRecording(nextRecording);
+      setRecordingStartedAt(Date.now());
       setSeconds(0);
-      setScoreResult(null);
-    } catch (err) {
-      console.error('Failed to start recording', err);
-      Alert.alert('Recording Error', 'Could not initialize audio recorder.');
+      setErrorText('');
+      setGovernedResult(null);
+      pendingAttemptRef.current = null;
+    } catch (error: any) {
+      Alert.alert('Recording unavailable', error?.message || 'Could not start microphone recording.');
     }
   };
 
-  const handleUploadAudio = useCallback(async (uri: string) => {
-    setIsUploading(true);
-    try {
-      const token = await getAccessToken();
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
+  const buildSelector = useCallback((attemptId: string, durationMs: number) => {
+    if (!prompt) throw new Error('Practice prompt is unavailable.');
+    return {
+      attemptId,
+      durationMs,
+      mode: prompt.mode,
+      profileId: prompt.profileId,
+      profileVersion: prompt.profileVersion,
+      promptId: prompt.promptId,
+      promptVersion: prompt.promptVersion,
+      promptContentHash: prompt.contentHash,
+      referenceSetVersion: prompt.referenceSetVersion,
+      scoringPolicyVersion,
+    };
+  }, [prompt, scoringPolicyVersion]);
 
+  const recoverCommittedAttempt = useCallback(async (pending: PendingAttempt): Promise<boolean> => {
+    try {
+      const status = await apiClient.get(
+        `/clearspeak/v1/accent/attempts/${pending.attemptId}/status`,
+        AccentAttemptStatusSchema,
+      );
+      if (status.status === 'committed' && status.result) {
+        setGovernedResult(status.result);
+        pendingAttemptRef.current = null;
+        await loadHistory();
+        return true;
+      }
+      if (status.status === 'cancelled' || status.status === 'conflict' || status.status === 'invalid') {
+        pendingAttemptRef.current = null;
+      }
+    } catch {
+      // Preserve the pending attempt so the exact upload can be retried.
+    }
+    return false;
+  }, [loadHistory, setGovernedResult]);
+
+  const submitPendingAttempt = useCallback(async (pending: PendingAttempt) => {
+    setIsSubmitting(true);
+    setErrorText('');
+    try {
       const formData = new FormData();
       formData.append('audio', {
-        uri,
+        uri: pending.uri,
         name: 'recording.m4a',
-        type: 'audio/m4a',
+        type: 'audio/mp4',
       } as any);
+      formData.append('metadata', JSON.stringify({
+        ...pending.metadata,
+        submissionCapability: pending.capability,
+      }));
 
-      formData.append('content', JSON.stringify(content));
-      formData.append('retryAttempted', 'false');
-
-      const res = await fetch(`${API_BASE}/clearspeak/score`, {
-        method: 'POST',
-        headers,
-        body: formData,
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to analyze recording.');
-      }
-
-      setScoreResult(data.score);
+      const response = await apiClient.post(
+        '/clearspeak/v1/accent/attempts',
+        AccentAttemptSubmissionResponseSchema,
+        formData,
+      );
+      validateAdapterDescriptor(response.score, response.adapter);
+      setGovernedResult(response.score);
+      pendingAttemptRef.current = null;
+      await loadHistory();
     } catch (error: any) {
-      console.error(error);
-      Alert.alert('Analysis Failed', error.message || 'Could not analyze voice input.');
+      const recovered = await recoverCommittedAttempt(pending);
+      if (!recovered) {
+        setErrorText(
+          error instanceof ApiError && error.status === 503
+            ? 'Scoring evidence is temporarily unavailable. You can retry this exact attempt without creating a duplicate.'
+            : error?.message || 'The governed accent attempt could not be completed.',
+        );
+      }
     } finally {
-      setIsUploading(false);
+      setIsSubmitting(false);
     }
-  }, [content]);
+  }, [loadHistory, recoverCommittedAttempt, setGovernedResult]);
+
+  const issueAuthorityAndSubmit = useCallback(async (uri: string, durationMs: number) => {
+    const attemptId = createUuidV4();
+    const selector = buildSelector(attemptId, durationMs);
+    const authority = await apiClient.post(
+      '/clearspeak/v1/accent/attempt-authority',
+      AccentAttemptAuthoritySchema,
+      selector,
+    );
+    const pending: PendingAttempt = {
+      attemptId: authority.attemptId,
+      capability: authority.capability,
+      uri,
+      durationMs,
+      metadata: selector,
+    };
+    pendingAttemptRef.current = pending;
+    await submitPendingAttempt(pending);
+  }, [buildSelector, submitPendingAttempt]);
 
   const handleStopRecording = useCallback(async () => {
-    const activeRecording = recordingRef.current ?? recording;
-    if (!activeRecording) return;
-
-    setIsRecording(false);
+    const active = recordingRef.current ?? recording;
+    if (!active || !prompt) return;
+    const startedAt = recordingStartedAt ?? Date.now();
+    recordingRef.current = null;
+    setRecording(null);
+    setRecordingStartedAt(null);
     try {
-      await activeRecording.stopAndUnloadAsync();
-      const uri = activeRecording.getURI();
-      recordingRef.current = null;
-      setRecording(null);
-
-      if (uri) {
-        await handleUploadAudio(uri);
-      }
-    } catch (error) {
-      console.error('Failed to stop recording', error);
+      await active.stopAndUnloadAsync();
+      const uri = active.getURI();
+      const durationMs = Math.max(250, Math.min(prompt.maxDurationMs, Date.now() - startedAt));
+      if (!uri) throw new Error('Recording file is unavailable.');
+      await issueAuthorityAndSubmit(uri, durationMs);
+    } catch (error: any) {
+      setErrorText(error?.message || 'Could not finish the governed recording attempt.');
     }
-  }, [recording, handleUploadAudio]);
+  }, [issueAuthorityAndSubmit, prompt, recording, recordingStartedAt]);
 
   useEffect(() => {
-    const setupTimer = setTimeout(() => {
-      void setupClearSpeak();
-    }, 0);
+    if (!recording) return undefined;
+    const timer = setInterval(() => {
+      setSeconds((current) => {
+        const next = current + 1;
+        if (prompt && next * 1000 >= prompt.maxDurationMs) void handleStopRecording();
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [handleStopRecording, prompt, recording]);
 
-    return () => {
-      clearTimeout(setupTimer);
-      const activeRecording = recordingRef.current;
-      if (activeRecording) {
-        activeRecording.stopAndUnloadAsync().catch(() => {});
-        recordingRef.current = null;
-      }
-    };
-  }, []);
+  const retryPending = async () => {
+    const pending = pendingAttemptRef.current;
+    if (!pending) return;
+    if (await recoverCommittedAttempt(pending)) return;
+    await submitPendingAttempt(pending);
+  };
 
-  useEffect(() => {
-    let interval: any;
-    if (isRecording) {
-      interval = setInterval(() => {
-        setSeconds((prev) => {
-          if (prev >= 60) {
-            void handleStopRecording();
-            return 60;
-          }
-          return prev + 1;
-        });
-      }, 1000);
+  const deleteHistoryAttempt = async (attemptId: string) => {
+    try {
+      await apiClient.delete(`/clearspeak/v1/accent/attempts/${attemptId}`, EmptyResponseSchema);
+      setHistory((items) => items.filter((item) => item.attempt_id !== attemptId));
+    } catch (error: any) {
+      Alert.alert('Delete unavailable', error?.message || 'Could not delete this derived result.');
     }
-    return () => clearInterval(interval);
-  }, [isRecording, recording, handleStopRecording]);
+  };
 
   if (loading) {
     return (
       <View style={styles.centerContainer}>
         <ActivityIndicator size="large" color="#d4af37" />
-        <Text style={styles.loadingText}>Tailoring custom speech prompt...</Text>
+        <Text style={styles.muted}>Loading governed accent practice…</Text>
       </View>
     );
   }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.scrollContainer}>
-      <Text style={styles.topicBadge}>{content?.topicTag.toUpperCase()}</Text>
-      <Text style={styles.title}>Practice Reading</Text>
+      <Text style={styles.title}>ClearSpeak Accent Practice</Text>
       <Text style={styles.subtitle}>
-        Read the passage below. Emphasize words in <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>GOLD</Text> and respect natural punctuation marks.
+        Choose a learner-controlled UK or US reference target. Feedback is about speaking evidence, not nationality, identity, native-ness, or employability.
       </Text>
 
-      {content && (
-        <View style={styles.passageCard}>
-          <Text style={styles.targetSkill}>SKILL: {content.targetSkill}</Text>
-          <View style={styles.passageTextContainer}>
-            {content.passageData.map((token, idx) => (
-              <Text
-                key={idx}
-                style={[
-                  styles.tokenText,
-                  token.isStressed && styles.stressedToken,
-                  token.pauseType === 'stop' && styles.stopPauseToken,
-                ]}
-              >
-                {token.text}{' '}
+      <View style={styles.card}>
+        <Text style={styles.sectionLabel}>Target style</Text>
+        <View style={styles.rowWrap}>
+          {profiles.map((profile) => (
+            <TouchableOpacity
+              key={profile.profileId}
+              style={[styles.choice, selectedProfileId === profile.profileId && styles.choiceActive]}
+              onPress={() => setSelectedProfileId(profile.profileId)}
+            >
+              <Text style={selectedProfileId === profile.profileId ? styles.choiceTextActive : styles.choiceText}>
+                {profile.displayName}
               </Text>
-            ))}
-          </View>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <Text style={styles.sectionLabel}>Practice mode</Text>
+        <View style={styles.rowWrap}>
+          {(['word', 'phrase', 'sentence_reading', 'free_response'] as PracticeMode[]).map((item) => (
+            <TouchableOpacity
+              key={item}
+              style={[styles.choice, mode === item && styles.choiceActive]}
+              onPress={() => setMode(item)}
+            >
+              <Text style={mode === item ? styles.choiceTextActive : styles.choiceText}>
+                {item.replace(/_/g, ' ')}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
+      {prompt && (
+        <View style={styles.promptCard}>
+          <Text style={styles.promptMeta}>{selectedProfile?.displayName} · {prompt.mode.replace(/_/g, ' ')}</Text>
+          <Text style={styles.promptText}>{prompt.displayText}</Text>
+          <Text style={styles.muted}>Reference set: {prompt.referenceSetVersion}</Text>
         </View>
       )}
 
-      {isUploading ? (
-        <View style={styles.statusBox}>
-          <ActivityIndicator size="large" color="#d4af37" style={{ marginBottom: 12 }} />
-          <Text style={styles.statusText}>Checking your clarity and pace...</Text>
-        </View>
-      ) : scoreResult ? (
-        <View style={styles.resultContainer}>
-          <View style={styles.metricRow}>
-            <View style={styles.metricItem}>
-              <Text style={styles.metricVal}>{scoreResult.composite}%</Text>
-              <Text style={styles.metricLabel}>OVERALL</Text>
-            </View>
-            <View style={styles.metricItem}>
-              <Text style={styles.metricVal}>{scoreResult.clarity}%</Text>
-              <Text style={styles.metricLabel}>CLARITY</Text>
-            </View>
-            <View style={styles.metricItem}>
-              <Text style={styles.metricVal}>{scoreResult.pacing}%</Text>
-              <Text style={styles.metricLabel}>PACING</Text>
-            </View>
-            <View style={styles.metricItem}>
-              <Text style={styles.metricVal}>{scoreResult.rhythm}%</Text>
-              <Text style={styles.metricLabel}>RHYTHM</Text>
-            </View>
-          </View>
+      <View style={styles.noticeCard}>
+        <Text style={styles.noticeTitle}>{realSpeechScoringAvailable ? 'Authorized scorer available' : 'Real-speech scorer not authorized yet'}</Text>
+        <Text style={styles.muted}>
+          {realSpeechScoringAvailable
+            ? 'Only validated evidence-backed dimensions will receive scores.'
+            : 'Your recording can still complete the governed lifecycle, but ordinary user audio will truthfully return No score rather than a synthetic estimate.'}
+        </Text>
+      </View>
 
-          <View style={styles.feedbackCard}>
-            <Text style={styles.feedbackTitle}>Coach Feedback</Text>
-            <Text style={styles.feedbackText}>{scoreResult.feedbackTip}</Text>
-            <Text style={styles.wpmText}>Measured Speed: {scoreResult.measuredWpm} WPM</Text>
-          </View>
+      {!consented && (
+        <TouchableOpacity style={styles.secondaryButton} onPress={askForConsent}>
+          <Text style={styles.secondaryButtonText}>Review microphone consent</Text>
+        </TouchableOpacity>
+      )}
 
-          <TouchableOpacity style={styles.actionButton} onPress={setupClearSpeak}>
-            <Text style={styles.actionButtonText}>Next Practice Topic</Text>
+      {recording ? (
+        <View style={styles.centerBlock}>
+          <Text style={styles.timer}>{seconds}s</Text>
+          <TouchableOpacity style={styles.stopButton} onPress={() => void handleStopRecording()}>
+            <Text style={styles.stopButtonText}>Stop & submit</Text>
           </TouchableOpacity>
         </View>
       ) : (
-        <View style={styles.controls}>
-          {isRecording ? (
-            <View style={styles.recordingState}>
-              <Text style={styles.timerText}>00:{seconds < 10 ? `0${seconds}` : seconds}</Text>
-              <TouchableOpacity style={styles.stopButton} onPress={handleStopRecording}>
-                <View style={styles.stopInner} />
-              </TouchableOpacity>
-              <Text style={styles.recordInstruction}>Tap to stop and upload</Text>
-            </View>
-          ) : (
-            <View style={styles.idleState}>
-              <TouchableOpacity style={styles.recordButton} onPress={handleStartRecording}>
-                <Text style={styles.recordIcon}>🎤</Text>
-              </TouchableOpacity>
-              <Text style={styles.recordInstruction}>Tap to start recording</Text>
-            </View>
-          )}
+        <TouchableOpacity
+          style={[styles.primaryButton, (!prompt || isSubmitting) && styles.disabled]}
+          disabled={!prompt || isSubmitting}
+          onPress={() => void handleStartRecording()}
+        >
+          <Text style={styles.primaryButtonText}>Record governed attempt</Text>
+        </TouchableOpacity>
+      )}
+
+      {isSubmitting && (
+        <View style={styles.centerBlock}>
+          <ActivityIndicator size="large" color="#d4af37" />
+          <Text style={styles.muted}>Validating evidence and authoritative result…</Text>
         </View>
       )}
+
+      {errorText ? (
+        <View style={styles.errorCard}>
+          <Text style={styles.errorText}>{errorText}</Text>
+          {pendingAttemptRef.current && (
+            <TouchableOpacity style={styles.secondaryButton} onPress={() => void retryPending()}>
+              <Text style={styles.secondaryButtonText}>Recover / retry same attempt</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      ) : null}
+
+      {result && (
+        <View style={styles.card}>
+          <Text style={styles.resultTitle}>{resultLabel(result)}</Text>
+          {DIMENSIONS.map(([key, label]) => {
+            const dimension = result.dimensions[key];
+            return (
+              <View key={key} style={styles.dimensionCard}>
+                <View style={styles.dimensionHeader}>
+                  <Text style={styles.dimensionTitle}>{label}</Text>
+                  <Text style={styles.dimensionScore}>{dimension.score === null ? 'No score' : `${dimension.score}%`}</Text>
+                </View>
+                <Text style={styles.muted}>
+                  {dimension.evidenceStatus} evidence · {Math.round(dimension.confidence * 100)}% confidence
+                </Text>
+                <Text style={styles.dimensionSummary}>{dimension.summary}</Text>
+              </View>
+            );
+          })}
+          {result.coaching.length > 0 && (
+            <View style={styles.coachingBlock}>
+              <Text style={styles.sectionLabel}>Next actions</Text>
+              {result.coaching.map((item) => (
+                <Text key={`${item.rank}-${item.dimension}`} style={styles.coachingText}>
+                  {item.rank}. {item.action}
+                </Text>
+              ))}
+            </View>
+          )}
+          <Text style={styles.disclaimer}>{result.disclaimer}</Text>
+          <TouchableOpacity style={styles.secondaryButton} onPress={() => void loadPrompt()}>
+            <Text style={styles.secondaryButtonText}>New practice prompt</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <View style={styles.card}>
+        <Text style={styles.resultTitle}>Recent derived results</Text>
+        {history.length === 0 ? (
+          <Text style={styles.muted}>No governed accent attempts saved yet.</Text>
+        ) : history.map((item) => (
+          <View key={item.attempt_id} style={styles.historyItem}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.historyTitle}>{resultLabel(item.result)}</Text>
+              <Text style={styles.muted}>{new Date(item.created_at).toLocaleString()}</Text>
+            </View>
+            <TouchableOpacity onPress={() => void deleteHistoryAttempt(item.attempt_id)}>
+              <Text style={styles.deleteText}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        ))}
+      </View>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0b1329',
-  },
-  scrollContainer: {
-    padding: 24,
-    paddingBottom: 40,
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#0b1329',
-    padding: 24,
-  },
-  loadingText: {
-    color: '#94a3b8',
-    fontSize: 14,
-    marginTop: 16,
-  },
-  topicBadge: {
-    backgroundColor: 'rgba(212, 175, 55, 0.1)',
-    color: '#d4af37',
-    fontSize: 11,
-    fontWeight: '700',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-    alignSelf: 'flex-start',
-    letterSpacing: 1,
-    marginBottom: 10,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#94a3b8',
-    lineHeight: 20,
-    marginTop: 6,
-    marginBottom: 24,
-  },
-  passageCard: {
-    backgroundColor: '#1a233d',
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-    marginBottom: 30,
-  },
-  targetSkill: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#94a3b8',
-    letterSpacing: 1,
-    marginBottom: 14,
-  },
-  passageTextContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    lineHeight: 28,
-  },
-  tokenText: {
-    fontSize: 18,
-    color: '#e2e8f0',
-    lineHeight: 28,
-  },
-  stressedToken: {
-    color: '#d4af37',
-    fontWeight: '700',
-  },
-  stopPauseToken: {
-    borderBottomWidth: 1.5,
-    borderBottomColor: 'rgba(212, 175, 55, 0.3)',
-  },
-  controls: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-  },
-  idleState: {
-    alignItems: 'center',
-  },
-  recordButton: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#d4af37',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#d4af37',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 6,
-    marginBottom: 14,
-  },
-  recordIcon: {
-    fontSize: 32,
-    color: '#0b1329',
-  },
-  recordingState: {
-    alignItems: 'center',
-  },
-  timerText: {
-    fontSize: 36,
-    fontWeight: '700',
-    color: '#ef4444',
-    marginBottom: 16,
-    letterSpacing: 1,
-  },
-  stopButton: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
-    borderWidth: 2,
-    borderColor: '#ef4444',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  stopInner: {
-    width: 32,
-    height: 32,
-    backgroundColor: '#ef4444',
-    borderRadius: 6,
-  },
-  recordInstruction: {
-    fontSize: 13,
-    color: '#94a3b8',
-    fontWeight: '500',
-  },
-  statusBox: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 32,
-  },
-  statusText: {
-    color: '#94a3b8',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  resultContainer: {
-    width: '100%',
-  },
-  metricRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 20,
-  },
-  metricItem: {
-    flex: 1,
-    backgroundColor: '#1a233d',
-    borderRadius: 14,
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  metricVal: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-  metricLabel: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#94a3b8',
-    marginTop: 4,
-    letterSpacing: 0.5,
-  },
-  feedbackCard: {
-    backgroundColor: '#1a233d',
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-    marginBottom: 24,
-  },
-  feedbackTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#d4af37',
-    marginBottom: 8,
-  },
-  feedbackText: {
-    fontSize: 14,
-    color: '#cbd5e1',
-    lineHeight: 20,
-  },
-  wpmText: {
-    fontSize: 12,
-    color: '#94a3b8',
-    marginTop: 12,
-    fontWeight: '600',
-  },
-  actionButton: {
-    backgroundColor: '#d4af37',
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  actionButtonText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#0b1329',
-  },
+  container: { flex: 1, backgroundColor: '#0b1329' },
+  scrollContainer: { padding: 20, paddingBottom: 48 },
+  centerContainer: { flex: 1, backgroundColor: '#0b1329', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 },
+  title: { color: '#ffffff', fontSize: 25, fontWeight: '800' },
+  subtitle: { color: '#94a3b8', fontSize: 14, lineHeight: 21, marginTop: 8, marginBottom: 20 },
+  card: { backgroundColor: '#1a233d', borderRadius: 18, padding: 18, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  promptCard: { backgroundColor: '#111c36', borderRadius: 18, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(212,175,55,0.25)' },
+  noticeCard: { backgroundColor: 'rgba(59,130,246,0.08)', borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(59,130,246,0.18)' },
+  noticeTitle: { color: '#ffffff', fontWeight: '700', marginBottom: 6 },
+  sectionLabel: { color: '#94a3b8', fontSize: 11, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 10 },
+  rowWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+  choice: { paddingVertical: 9, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#0b1329', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  choiceActive: { borderColor: '#d4af37', backgroundColor: 'rgba(212,175,55,0.10)' },
+  choiceText: { color: '#94a3b8', fontSize: 12, textTransform: 'capitalize' },
+  choiceTextActive: { color: '#d4af37', fontSize: 12, fontWeight: '700', textTransform: 'capitalize' },
+  promptMeta: { color: '#d4af37', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', marginBottom: 10 },
+  promptText: { color: '#ffffff', fontSize: 20, lineHeight: 30, fontWeight: '650', marginBottom: 12 },
+  muted: { color: '#94a3b8', fontSize: 12, lineHeight: 18 },
+  primaryButton: { backgroundColor: '#d4af37', borderRadius: 13, paddingVertical: 16, alignItems: 'center', marginBottom: 16 },
+  primaryButtonText: { color: '#0b1329', fontSize: 14, fontWeight: '800' },
+  secondaryButton: { borderRadius: 12, borderWidth: 1, borderColor: 'rgba(212,175,55,0.35)', paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center', marginBottom: 14 },
+  secondaryButtonText: { color: '#d4af37', fontSize: 13, fontWeight: '700' },
+  disabled: { opacity: 0.45 },
+  centerBlock: { alignItems: 'center', gap: 12, paddingVertical: 18 },
+  timer: { color: '#ffffff', fontSize: 36, fontWeight: '800' },
+  stopButton: { backgroundColor: 'rgba(239,68,68,0.14)', borderWidth: 1, borderColor: '#ef4444', paddingVertical: 14, paddingHorizontal: 22, borderRadius: 12 },
+  stopButtonText: { color: '#ef4444', fontWeight: '800' },
+  errorCard: { backgroundColor: 'rgba(239,68,68,0.08)', borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(239,68,68,0.22)' },
+  errorText: { color: '#fecaca', fontSize: 13, lineHeight: 19, marginBottom: 12 },
+  resultTitle: { color: '#ffffff', fontSize: 17, fontWeight: '800', marginBottom: 14 },
+  dimensionCard: { paddingVertical: 13, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)' },
+  dimensionHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginBottom: 4 },
+  dimensionTitle: { color: '#ffffff', fontSize: 14, fontWeight: '700', flex: 1 },
+  dimensionScore: { color: '#d4af37', fontSize: 14, fontWeight: '800' },
+  dimensionSummary: { color: '#cbd5e1', fontSize: 13, lineHeight: 19, marginTop: 7 },
+  coachingBlock: { marginTop: 16 },
+  coachingText: { color: '#e2e8f0', fontSize: 13, lineHeight: 20, marginBottom: 7 },
+  disclaimer: { color: '#64748b', fontSize: 11, lineHeight: 17, marginVertical: 14 },
+  historyItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)' },
+  historyTitle: { color: '#e2e8f0', fontSize: 13, fontWeight: '700', marginBottom: 3 },
+  deleteText: { color: '#f87171', fontSize: 12, fontWeight: '700' },
 });
