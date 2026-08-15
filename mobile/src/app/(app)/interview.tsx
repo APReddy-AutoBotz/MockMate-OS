@@ -10,10 +10,12 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   AdaptiveAnswerSubmissionRequestSchema,
   AdaptiveAnswerSubmissionResponseSchema,
   CareerContextGetResponseSchema,
+  CareerContextSnapshotSchema,
   FinalReportSchema,
   GroundingSnapshotCreateRequestSchema,
   GroundingSnapshotCreateResponseSchema,
@@ -73,6 +75,25 @@ const MOBILE_CONTROLS: SessionControls = SessionControlsSchema.parse({
 
 const MOBILE_PANEL_IDS = ['p1'];
 const INITIAL_ADAPTIVE_SESSION_VERSION = 1;
+const PENDING_GROUNDING_STORAGE_KEY = 'mockmate_pending_grounded_interview_v1';
+const MAX_PENDING_GROUNDING_STORAGE_BYTES = 64 * 1024;
+const MAX_PENDING_GROUNDING_IDS = 128;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PENDING_GROUNDING_ALLOWED_KEYS = new Set([
+  'role',
+  'intent',
+  'sourceModule',
+  'purpose',
+  'itemIds',
+  'excludedItemIds',
+  'contextVersion',
+  'sourceRecordId',
+  'consentAcknowledgedAt',
+  'snapshotClientRequestId',
+  'bridgeClientRequestId',
+  'snapshot',
+  'bridgeId',
+]);
 
 function createUuidV4(): string {
   const randomUuid = (globalThis as any)?.crypto?.randomUUID;
@@ -106,6 +127,144 @@ function sameIds(left: string[], right: string[]): boolean {
   return a.every((value, index) => value === b[index]);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_PATTERN.test(value);
+}
+
+function isBoundedString(value: unknown, maxLength: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= maxLength;
+}
+
+function parseUuidArray(value: unknown, allowEmpty: boolean): string[] | null {
+  if (!Array.isArray(value) || value.length > MAX_PENDING_GROUNDING_IDS || (!allowEmpty && value.length === 0)) return null;
+  if (!value.every(isUuid)) return null;
+  const ids = value as string[];
+  return new Set(ids).size === ids.length ? ids : null;
+}
+
+function validatePendingGroundingRecovery(value: unknown): PendingGrounding | null {
+  if (!isRecord(value)) return null;
+  if (Object.keys(value).some((key) => !PENDING_GROUNDING_ALLOWED_KEYS.has(key))) return null;
+
+  const role = isBoundedString(value.role, 500) ? value.role : null;
+  const intent = isBoundedString(value.intent, 4000) ? value.intent : null;
+  const sourceModule = value.sourceModule === 'resume' || value.sourceModule === 'clearspeak' ? value.sourceModule : null;
+  const purpose = value.purpose === 'resume_to_interview' || value.purpose === 'clearspeak_to_interview' ? value.purpose : null;
+  const itemIds = parseUuidArray(value.itemIds, false);
+  const excludedItemIds = parseUuidArray(value.excludedItemIds, true);
+  const contextVersion = Number.isInteger(value.contextVersion) && Number(value.contextVersion) >= 1
+    ? Number(value.contextVersion)
+    : null;
+  const sourceRecordId = isBoundedString(value.sourceRecordId, 500) ? value.sourceRecordId : null;
+  const consentAcknowledgedAt = isBoundedString(value.consentAcknowledgedAt, 80) && !Number.isNaN(Date.parse(value.consentAcknowledgedAt))
+    ? value.consentAcknowledgedAt
+    : null;
+  const snapshotClientRequestId = isUuid(value.snapshotClientRequestId) ? value.snapshotClientRequestId : null;
+  const bridgeClientRequestId = isUuid(value.bridgeClientRequestId) ? value.bridgeClientRequestId : null;
+
+  if (!role || !intent || !sourceModule || !purpose || !itemIds || !excludedItemIds || !contextVersion ||
+      !sourceRecordId || !consentAcknowledgedAt || !snapshotClientRequestId || !bridgeClientRequestId) return null;
+  if ((sourceModule === 'resume' && purpose !== 'resume_to_interview') ||
+      (sourceModule === 'clearspeak' && purpose !== 'clearspeak_to_interview')) return null;
+  if (excludedItemIds.some((id) => itemIds.includes(id))) return null;
+
+  const requestValidation = GroundingSnapshotCreateRequestSchema.safeParse({
+    purpose,
+    includedItemIds: itemIds,
+    excludedItemIds,
+    conflictSelections: {},
+    consent: {
+      scope: 'one_time',
+      purpose,
+      includedItemIds: itemIds,
+      excludedItemIds,
+      sourceModules: [sourceModule],
+      acknowledgedAt: consentAcknowledgedAt,
+    },
+    expectedContextVersion: contextVersion,
+    clientRequestId: snapshotClientRequestId,
+  });
+  if (!requestValidation.success) return null;
+
+  let snapshot: CareerContextSnapshot | undefined;
+  if (value.snapshot !== undefined) {
+    const parsedSnapshot = CareerContextSnapshotSchema.safeParse(value.snapshot);
+    if (!parsedSnapshot.success) return null;
+    snapshot = parsedSnapshot.data;
+    if (snapshot.purpose !== purpose || snapshot.contextVersion !== contextVersion || !sameIds(snapshot.itemIds, itemIds) ||
+        snapshot.sourceModules.length !== 1 || snapshot.sourceModules[0] !== sourceModule ||
+        snapshot.consent.scope !== 'one_time' || snapshot.consent.purpose !== purpose ||
+        !sameIds(snapshot.consent.includedItemIds, itemIds) ||
+        !sameIds(snapshot.consent.excludedItemIds, excludedItemIds) ||
+        snapshot.consent.sourceModules.length !== 1 || snapshot.consent.sourceModules[0] !== sourceModule) return null;
+  }
+
+  let bridgeId: string | undefined;
+  if (value.bridgeId !== undefined) {
+    if (!snapshot || !isUuid(value.bridgeId)) return null;
+    bridgeId = value.bridgeId;
+    const bridgeValidation = ModuleBridgeCreateRequestSchema.safeParse({
+      sourceModule,
+      targetModule: 'interview',
+      purpose,
+      snapshotId: snapshot.id,
+      sourceRecordId,
+      clientRequestId: bridgeClientRequestId,
+    });
+    if (!bridgeValidation.success) return null;
+  }
+
+  return {
+    role,
+    intent,
+    sourceModule,
+    purpose,
+    itemIds,
+    excludedItemIds,
+    contextVersion,
+    sourceRecordId,
+    consentAcknowledgedAt,
+    snapshotClientRequestId,
+    bridgeClientRequestId,
+    ...(snapshot ? { snapshot } : {}),
+    ...(bridgeId ? { bridgeId } : {}),
+  };
+}
+
+async function persistPendingGroundingRecovery(pending: PendingGrounding): Promise<void> {
+  const validated = validatePendingGroundingRecovery(pending);
+  if (!validated) throw new Error('Grounded Interview recovery state failed local validation.');
+  const serialized = JSON.stringify(validated);
+  if (serialized.length > MAX_PENDING_GROUNDING_STORAGE_BYTES) {
+    throw new Error('Grounded Interview recovery state exceeds the local safety bound.');
+  }
+  await AsyncStorage.setItem(PENDING_GROUNDING_STORAGE_KEY, serialized);
+}
+
+async function restorePendingGroundingRecovery(): Promise<PendingGrounding | null> {
+  const raw = await AsyncStorage.getItem(PENDING_GROUNDING_STORAGE_KEY);
+  if (!raw) return null;
+  if (raw.length > MAX_PENDING_GROUNDING_STORAGE_BYTES) {
+    await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);
+    return null;
+  }
+  try {
+    const validated = validatePendingGroundingRecovery(JSON.parse(raw));
+    if (!validated) {
+      await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);
+      return null;
+    }
+    return validated;
+  } catch {
+    await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);
+    return null;
+  }
+}
+
 export default function InterviewScreen() {
   const [phase, setPhase] = useState<Phase>('setup');
   const [role, setRole] = useState('');
@@ -132,6 +291,7 @@ export default function InterviewScreen() {
   const [groundingConsent, setGroundingConsent] = useState(false);
   const [loadingContext, setLoadingContext] = useState(false);
   const [hasPendingGrounding, setHasPendingGrounding] = useState(false);
+  const [groundingRecoveryChecked, setGroundingRecoveryChecked] = useState(false);
   const pendingTurnRef = useRef<PendingTurn | null>(null);
   const pendingGroundingRef = useRef<PendingGrounding | null>(null);
   const sessionEpochRef = useRef(0);
@@ -153,11 +313,43 @@ export default function InterviewScreen() {
 
   const unresolvedConflicts = careerContext?.conflicts.filter((conflict) => conflict.requiresUserChoice) ?? [];
 
-  useEffect(() => () => {
-    sessionEpochRef.current += 1;
+  useEffect(() => {
+    let active = true;
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const restored = await restorePendingGroundingRecovery();
+          if (!active) return;
+          if (restored) {
+            pendingGroundingRef.current = restored;
+            setRole(restored.role);
+            setIntent(restored.intent);
+            setGroundingSource(restored.sourceModule);
+            setSelectedContextItemIds(restored.itemIds);
+            setGroundingConsent(true);
+            setUseCareerContext(true);
+            setHasPendingGrounding(true);
+          }
+        } catch {
+          if (active) setErrorText('Saved grounded-launch recovery could not be checked. Grounded Interview is blocked until local recovery storage is available.');
+        } finally {
+          if (active) setGroundingRecoveryChecked(true);
+        }
+      })();
+    }, 0);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      sessionEpochRef.current += 1;
+    };
   }, []);
 
   const loadCareerContext = async (): Promise<CareerContextGetResponse | null> => {
+    if (pendingGroundingRef.current) {
+      setErrorText('Retry or abandon the saved grounded launch before loading mutable Career Context.');
+      return null;
+    }
     setLoadingContext(true);
     try {
       const response = await apiClient.get('/career-context', CareerContextGetResponseSchema);
@@ -171,10 +363,35 @@ export default function InterviewScreen() {
     }
   };
 
-  const clearGroundingDraft = () => {
+  const clearGroundingDraft = async (): Promise<void> => {
+    await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);
     pendingGroundingRef.current = null;
     setHasPendingGrounding(false);
     setGroundingConsent(false);
+  };
+
+  const abandonPendingGrounding = () => {
+    Alert.alert(
+      'Abandon pending grounded launch?',
+      'This discards only the saved local retry selectors for this one grounded launch. It does not delete Career Context facts. If an earlier server request committed, its immutable server record remains governed by the backend.',
+      [
+        { text: 'Keep retry', style: 'cancel' },
+        {
+          text: 'Abandon launch',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await clearGroundingDraft();
+                setErrorText('');
+              } catch {
+                setErrorText('MockMate could not clear the saved grounded-launch recovery. Keep this setup unchanged and retry instead.');
+              }
+            })();
+          },
+        },
+      ],
+    );
   };
 
   const resetSession = () => {
@@ -196,7 +413,6 @@ export default function InterviewScreen() {
     setErrorText('');
     pendingTurnRef.current = null;
     setHasPendingTurn(false);
-    clearGroundingDraft();
   };
 
   const generateReport = async (activeSessionId: string) => {
@@ -221,7 +437,9 @@ export default function InterviewScreen() {
 
   const materializePendingGrounding = async (initial: PendingGrounding): Promise<{ snapshot: CareerContextSnapshot; bridgeId: string }> => {
     let pending = initial;
-    if (!pending.snapshot) {
+    let snapshot = pending.snapshot;
+
+    if (!snapshot) {
       const snapshotRequest = GroundingSnapshotCreateRequestSchema.parse({
         purpose: pending.purpose,
         includedItemIds: pending.itemIds,
@@ -243,16 +461,19 @@ export default function InterviewScreen() {
         GroundingSnapshotCreateResponseSchema,
         snapshotRequest,
       );
-      pending = { ...pending, snapshot: snapshotResponse.snapshot };
+      snapshot = snapshotResponse.snapshot;
+      pending = { ...pending, snapshot };
       pendingGroundingRef.current = pending;
+      await persistPendingGroundingRecovery(pending);
     }
 
-    if (!pending.bridgeId) {
+    let bridgeId = pending.bridgeId;
+    if (!bridgeId) {
       const bridgeRequest = ModuleBridgeCreateRequestSchema.parse({
         sourceModule: pending.sourceModule,
         targetModule: 'interview',
         purpose: pending.purpose,
-        snapshotId: pending.snapshot.id,
+        snapshotId: snapshot.id,
         sourceRecordId: pending.sourceRecordId,
         clientRequestId: pending.bridgeClientRequestId,
       });
@@ -261,11 +482,13 @@ export default function InterviewScreen() {
         ModuleBridgeCreateResponseSchema,
         bridgeRequest,
       );
-      pending = { ...pending, bridgeId: bridgeResponse.bridge.id };
+      bridgeId = bridgeResponse.bridge.id;
+      pending = { ...pending, snapshot, bridgeId };
       pendingGroundingRef.current = pending;
+      await persistPendingGroundingRecovery(pending);
     }
 
-    return { snapshot: pending.snapshot, bridgeId: pending.bridgeId };
+    return { snapshot, bridgeId };
   };
 
   const resolveGroundingLineage = async (
@@ -281,9 +504,6 @@ export default function InterviewScreen() {
       if (!exactRetry) {
         throw new Error('A grounded launch may already have committed. Keep the original role, goal, source and fact selection and retry the exact launch.');
       }
-      // Response-loss recovery deliberately precedes reads/checks against mutable
-      // live Career Context. The backend applies the same ordering for immutable
-      // snapshot replay by clientRequestId.
       return materializePendingGrounding(existing);
     }
 
@@ -324,12 +544,17 @@ export default function InterviewScreen() {
       snapshotClientRequestId: createUuidV4(),
       bridgeClientRequestId: createUuidV4(),
     };
+    await persistPendingGroundingRecovery(pending);
     pendingGroundingRef.current = pending;
     setHasPendingGrounding(true);
     return materializePendingGrounding(pending);
   };
 
   const startInterview = async () => {
+    if (!groundingRecoveryChecked) {
+      setErrorText('MockMate is still checking for a saved grounded launch.');
+      return;
+    }
     const trimmedRole = role.trim();
     const trimmedIntent = intent.trim();
     if (!trimmedRole || !trimmedIntent) {
@@ -390,6 +615,12 @@ export default function InterviewScreen() {
 
       pendingGroundingRef.current = null;
       setHasPendingGrounding(false);
+      setGroundingConsent(false);
+      try {
+        await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);
+      } catch {
+        setErrorText('Interview started, but MockMate could not clear local grounded-launch recovery. The server session remains authoritative.');
+      }
       setPlan(generatedPlan);
       setSessionId(started.sessionId);
       setSessionVersion(INITIAL_ADAPTIVE_SESSION_VERSION);
@@ -405,12 +636,6 @@ export default function InterviewScreen() {
       setPhase('asking');
     } catch (error: any) {
       if (requestEpoch !== sessionEpochRef.current) return;
-      const terminal = error instanceof ApiError && [400, 401, 403, 404, 422].includes(error.status);
-      const staleBeforeSnapshot = error instanceof ApiError && error.status === 409 && !pendingGroundingRef.current?.snapshot;
-      if (terminal || staleBeforeSnapshot) {
-        clearGroundingDraft();
-        if (useCareerContext) await loadCareerContext();
-      }
       setPhase('setup');
       setErrorText(
         error instanceof ApiError && error.status === 429
@@ -561,7 +786,7 @@ export default function InterviewScreen() {
               placeholder="e.g. Product Manager"
               placeholderTextColor="#64748b"
               style={styles.input}
-              editable={phase !== 'starting' && !hasPendingGrounding}
+              editable={groundingRecoveryChecked && phase !== 'starting' && !hasPendingGrounding}
             />
             <Text style={styles.label}>Practice goal</Text>
             <TextInput
@@ -571,7 +796,7 @@ export default function InterviewScreen() {
               placeholderTextColor="#64748b"
               multiline
               style={[styles.input, styles.textArea]}
-              editable={phase !== 'starting' && !hasPendingGrounding}
+              editable={groundingRecoveryChecked && phase !== 'starting' && !hasPendingGrounding}
             />
             <View style={styles.policyCard}>
               <Text style={styles.policyTitle}>Mobile session profile</Text>
@@ -587,14 +812,19 @@ export default function InterviewScreen() {
               </View>
               <TouchableOpacity
                 style={[styles.toggleButton, useCareerContext && styles.toggleButtonActive, hasPendingGrounding && styles.disabled]}
-                disabled={phase === 'starting'}
+                disabled={!groundingRecoveryChecked || phase === 'starting' || hasPendingGrounding}
                 onPress={() => void toggleCareerContext()}
               >
                 <Text style={useCareerContext ? styles.toggleTextActive : styles.toggleText}>{useCareerContext ? 'ON' : 'OFF'}</Text>
               </TouchableOpacity>
             </View>
 
-            {useCareerContext ? (
+            {!groundingRecoveryChecked ? (
+              <View style={styles.loadingBlock}>
+                <ActivityIndicator color="#d4af37" />
+                <Text style={styles.muted}>Checking saved grounded-launch recovery…</Text>
+              </View>
+            ) : useCareerContext ? (
               <>
                 {loadingContext ? (
                   <View style={styles.loadingBlock}>
@@ -663,6 +893,8 @@ export default function InterviewScreen() {
                       <Text style={styles.smallButtonText}>Reload Career Context</Text>
                     </TouchableOpacity>
                   </>
+                ) : hasPendingGrounding ? (
+                  <Text style={styles.muted}>Saved grounded-launch recovery is ready. Retry the exact launch before loading mutable Career Context.</Text>
                 ) : (
                   <TouchableOpacity style={styles.smallButton} onPress={() => void loadCareerContext()}>
                     <Text style={styles.smallButtonText}>Load Career Context</Text>
@@ -674,18 +906,23 @@ export default function InterviewScreen() {
 
           {hasPendingGrounding ? (
             <View style={styles.warningCard}>
-              <Text style={styles.warningText}>A grounded launch may already have committed server-side. Keep this setup unchanged and retry the exact launch; MockMate will reuse the same snapshot/bridge request IDs.</Text>
+              <Text style={styles.warningText}>A grounded launch may already have committed server-side. Keep this setup unchanged and retry the exact launch; MockMate will reuse the same persisted snapshot/bridge request IDs.</Text>
+              <TouchableOpacity style={styles.abandonButton} disabled={phase === 'starting'} onPress={abandonPendingGrounding}>
+                <Text style={styles.abandonButtonText}>Abandon pending grounded launch</Text>
+              </TouchableOpacity>
             </View>
           ) : null}
 
           <TouchableOpacity
-            style={[styles.primaryButton, phase === 'starting' && styles.disabled]}
-            disabled={phase === 'starting'}
+            style={[styles.primaryButton, (phase === 'starting' || !groundingRecoveryChecked) && styles.disabled]}
+            disabled={phase === 'starting' || !groundingRecoveryChecked}
             onPress={() => void startInterview()}
           >
             {phase === 'starting'
               ? <ActivityIndicator color="#0b1329" />
-              : <Text style={styles.primaryButtonText}>{hasPendingGrounding ? 'Retry exact grounded launch' : 'Generate & start interview'}</Text>}
+              : !groundingRecoveryChecked
+                ? <Text style={styles.primaryButtonText}>Checking saved launch…</Text>
+                : <Text style={styles.primaryButtonText}>{hasPendingGrounding ? 'Retry exact grounded launch' : 'Generate & start interview'}</Text>}
           </TouchableOpacity>
 
           {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
@@ -836,6 +1073,8 @@ const styles = StyleSheet.create({
   secondaryButtonText: { color: '#d4af37', fontSize: 13, fontWeight: '800' },
   smallButton: { alignSelf: 'flex-start', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(212,175,55,0.30)', paddingVertical: 9, paddingHorizontal: 12, marginTop: 10 },
   smallButtonText: { color: '#d4af37', fontSize: 11, fontWeight: '800' },
+  abandonButton: { alignSelf: 'flex-start', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(248,113,113,0.45)', paddingVertical: 9, paddingHorizontal: 12, marginTop: 10 },
+  abandonButtonText: { color: '#f87171', fontSize: 11, fontWeight: '800' },
   disabled: { opacity: 0.5 },
   optionHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   toggleButton: { minWidth: 54, alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#0b1329', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' },
