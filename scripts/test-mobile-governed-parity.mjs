@@ -13,6 +13,13 @@ const requireText = (source, needle, label) => {
 const rejectText = (source, needle, label) => {
   if (source.includes(needle)) fail(`${label} contains forbidden legacy marker: ${needle}`);
 };
+const requireBefore = (source, first, second, label) => {
+  const firstIndex = source.indexOf(first);
+  const secondIndex = source.indexOf(second);
+  if (firstIndex < 0 || secondIndex < 0 || firstIndex >= secondIndex) {
+    fail(`${label} must keep '${first}' before '${second}'`);
+  }
+};
 
 const dashboard = read('mobile/src/app/(app)/index.tsx');
 const resume = read('mobile/src/app/(app)/resume.tsx');
@@ -85,6 +92,13 @@ requireText(interview, 'bridgeSessionId: grounding.bridgeId', 'Interview groundi
 requireText(interview, 'snapshotClientRequestId', 'Interview grounding replay');
 requireText(interview, 'bridgeClientRequestId', 'Interview grounding replay');
 requireText(interview, 'pendingGroundingRef.current', 'Interview grounding replay');
+requireText(interview, 'return materializePendingGrounding(existing);', 'Interview grounding replay');
+requireBefore(
+  interview,
+  'return materializePendingGrounding(existing);',
+  "const fresh = await apiClient.get('/career-context', CareerContextGetResponseSchema);",
+  'Interview immutable replay ordering',
+);
 requireText(interview, "item.sensitivity === 'standard'", 'Interview grounding privacy');
 requireText(interview, 'sessionEpochRef.current += 1', 'Interview stale-response guard');
 requireText(interview, 'requestEpoch !== sessionEpochRef.current', 'Interview stale-response guard');
