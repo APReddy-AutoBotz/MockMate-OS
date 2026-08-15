@@ -100,6 +100,39 @@ requireBefore(
   'Interview immutable replay ordering',
 );
 requireText(interview, "item.sensitivity === 'standard'", 'Interview grounding privacy');
+
+requireText(interview, "@react-native-async-storage/async-storage", 'Interview durable grounding recovery');
+requireText(interview, 'mockmate_pending_grounded_interview_v1', 'Interview durable grounding recovery');
+requireText(interview, 'CareerContextSnapshotSchema.safeParse', 'Interview durable grounding recovery');
+requireText(interview, 'PENDING_GROUNDING_ALLOWED_KEYS', 'Interview durable grounding recovery');
+requireText(interview, 'MAX_PENDING_GROUNDING_STORAGE_BYTES', 'Interview durable grounding recovery');
+requireText(interview, 'persistPendingGroundingRecovery', 'Interview durable grounding recovery');
+requireText(interview, 'restorePendingGroundingRecovery', 'Interview durable grounding recovery');
+requireText(interview, 'AsyncStorage.getItem(PENDING_GROUNDING_STORAGE_KEY)', 'Interview durable grounding recovery');
+requireText(interview, 'AsyncStorage.setItem(PENDING_GROUNDING_STORAGE_KEY, serialized)', 'Interview durable grounding recovery');
+requireText(interview, 'AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY)', 'Interview durable grounding recovery');
+requireText(interview, 'setGroundingRecoveryChecked(true)', 'Interview durable grounding recovery');
+requireText(interview, 'setUseCareerContext(true)', 'Interview durable grounding restoration');
+requireText(interview, 'Abandon pending grounded launch', 'Interview explicit recovery abandonment');
+requireText(interview, 'Retry or abandon the saved grounded launch before loading mutable Career Context.', 'Interview immutable recovery boundary');
+requireBefore(
+  interview,
+  'await persistPendingGroundingRecovery(pending);',
+  'return materializePendingGrounding(pending);',
+  'Interview fresh lineage persistence ordering',
+);
+requireBefore(
+  interview,
+  "const started = await apiClient.post(",
+  'await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);',
+  'Interview post-session recovery cleanup ordering',
+);
+for (const forbiddenPersistedAuthority of ['rawText', 'audioBytes', 'transcript', 'answerText', 'accessToken', 'providerKey', 'modelId', 'serviceRole']) {
+  if (interview.includes(`'${forbiddenPersistedAuthority}',`) || interview.includes(`\"${forbiddenPersistedAuthority}\",`)) {
+    fail(`Interview durable grounding recovery allowlist contains forbidden field: ${forbiddenPersistedAuthority}`);
+  }
+}
+
 requireText(interview, 'sessionEpochRef.current += 1', 'Interview stale-response guard');
 requireText(interview, 'requestEpoch !== sessionEpochRef.current', 'Interview stale-response guard');
 rejectText(interview, 'Interview practice is not available in this internal build.', 'Interview');
