@@ -95,6 +95,8 @@ describe('P0-5 governed real-speech evidence service', () => {
     expect(result.score.contractVersion).toBe('accent-score.v2');
     expect(result.score.evidenceProvenance).toBe('user_recording_scored');
     expect(result.score.dimensions.intelligibility.score).toBe(91);
+    expect(result.score.dimensions.intelligibility.summary).toMatch(/validated evidence met the server threshold/i);
+    expect(result.score.dimensions.intelligibility.summary).not.toMatch(/bounded evidence supports/i);
     expect(result.score.dimensions.pronunciation.score).toBeNull();
     expect(result.score.dimensions.pronunciation.evidenceStatus).toBe('insufficient');
     expect(result.score.dimensions.pronunciation.evidenceRefs).toEqual([]);
@@ -119,6 +121,20 @@ describe('P0-5 governed real-speech evidence service', () => {
     expect(result.score.dimensions.prosody.evidenceRefs).toEqual([]);
     expect(result.score.dimensions.prosody.summary).toMatch(expectedSummary);
     expect(result.score.dimensions.prosody.summary).not.toMatch(/clearly matches the target/i);
+  });
+
+  it('never persists or renders provider free-form scored summaries or coaching copy', async () => {
+    const evidence = evidenceFor() as any;
+    evidence.dimensions.intelligibility.summary = 'Provider-specific scored explanation.';
+    evidence.dimensions.fluency.summary = 'Another provider-specific explanation.';
+    evidence.dimensions.fluency.coachingAction = 'Provider-specific coaching instruction.';
+    const result = await scoreWithGovernedAccentAdapter(context, audio, adapter(evidence));
+    const userFacingResult = JSON.stringify(result.score);
+    expect(userFacingResult).not.toContain('Provider-specific scored explanation.');
+    expect(userFacingResult).not.toContain('Another provider-specific explanation.');
+    expect(userFacingResult).not.toContain('Provider-specific coaching instruction.');
+    expect(result.score.dimensions.intelligibility.summary).toMatch(/server threshold/i);
+    expect(result.score.coaching.every(item => item.action.includes('provider-specific') === false)).toBe(true);
   });
 
   it('returns evaluated-unscored when all provider evidence remains below scoring authority', async () => {
@@ -227,6 +243,7 @@ describe('P0-5 governed real-speech evidence service', () => {
     'Your accent sounds Canadian.',
     'You have an Indian accent.',
     'Your accent resembles British speech.',
+    'Your accent resembles speech from India.',
   ])('rejects direct nationality/origin inference: %s', async summary => {
     const evidence = evidenceFor() as any;
     evidence.dimensions.intelligibility.summary = summary;
@@ -255,12 +272,14 @@ describe('P0-5 governed real-speech evidence service', () => {
       .rejects.toThrow(/forbidden identity or employment inference/i);
   });
 
-  it('grounds coaching only in dimensions that survive the server policy', async () => {
+  it('grounds server-owned coaching only in dimensions that survive the server policy', async () => {
     const evidence = evidenceFor() as any;
     evidence.dimensions.pronunciation.confidence = 0.95;
+    evidence.dimensions.pronunciation.coachingAction = null;
     const result = await scoreWithGovernedAccentAdapter(context, audio, adapter(evidence));
-    expect(result.score.coaching.map(item => item.dimension)).toEqual(['pronunciation', 'fluency']);
+    expect(result.score.coaching.map(item => item.dimension)).toEqual(['pronunciation', 'fluency', 'intelligibility']);
     expect(result.score.coaching[0].evidenceRefs).toEqual(['pronunciation.segment.1']);
+    expect(result.score.coaching[0].action).toMatch(/selected practice reference/i);
   });
 
   it('rejects empty and oversized audio before invoking an adapter', async () => {
