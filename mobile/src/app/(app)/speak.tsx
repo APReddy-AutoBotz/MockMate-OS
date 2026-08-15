@@ -269,7 +269,7 @@ export default function SpeakScreen() {
     return authorized;
   }, []);
 
-  const recoverCommittedAttempt = useCallback(async (pending: PendingAttempt): Promise<boolean> => {
+  const recoverCommittedAttempt = useCallback(async (pending: PendingAttempt, silent = false): Promise<boolean> => {
     try {
       const status = await apiClient.get(
         `/clearspeak/v1/accent/attempts/${pending.attemptId}/status`,
@@ -277,13 +277,15 @@ export default function SpeakScreen() {
       );
       if (status.status === 'committed') {
         if (!status.result) {
-          setErrorText('The server reports this attempt as committed, but its governed result is unavailable. Recovery remains blocked rather than guessing a result.');
+          if (!silent) setErrorText('The server reports this attempt as committed, but its governed result is unavailable. Recovery remains blocked rather than guessing a result.');
           return false;
         }
-        setGovernedResult(status.result);
         pendingAttemptRef.current = null;
-        setErrorText('');
-        await loadHistory();
+        if (!silent) {
+          setGovernedResult(status.result);
+          setErrorText('');
+          await loadHistory();
+        }
         return true;
       }
       if (status.status === 'cancelled') {
@@ -299,7 +301,7 @@ export default function SpeakScreen() {
     let pending = pendingAttemptRef.current;
     if (!pending) return 'none';
     try {
-      if (await recoverCommittedAttempt(pending)) return 'committed';
+      if (await recoverCommittedAttempt(pending, silent)) return 'committed';
       pending = pendingAttemptRef.current;
       if (!pending) return 'cancelled';
       if (capabilityNeedsRotation(pending)) pending = await authorizePendingAttempt(pending);
@@ -342,6 +344,8 @@ export default function SpeakScreen() {
       if (!silent) setErrorText(`The pending attempt is still authoritative (${outcome.status}). Recover or retry it before changing practice settings.`);
       return 'failed';
     } catch (error: any) {
+      const current = pendingAttemptRef.current ?? pending;
+      if (await recoverCommittedAttempt(current, silent)) return 'committed';
       if (!silent) setErrorText(error?.message || 'The pending attempt could not be cancelled. Recover or retry it instead.');
       return 'failed';
     }
