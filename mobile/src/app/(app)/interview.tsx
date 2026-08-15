@@ -144,8 +144,6 @@ export default function InterviewScreen() {
 
   const eligibleContextItems = useMemo(() => {
     if (!careerContext) return [];
-    // Mobile P0-7 intentionally uses only standard-sensitivity facts from one
-    // declared source module. Server snapshot checks remain authoritative.
     return careerContext.activeItems.filter((item) =>
       item.source.module === groundingSource &&
       item.sensitivity === 'standard' &&
@@ -156,7 +154,6 @@ export default function InterviewScreen() {
   const unresolvedConflicts = careerContext?.conflicts.filter((conflict) => conflict.requiresUserChoice) ?? [];
 
   useEffect(() => () => {
-    // Invalidate any in-flight plan/turn/report response after native route exit.
     sessionEpochRef.current += 1;
   }, []);
 
@@ -181,8 +178,6 @@ export default function InterviewScreen() {
   };
 
   const resetSession = () => {
-    // A request already in flight may still complete. Advancing the epoch makes
-    // that response stale so it cannot resurrect or overwrite a reset/new session.
     sessionEpochRef.current += 1;
     setPhase('setup');
     setPlan(null);
@@ -224,67 +219,8 @@ export default function InterviewScreen() {
     }
   };
 
-  const resolveGroundingLineage = async (
-    trimmedRole: string,
-    trimmedIntent: string,
-  ): Promise<{ snapshot: CareerContextSnapshot; bridgeId: string } | null> => {
-    const fresh = await apiClient.get('/career-context', CareerContextGetResponseSchema);
-    setCareerContext(fresh);
-
-    if (!fresh.state.personalizationEnabled) {
-      throw new Error('Career Context personalization is disabled. Enable it before starting a grounded interview.');
-    }
-    if (fresh.conflicts.some((conflict) => conflict.requiresUserChoice)) {
-      throw new Error('Career Context has unresolved conflicts. Review them before creating a grounded interview.');
-    }
-
-    const eligible = fresh.activeItems.filter((item) =>
-      item.source.module === groundingSource &&
-      item.sensitivity === 'standard' &&
-      item.provenance !== 'inferred_pending'
-    );
-    const selected = eligible.filter((item) => selectedContextItemIds.includes(item.id));
-    if (selected.length === 0 || selected.length !== selectedContextItemIds.length) {
-      setSelectedContextItemIds(selected.map((item) => item.id));
-      throw new Error('Career Context changed before launch. Review the refreshed fact selection and try again.');
-    }
-    if (!groundingConsent) {
-      throw new Error('Confirm one-time Career Context consent before starting a grounded interview.');
-    }
-
-    const purpose = groundingSource === 'resume' ? 'resume_to_interview' : 'clearspeak_to_interview';
-    const itemIds = selected.map((item) => item.id);
-    const excludedItemIds = eligible.filter((item) => !itemIds.includes(item.id)).map((item) => item.id);
-    const existing = pendingGroundingRef.current;
-
-    if (existing) {
-      const exactRetry = existing.role === trimmedRole &&
-        existing.intent === trimmedIntent &&
-        existing.sourceModule === groundingSource &&
-        existing.contextVersion === fresh.state.contextVersion &&
-        sameIds(existing.itemIds, itemIds) &&
-        sameIds(existing.excludedItemIds, excludedItemIds);
-      if (!exactRetry) {
-        throw new Error('A grounded launch may already have committed. Keep the same role, goal and fact selection and retry the exact launch rather than creating different lineage.');
-      }
-    }
-
-    let pending: PendingGrounding = existing ?? {
-      role: trimmedRole,
-      intent: trimmedIntent,
-      sourceModule: groundingSource,
-      purpose,
-      itemIds,
-      excludedItemIds,
-      contextVersion: fresh.state.contextVersion,
-      sourceRecordId: selected[0].source.recordId,
-      consentAcknowledgedAt: new Date().toISOString(),
-      snapshotClientRequestId: createUuidV4(),
-      bridgeClientRequestId: createUuidV4(),
-    };
-    pendingGroundingRef.current = pending;
-    setHasPendingGrounding(true);
-
+  const materializePendingGrounding = async (initial: PendingGrounding): Promise<{ snapshot: CareerContextSnapshot; bridgeId: string }> => {
+    let pending = initial;
     if (!pending.snapshot) {
       const snapshotRequest = GroundingSnapshotCreateRequestSchema.parse({
         purpose: pending.purpose,
@@ -332,20 +268,73 @@ export default function InterviewScreen() {
     return { snapshot: pending.snapshot, bridgeId: pending.bridgeId };
   };
 
+  const resolveGroundingLineage = async (
+    trimmedRole: string,
+    trimmedIntent: string,
+  ): Promise<{ snapshot: CareerContextSnapshot; bridgeId: string }> => {
+    const existing = pendingGroundingRef.current;
+    if (existing) {
+      const exactRetry = existing.role === trimmedRole &&
+        existing.intent === trimmedIntent &&
+        existing.sourceModule === groundingSource &&
+        sameIds(existing.itemIds, selectedContextItemIds);
+      if (!exactRetry) {
+        throw new Error('A grounded launch may already have committed. Keep the original role, goal, source and fact selection and retry the exact launch.');
+      }
+      // Response-loss recovery deliberately precedes reads/checks against mutable
+      // live Career Context. The backend applies the same ordering for immutable
+      // snapshot replay by clientRequestId.
+      return materializePendingGrounding(existing);
+    }
+
+    const fresh = await apiClient.get('/career-context', CareerContextGetResponseSchema);
+    setCareerContext(fresh);
+    if (!fresh.state.personalizationEnabled) {
+      throw new Error('Career Context personalization is disabled. Enable it before starting a grounded interview.');
+    }
+    if (fresh.conflicts.some((conflict) => conflict.requiresUserChoice)) {
+      throw new Error('Career Context has unresolved conflicts. Review them before creating a grounded interview.');
+    }
+
+    const eligible = fresh.activeItems.filter((item) =>
+      item.source.module === groundingSource &&
+      item.sensitivity === 'standard' &&
+      item.provenance !== 'inferred_pending'
+    );
+    const selected = eligible.filter((item) => selectedContextItemIds.includes(item.id));
+    if (selected.length === 0 || selected.length !== selectedContextItemIds.length) {
+      setSelectedContextItemIds(selected.map((item) => item.id));
+      throw new Error('Career Context changed before launch. Review the refreshed fact selection and try again.');
+    }
+    if (!groundingConsent) {
+      throw new Error('Confirm one-time Career Context consent before starting a grounded interview.');
+    }
+
+    const itemIds = selected.map((item) => item.id);
+    const pending: PendingGrounding = {
+      role: trimmedRole,
+      intent: trimmedIntent,
+      sourceModule: groundingSource,
+      purpose: groundingSource === 'resume' ? 'resume_to_interview' : 'clearspeak_to_interview',
+      itemIds,
+      excludedItemIds: eligible.filter((item) => !itemIds.includes(item.id)).map((item) => item.id),
+      contextVersion: fresh.state.contextVersion,
+      sourceRecordId: selected[0].source.recordId,
+      consentAcknowledgedAt: new Date().toISOString(),
+      snapshotClientRequestId: createUuidV4(),
+      bridgeClientRequestId: createUuidV4(),
+    };
+    pendingGroundingRef.current = pending;
+    setHasPendingGrounding(true);
+    return materializePendingGrounding(pending);
+  };
+
   const startInterview = async () => {
     const trimmedRole = role.trim();
     const trimmedIntent = intent.trim();
     if (!trimmedRole || !trimmedIntent) {
       Alert.alert('Role and goal required', 'Enter the role you are preparing for and what you want to practice.');
       return;
-    }
-
-    if (hasPendingGrounding) {
-      const pending = pendingGroundingRef.current;
-      if (pending && (pending.role !== trimmedRole || pending.intent !== trimmedIntent)) {
-        Alert.alert('Exact retry required', 'A grounded launch is pending. Keep the original role and goal and retry that same launch to preserve authoritative lineage.');
-        return;
-      }
     }
 
     const requestEpoch = sessionEpochRef.current;
@@ -355,7 +344,6 @@ export default function InterviewScreen() {
       let grounding: { snapshot: CareerContextSnapshot; bridgeId: string } | null = null;
       if (useCareerContext) {
         grounding = await resolveGroundingLineage(trimmedRole, trimmedIntent);
-        if (!grounding) throw new Error('Grounding lineage could not be resolved.');
         if (requestEpoch !== sessionEpochRef.current) return;
       } else if (pendingGroundingRef.current) {
         throw new Error('An exact grounded launch is pending. Retry it before switching to ungrounded practice.');
@@ -404,16 +392,12 @@ export default function InterviewScreen() {
       setHasPendingGrounding(false);
       setPlan(generatedPlan);
       setSessionId(started.sessionId);
-      // Backend createSession initializes adaptive v2 sessions at version 1.
-      // Every subsequent value comes only from AdaptiveAnswerSubmissionResponseSchema.
       setSessionVersion(INITIAL_ADAPTIVE_SESSION_VERSION);
       setCurrentQuestion(started.firstQuestion);
       setOpeningMessage(started.openingMessage);
       setRootQuestionIndex(started.questionIndex);
       setRootQuestionCount(started.totalQuestions);
       setTurnIndex(0);
-      // maxTurns is not part of the start response. Do not guess it client-side;
-      // display it only after the first authoritative adaptive response supplies it.
       setMaxTurns(0);
       setStage(started.firstQuestion.stage || 'framing');
       setCoachFeedback(null);
@@ -449,9 +433,6 @@ export default function InterviewScreen() {
     setAnswerText('');
 
     if (response.isSessionComplete || !response.nextQuestion) {
-      // Clear the last question before report generation. If report generation
-      // fails, the UI must offer report retry rather than allowing a stale turn
-      // to be resubmitted against a completed authoritative session.
       setCurrentQuestion(null);
       if (!sessionId) {
         setErrorText('The authoritative session identifier is missing.');
