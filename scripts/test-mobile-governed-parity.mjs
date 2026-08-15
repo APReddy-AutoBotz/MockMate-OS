@@ -124,7 +124,7 @@ requireBefore(
 requireBefore(
   interview,
   "const started = await apiClient.post(",
-  'await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);',
+  "setGroundingConsent(false);\n      try {\n        await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);",
   'Interview post-session recovery cleanup ordering',
 );
 for (const forbiddenPersistedAuthority of ['rawText', 'audioBytes', 'transcript', 'answerText', 'accessToken', 'providerKey', 'modelId', 'serviceRole']) {
