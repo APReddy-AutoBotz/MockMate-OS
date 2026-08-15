@@ -101,7 +101,8 @@ type HistoryAttempt = z.infer<typeof AccentHistoryAttemptSchema>;
 
 type PendingAttempt = {
   attemptId: string;
-  capability: string;
+  capability: string | null;
+  capabilityExpiresAt: string | null;
   uri: string;
   metadata: Record<string, unknown>;
 };
@@ -124,6 +125,12 @@ function createUuidV4(): string {
     const value = char === 'x' ? random : (random & 0x3) | 0x8;
     return value.toString(16);
   });
+}
+
+function capabilityNeedsRotation(pending: PendingAttempt): boolean {
+  if (!pending.capability || !pending.capabilityExpiresAt) return true;
+  const expiry = Date.parse(pending.capabilityExpiresAt);
+  return !Number.isFinite(expiry) || expiry <= Date.now();
 }
 
 function validateAdapterDescriptor(
@@ -239,10 +246,60 @@ export default function SpeakScreen() {
     if (profiles.length > 0) void loadPrompt();
   }, [profiles.length, loadPrompt]);
 
+  const authorizePendingAttempt = useCallback(async (pending: PendingAttempt): Promise<PendingAttempt> => {
+    const authority = await apiClient.post(
+      '/clearspeak/v1/accent/attempt-authority',
+      AccentAttemptAuthoritySchema,
+      pending.metadata,
+    );
+    if (authority.attemptId !== pending.attemptId) {
+      throw new Error('Server attempt authority did not match the pending attempt.');
+    }
+    const authorized: PendingAttempt = {
+      ...pending,
+      capability: authority.capability,
+      capabilityExpiresAt: authority.expiresAt,
+    };
+    pendingAttemptRef.current = authorized;
+    return authorized;
+  }, []);
+
+  const recoverCommittedAttempt = useCallback(async (pending: PendingAttempt): Promise<boolean> => {
+    try {
+      const status = await apiClient.get(
+        `/clearspeak/v1/accent/attempts/${pending.attemptId}/status`,
+        AccentAttemptStatusSchema,
+      );
+      if (status.status === 'committed') {
+        if (!status.result) {
+          setErrorText('The server reports this attempt as committed, but its governed result is unavailable. Recovery remains blocked rather than guessing a result.');
+          return false;
+        }
+        setGovernedResult(status.result);
+        pendingAttemptRef.current = null;
+        setErrorText('');
+        await loadHistory();
+        return true;
+      }
+      if (status.status === 'cancelled') {
+        pendingAttemptRef.current = null;
+      }
+    } catch {
+      // Preserve the pending attempt. Its exact selector/audio can still recover.
+    }
+    return false;
+  }, [loadHistory, setGovernedResult]);
+
   const cancelPendingAuthority = useCallback(async (silent = false): Promise<CancelOutcome> => {
-    const pending = pendingAttemptRef.current;
+    let pending = pendingAttemptRef.current;
     if (!pending) return 'none';
     try {
+      if (await recoverCommittedAttempt(pending)) return 'committed';
+      pending = pendingAttemptRef.current;
+      if (!pending) return 'cancelled';
+      if (capabilityNeedsRotation(pending)) pending = await authorizePendingAttempt(pending);
+      if (!pending.capability) throw new Error('Submission capability is unavailable.');
+
       const outcome = await apiClient.post(
         `/clearspeak/v1/accent/attempts/${pending.attemptId}/cancel`,
         AccentAttemptStatusSchema,
@@ -250,16 +307,13 @@ export default function SpeakScreen() {
       );
 
       if (outcome.status === 'committed') {
-        let committed = outcome.result ?? null;
+        const committed = outcome.result ?? null;
         if (!committed) {
-          const status = await apiClient.get(
-            `/clearspeak/v1/accent/attempts/${pending.attemptId}/status`,
-            AccentAttemptStatusSchema,
-          );
-          committed = status.status === 'committed' ? status.result ?? null : null;
+          if (!silent) setErrorText('The server reports this attempt as committed, but its governed result is unavailable. Recovery remains blocked.');
+          return 'failed';
         }
         pendingAttemptRef.current = null;
-        if (!silent && committed) {
+        if (!silent) {
           setGovernedResult(committed);
           setErrorText('');
           await loadHistory();
@@ -273,7 +327,10 @@ export default function SpeakScreen() {
       }
 
       if (outcome.status === 'missing') {
-        pendingAttemptRef.current = null;
+        // Do not discard local recovery state. A missing/expired capability can
+        // be rotated against the same selector on the next exact retry.
+        pendingAttemptRef.current = { ...pending, capability: null, capabilityExpiresAt: null };
+        if (!silent) setErrorText('Cancellation authority expired before the server confirmed cancellation. Retry cancel or recover this same attempt.');
         return 'missing';
       }
 
@@ -283,7 +340,7 @@ export default function SpeakScreen() {
       if (!silent) setErrorText(error?.message || 'The pending attempt could not be cancelled. Recover or retry it instead.');
       return 'failed';
     }
-  }, [loadHistory, setGovernedResult]);
+  }, [authorizePendingAttempt, loadHistory, recoverCommittedAttempt, setGovernedResult]);
 
   useEffect(() => () => {
     const active = recordingRef.current;
@@ -374,32 +431,16 @@ export default function SpeakScreen() {
     };
   }, [prompt, scoringPolicyVersion]);
 
-  const recoverCommittedAttempt = useCallback(async (pending: PendingAttempt): Promise<boolean> => {
-    try {
-      const status = await apiClient.get(
-        `/clearspeak/v1/accent/attempts/${pending.attemptId}/status`,
-        AccentAttemptStatusSchema,
-      );
-      if (status.status === 'committed' && status.result) {
-        setGovernedResult(status.result);
-        pendingAttemptRef.current = null;
-        setErrorText('');
-        await loadHistory();
-        return true;
-      }
-      if (status.status === 'cancelled' || status.status === 'conflict' || status.status === 'invalid' || status.status === 'missing') {
-        pendingAttemptRef.current = null;
-      }
-    } catch {
-      // Preserve the pending attempt so the exact upload can be retried.
-    }
-    return false;
-  }, [loadHistory, setGovernedResult]);
-
-  const submitPendingAttempt = useCallback(async (pending: PendingAttempt) => {
+  const processPendingAttempt = useCallback(async (original: PendingAttempt) => {
     setIsSubmitting(true);
     setErrorText('');
+    let pending = original;
     try {
+      if (await recoverCommittedAttempt(pending)) return;
+      pending = pendingAttemptRef.current ?? pending;
+      if (capabilityNeedsRotation(pending)) pending = await authorizePendingAttempt(pending);
+      if (!pending.capability) throw new Error('Submission capability is unavailable.');
+
       const formData = new FormData();
       formData.append('audio', {
         uri: pending.uri,
@@ -421,36 +462,38 @@ export default function SpeakScreen() {
       pendingAttemptRef.current = null;
       await loadHistory();
     } catch (error: any) {
-      const recovered = await recoverCommittedAttempt(pending);
+      const current = pendingAttemptRef.current ?? pending;
+      const recovered = await recoverCommittedAttempt(current);
       if (!recovered) {
+        const lostAuthority = !current.capability;
         setErrorText(
-          error instanceof ApiError && error.status === 503
-            ? 'Scoring evidence is temporarily unavailable. You can retry this exact attempt without creating a duplicate.'
-            : error?.message || 'The governed accent attempt could not be completed.',
+          lostAuthority
+            ? 'Attempt authority may have been created but its response was not received. Retry this same attempt to recover/rotate authority without creating a duplicate.'
+            : error instanceof ApiError && error.status === 503
+              ? 'Scoring evidence is temporarily unavailable. You can retry this exact attempt without creating a duplicate.'
+              : error?.message || 'The governed accent attempt could not be completed.',
         );
       }
     } finally {
       setIsSubmitting(false);
     }
-  }, [loadHistory, recoverCommittedAttempt, setGovernedResult]);
+  }, [authorizePendingAttempt, loadHistory, recoverCommittedAttempt, setGovernedResult]);
 
   const issueAuthorityAndSubmit = useCallback(async (uri: string, durationMs: number) => {
     const attemptId = createUuidV4();
     const selector = buildSelector(attemptId, durationMs);
-    const authority = await apiClient.post(
-      '/clearspeak/v1/accent/attempt-authority',
-      AccentAttemptAuthoritySchema,
-      selector,
-    );
+    // Persist local recovery identity before authority issuance. If the authority
+    // response is lost, the same attempt/selectors can safely rotate capability.
     const pending: PendingAttempt = {
-      attemptId: authority.attemptId,
-      capability: authority.capability,
+      attemptId,
+      capability: null,
+      capabilityExpiresAt: null,
       uri,
       metadata: selector,
     };
     pendingAttemptRef.current = pending;
-    await submitPendingAttempt(pending);
-  }, [buildSelector, submitPendingAttempt]);
+    await processPendingAttempt(pending);
+  }, [buildSelector, processPendingAttempt]);
 
   const handleStopRecording = useCallback(async () => {
     const active = recordingRef.current ?? recording;
@@ -485,8 +528,7 @@ export default function SpeakScreen() {
   const retryPending = async () => {
     const pending = pendingAttemptRef.current;
     if (!pending) return;
-    if (await recoverCommittedAttempt(pending)) return;
-    await submitPendingAttempt(pending);
+    await processPendingAttempt(pending);
   };
 
   const cancelPendingAttempt = async () => {
@@ -494,7 +536,7 @@ export default function SpeakScreen() {
     setIsSubmitting(true);
     const outcome = await cancelPendingAuthority(false);
     setIsSubmitting(false);
-    if (outcome === 'cancelled' || outcome === 'missing') {
+    if (outcome === 'cancelled') {
       setErrorText('Pending governed attempt cancelled. You can change the target or record again.');
     } else if (outcome === 'committed') {
       setErrorText('');
