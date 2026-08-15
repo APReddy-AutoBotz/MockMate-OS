@@ -133,3 +133,11 @@ export const getAccessToken = async (): Promise<string | null> => {
   const { data } = await supabase.auth.getSession();
   return data.session?.access_token || null;
 };
+
+export const getCurrentUserId = async (): Promise<string | null> => {
+  if (isUsingMockAuth) return devMockUser?.id || null;
+  if (!supabase) return null;
+  const { data, error } = await supabase.auth.getUser();
+  if (error) return null;
+  return data.user?.id || null;
+};
