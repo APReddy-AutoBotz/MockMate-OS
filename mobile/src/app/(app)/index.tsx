@@ -15,6 +15,13 @@ import { AccountDeletionResponseSchema } from 'mockmate-shared';
 import { signOut } from '../../services/supabaseClient';
 import { apiClient } from '../../services/apiClient';
 
+const LOCAL_APP_DATA_KEYS = [
+  'mockmate_session_history',
+  'mockmate_question_usage',
+  'mockmate_user_profile',
+  'mockmate_pending_grounding_v1',
+] as const;
+
 export default function DashboardScreen() {
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -46,9 +53,13 @@ export default function DashboardScreen() {
         text: 'Sign Out',
         style: 'destructive',
         onPress: async () => {
-          await signOut();
-          await AsyncStorage.removeItem('mockmate_user_profile');
-          router.replace('/(auth)/login');
+          try {
+            await signOut();
+            await AsyncStorage.removeItem('mockmate_user_profile');
+            router.replace('/(auth)/login');
+          } catch (error: any) {
+            Alert.alert('Sign Out Failed', error?.message || 'Your local sign-in session could not be cleared. Please retry.');
+          }
         },
       },
     ]);
@@ -72,19 +83,32 @@ export default function DashboardScreen() {
                 throw new Error(`Server could not confirm complete app-data deletion${failed}. Your local session was kept so you can retry.`);
               }
 
-              // Local cleanup happens only after the server confirms complete app-data deletion.
-              await AsyncStorage.removeItem('mockmate_session_history');
-              await AsyncStorage.removeItem('mockmate_question_usage');
-              await AsyncStorage.removeItem('mockmate_user_profile');
-              await signOut();
+              // From this point onward the irreversible server deletion is a
+              // confirmed fact. Local cleanup/sign-out failures must never be
+              // misreported as if the server deletion itself failed.
+              const deletionMessage = result.authIdentityDeleted
+                ? 'Your MockMate app data and sign-in identity were deleted.'
+                : result.authIdentityRetainedReason || 'Your MockMate app data was deleted. Your sign-in identity was retained.';
 
-              Alert.alert(
-                'App Data Deleted',
-                result.authIdentityDeleted
-                  ? 'Your MockMate app data and sign-in identity were deleted.'
-                  : result.authIdentityRetainedReason || 'Your MockMate app data was deleted. Your sign-in identity was retained.',
-              );
-              router.replace('/(auth)/login');
+              const cleanupResults = await Promise.allSettled([
+                ...LOCAL_APP_DATA_KEYS.map((key) => AsyncStorage.removeItem(key)),
+                signOut(),
+              ]);
+              const signOutResult = cleanupResults[LOCAL_APP_DATA_KEYS.length];
+              const signOutSucceeded = signOutResult.status === 'fulfilled';
+              const localCleanupFailed = cleanupResults.some((entry) => entry.status === 'rejected');
+              setProfile(null);
+
+              if (localCleanupFailed) {
+                Alert.alert(
+                  'App Data Deleted',
+                  `${deletionMessage}\n\nServer deletion is confirmed, but some local session cleanup could not complete. ${signOutSucceeded ? 'You have been signed out; reopen the app if stale local UI remains.' : 'Your sign-in session may still be present on this device. Use Sign Out and retry local cleanup.'}`,
+                );
+                if (signOutSucceeded) router.replace('/(auth)/login');
+              } else {
+                Alert.alert('App Data Deleted', deletionMessage);
+                router.replace('/(auth)/login');
+              }
             } catch (error: any) {
               console.error(error);
               Alert.alert('Deletion Not Confirmed', error?.message || 'MockMate could not confirm complete app-data deletion. Your local session was kept so you can retry.');
