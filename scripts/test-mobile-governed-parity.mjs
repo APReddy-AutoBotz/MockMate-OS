@@ -47,6 +47,14 @@ requireText(dashboard, "apiClient.delete('/me/data', AccountDeletionResponseSche
 requireText(dashboard, 'failedTables.length > 0', 'Dashboard account authority');
 requireText(dashboard, 'mockmate_pending_grounded_interview_v1', 'Dashboard account data cleanup');
 rejectText(dashboard, 'mockmate_pending_grounding_v1', 'Dashboard stale grounding recovery cleanup');
+requireText(dashboard, 'LOCAL_APP_DATA_KEYS.map((key) => AsyncStorage.removeItem(key))', 'Dashboard sign-out local account isolation');
+requireText(dashboard, 'some local MockMate data could not be removed', 'Dashboard sign-out cleanup truthfulness');
+requireBefore(
+  dashboard,
+  'await signOut();',
+  'LOCAL_APP_DATA_KEYS.map((key) => AsyncStorage.removeItem(key))',
+  'Dashboard sign-out authority ordering',
+);
 rejectText(dashboard, 'getAccessToken', 'Dashboard account authority');
 rejectText(dashboard, 'API_BASE', 'Dashboard account authority');
 
