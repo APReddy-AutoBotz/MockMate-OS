@@ -24,28 +24,42 @@ export default function RootLayout() {
   useEffect(() => {
     let active = true;
     let authGeneration = 0;
+    let isolationQueue = Promise.resolve();
 
     const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
       const requestGeneration = ++authGeneration;
+      const precedingIsolation = isolationQueue;
+      let releaseIsolation: () => void = () => undefined;
+      isolationQueue = new Promise<void>((resolve) => { releaseIsolation = resolve; });
       setLoading(true);
       setProfileLoaded(false);
       setIsolationError('');
 
       let ownsLocalProfile = false;
       try {
+        await precedingIsolation;
+        if (!active || requestGeneration !== authGeneration) return;
         if (currentUser) {
           const stored = await AsyncStorage.getItem('mockmate_user_profile');
           if (stored) {
-            const profile = JSON.parse(stored);
+            let profile: { userId?: unknown } | null = null;
+            try {
+              const parsed: unknown = JSON.parse(stored);
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                profile = parsed as { userId?: unknown };
+              }
+            } catch {
+              // Invalid ownership metadata is orphaned local data, not authority.
+            }
             if (profile && profile.userId === currentUser.id) {
               ownsLocalProfile = true;
-            } else {
-              // All current mobile local practice keys are global device keys.
-              // A different/legacy owner must be cleared before this account can
-              // enter onboarding or the app, otherwise local history/context can
-              // leak across accounts on the same device.
-              await Promise.all(LOCAL_USER_DATA_KEYS.map((key) => AsyncStorage.removeItem(key)));
             }
+          }
+          if (!ownsLocalProfile) {
+            // All current mobile local practice keys are global device keys. A
+            // missing, invalid, legacy, or differently owned profile makes every
+            // such key orphaned and untrusted until all are cleared.
+            await Promise.all(LOCAL_USER_DATA_KEYS.map((key) => AsyncStorage.removeItem(key)));
           }
         }
       } catch {
@@ -56,6 +70,8 @@ export default function RootLayout() {
         setLoading(false);
         setIsolationError('MockMate could not safely isolate local data for this account. Reopen the app before continuing or signing in as another user.');
         return;
+      } finally {
+        releaseIsolation();
       }
 
       if (!active || requestGeneration !== authGeneration) return;

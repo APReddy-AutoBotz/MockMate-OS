@@ -330,10 +330,11 @@ export default function InterviewScreen() {
             setUseCareerContext(true);
             setHasPendingGrounding(true);
           }
+          setGroundingRecoveryChecked(true);
         } catch {
-          if (active) setErrorText('Saved grounded-launch recovery could not be checked. Grounded Interview is blocked until local recovery storage is available.');
-        } finally {
-          if (active) setGroundingRecoveryChecked(true);
+          if (active) {
+            setErrorText('Saved grounded-launch recovery could not be checked. Grounded Interview is blocked until local recovery storage is available.');
+          }
         }
       })();
     }, 0);
@@ -346,6 +347,10 @@ export default function InterviewScreen() {
   }, []);
 
   const loadCareerContext = async (): Promise<CareerContextGetResponse | null> => {
+    if (!groundingRecoveryChecked) {
+      setErrorText('Saved grounded-launch recovery must be safely checked before Career Context can be loaded.');
+      return null;
+    }
     if (pendingGroundingRef.current) {
       setErrorText('Retry or abandon the saved grounded launch before loading mutable Career Context.');
       return null;

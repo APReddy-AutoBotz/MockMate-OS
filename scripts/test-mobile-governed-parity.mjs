@@ -72,9 +72,23 @@ requireBefore(
 );
 requireText(rootLayout, 'profile.userId === currentUser.id', 'Mobile auth-change local ownership');
 requireText(rootLayout, 'LOCAL_USER_DATA_KEYS.map((key) => AsyncStorage.removeItem(key))', 'Mobile auth-change local ownership');
+requireText(rootLayout, 'if (!ownsLocalProfile)', 'Mobile missing-profile orphan cleanup');
+requireBefore(
+  rootLayout,
+  "const stored = await AsyncStorage.getItem('mockmate_user_profile');",
+  'if (!ownsLocalProfile)',
+  'Mobile ownership inspection before orphan cleanup',
+);
 requireText(rootLayout, 'mockmate_pending_grounded_interview_v1', 'Mobile auth-change grounded recovery isolation');
 requireText(rootLayout, 'isolationError', 'Mobile auth-change fail-closed isolation');
 requireText(rootLayout, 'authGeneration', 'Mobile auth-change stale callback guard');
+requireText(rootLayout, 'await precedingIsolation;', 'Mobile auth-change serialized isolation');
+requireBefore(
+  rootLayout,
+  'await precedingIsolation;',
+  "const stored = await AsyncStorage.getItem('mockmate_user_profile');",
+  'Mobile auth-change isolation serialization',
+);
 
 requireText(resume, 'ResumeParseResponseSchema', 'Resume');
 requireText(resume, 'GovernedResumeScoreResponseSchema', 'Resume');
@@ -140,6 +154,18 @@ requireText(interview, 'AsyncStorage.getItem(PENDING_GROUNDING_STORAGE_KEY)', 'I
 requireText(interview, 'AsyncStorage.setItem(PENDING_GROUNDING_STORAGE_KEY, serialized)', 'Interview durable grounding recovery');
 requireText(interview, 'AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY)', 'Interview durable grounding recovery');
 requireText(interview, 'setGroundingRecoveryChecked(true)', 'Interview durable grounding recovery');
+rejectText(
+  interview,
+  'finally {\n          if (active) setGroundingRecoveryChecked(true);',
+  'Interview fail-closed recovery inspection',
+);
+requireText(interview, 'if (!groundingRecoveryChecked)', 'Interview recovery gate');
+requireBefore(
+  interview,
+  'if (!groundingRecoveryChecked)',
+  "apiClient.get('/career-context', CareerContextGetResponseSchema)",
+  'Interview recovery gate before mutable Career Context read',
+);
 requireText(interview, 'setUseCareerContext(true)', 'Interview durable grounding restoration');
 requireText(interview, 'Abandon pending grounded launch', 'Interview explicit recovery abandonment');
 requireText(interview, 'Retry or abandon the saved grounded launch before loading mutable Career Context.', 'Interview immutable recovery boundary');
