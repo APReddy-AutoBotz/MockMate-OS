@@ -13,14 +13,22 @@ import {
 import {
   AdaptiveAnswerSubmissionRequestSchema,
   AdaptiveAnswerSubmissionResponseSchema,
+  CareerContextGetResponseSchema,
   FinalReportSchema,
+  GroundingSnapshotCreateRequestSchema,
+  GroundingSnapshotCreateResponseSchema,
   InterviewPlanSchema,
   InterviewSessionStartRequestSchema,
   InterviewSessionStartResponseSchema,
+  ModuleBridgeCreateRequestSchema,
+  ModuleBridgeCreateResponseSchema,
   PlanGenerationRequestSchema,
   SessionControlsSchema,
   type AdaptiveAnswerSubmissionRequest,
   type AdaptiveAnswerSubmissionResponse,
+  type CareerContextGetResponse,
+  type CareerContextItem,
+  type CareerContextSnapshot,
   type FinalReport,
   type InterviewPlan,
   type QuestionBlueprint,
@@ -29,10 +37,27 @@ import {
 import { apiClient, ApiError } from '../../services/apiClient';
 
 type Phase = 'setup' | 'starting' | 'asking' | 'submitting' | 'reporting' | 'complete';
+type GroundingSource = 'resume' | 'clearspeak';
 
 type PendingTurn = {
   sessionId: string;
   payload: AdaptiveAnswerSubmissionRequest;
+};
+
+type PendingGrounding = {
+  role: string;
+  intent: string;
+  sourceModule: GroundingSource;
+  purpose: 'resume_to_interview' | 'clearspeak_to_interview';
+  itemIds: string[];
+  excludedItemIds: string[];
+  contextVersion: number;
+  sourceRecordId: string;
+  consentAcknowledgedAt: string;
+  snapshotClientRequestId: string;
+  bridgeClientRequestId: string;
+  snapshot?: CareerContextSnapshot;
+  bridgeId?: string;
 };
 
 const MOBILE_CONTROLS: SessionControls = SessionControlsSchema.parse({
@@ -59,6 +84,28 @@ function createUuidV4(): string {
   });
 }
 
+function careerItemValue(item: CareerContextItem): string {
+  switch (item.value.type) {
+    case 'text':
+      return item.value.text;
+    case 'string_list':
+      return item.value.values.join(', ');
+    case 'metric':
+      return `${item.value.metric}: ${item.value.value}${item.value.scale ? ` ${item.value.scale}` : ''}`;
+    case 'evidence':
+      return item.value.summary;
+    default:
+      return item.label;
+  }
+}
+
+function sameIds(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const a = [...left].sort();
+  const b = [...right].sort();
+  return a.every((value, index) => value === b[index]);
+}
+
 export default function InterviewScreen() {
   const [phase, setPhase] = useState<Phase>('setup');
   const [role, setRole] = useState('');
@@ -78,7 +125,15 @@ export default function InterviewScreen() {
   const [report, setReport] = useState<FinalReport | null>(null);
   const [errorText, setErrorText] = useState('');
   const [hasPendingTurn, setHasPendingTurn] = useState(false);
+  const [useCareerContext, setUseCareerContext] = useState(false);
+  const [careerContext, setCareerContext] = useState<CareerContextGetResponse | null>(null);
+  const [groundingSource, setGroundingSource] = useState<GroundingSource>('resume');
+  const [selectedContextItemIds, setSelectedContextItemIds] = useState<string[]>([]);
+  const [groundingConsent, setGroundingConsent] = useState(false);
+  const [loadingContext, setLoadingContext] = useState(false);
+  const [hasPendingGrounding, setHasPendingGrounding] = useState(false);
   const pendingTurnRef = useRef<PendingTurn | null>(null);
+  const pendingGroundingRef = useRef<PendingGrounding | null>(null);
   const sessionEpochRef = useRef(0);
 
   const progressLabel = useMemo(() => {
@@ -87,10 +142,43 @@ export default function InterviewScreen() {
     return `Scenario ${scenario} of ${rootQuestionCount}${maxTurns ? ` · Turn ${turnIndex + 1} of ${maxTurns}` : ''}`;
   }, [maxTurns, rootQuestionCount, rootQuestionIndex, turnIndex]);
 
+  const eligibleContextItems = useMemo(() => {
+    if (!careerContext) return [];
+    // Mobile P0-7 intentionally uses only standard-sensitivity facts from one
+    // declared source module. Server snapshot checks remain authoritative.
+    return careerContext.activeItems.filter((item) =>
+      item.source.module === groundingSource &&
+      item.sensitivity === 'standard' &&
+      item.provenance !== 'inferred_pending'
+    );
+  }, [careerContext, groundingSource]);
+
+  const unresolvedConflicts = careerContext?.conflicts.filter((conflict) => conflict.requiresUserChoice) ?? [];
+
   useEffect(() => () => {
     // Invalidate any in-flight plan/turn/report response after native route exit.
     sessionEpochRef.current += 1;
   }, []);
+
+  const loadCareerContext = async (): Promise<CareerContextGetResponse | null> => {
+    setLoadingContext(true);
+    try {
+      const response = await apiClient.get('/career-context', CareerContextGetResponseSchema);
+      setCareerContext(response);
+      return response;
+    } catch (error: any) {
+      setErrorText(error?.message || 'Career Context is unavailable.');
+      return null;
+    } finally {
+      setLoadingContext(false);
+    }
+  };
+
+  const clearGroundingDraft = () => {
+    pendingGroundingRef.current = null;
+    setHasPendingGrounding(false);
+    setGroundingConsent(false);
+  };
 
   const resetSession = () => {
     // A request already in flight may still complete. Advancing the epoch makes
@@ -113,6 +201,7 @@ export default function InterviewScreen() {
     setErrorText('');
     pendingTurnRef.current = null;
     setHasPendingTurn(false);
+    clearGroundingDraft();
   };
 
   const generateReport = async (activeSessionId: string) => {
@@ -135,6 +224,114 @@ export default function InterviewScreen() {
     }
   };
 
+  const resolveGroundingLineage = async (
+    trimmedRole: string,
+    trimmedIntent: string,
+  ): Promise<{ snapshot: CareerContextSnapshot; bridgeId: string } | null> => {
+    const fresh = await apiClient.get('/career-context', CareerContextGetResponseSchema);
+    setCareerContext(fresh);
+
+    if (!fresh.state.personalizationEnabled) {
+      throw new Error('Career Context personalization is disabled. Enable it before starting a grounded interview.');
+    }
+    if (fresh.conflicts.some((conflict) => conflict.requiresUserChoice)) {
+      throw new Error('Career Context has unresolved conflicts. Review them before creating a grounded interview.');
+    }
+
+    const eligible = fresh.activeItems.filter((item) =>
+      item.source.module === groundingSource &&
+      item.sensitivity === 'standard' &&
+      item.provenance !== 'inferred_pending'
+    );
+    const selected = eligible.filter((item) => selectedContextItemIds.includes(item.id));
+    if (selected.length === 0 || selected.length !== selectedContextItemIds.length) {
+      setSelectedContextItemIds(selected.map((item) => item.id));
+      throw new Error('Career Context changed before launch. Review the refreshed fact selection and try again.');
+    }
+    if (!groundingConsent) {
+      throw new Error('Confirm one-time Career Context consent before starting a grounded interview.');
+    }
+
+    const purpose = groundingSource === 'resume' ? 'resume_to_interview' : 'clearspeak_to_interview';
+    const itemIds = selected.map((item) => item.id);
+    const excludedItemIds = eligible.filter((item) => !itemIds.includes(item.id)).map((item) => item.id);
+    const existing = pendingGroundingRef.current;
+
+    if (existing) {
+      const exactRetry = existing.role === trimmedRole &&
+        existing.intent === trimmedIntent &&
+        existing.sourceModule === groundingSource &&
+        existing.contextVersion === fresh.state.contextVersion &&
+        sameIds(existing.itemIds, itemIds) &&
+        sameIds(existing.excludedItemIds, excludedItemIds);
+      if (!exactRetry) {
+        throw new Error('A grounded launch may already have committed. Keep the same role, goal and fact selection and retry the exact launch rather than creating different lineage.');
+      }
+    }
+
+    let pending: PendingGrounding = existing ?? {
+      role: trimmedRole,
+      intent: trimmedIntent,
+      sourceModule: groundingSource,
+      purpose,
+      itemIds,
+      excludedItemIds,
+      contextVersion: fresh.state.contextVersion,
+      sourceRecordId: selected[0].source.recordId,
+      consentAcknowledgedAt: new Date().toISOString(),
+      snapshotClientRequestId: createUuidV4(),
+      bridgeClientRequestId: createUuidV4(),
+    };
+    pendingGroundingRef.current = pending;
+    setHasPendingGrounding(true);
+
+    if (!pending.snapshot) {
+      const snapshotRequest = GroundingSnapshotCreateRequestSchema.parse({
+        purpose: pending.purpose,
+        includedItemIds: pending.itemIds,
+        excludedItemIds: pending.excludedItemIds,
+        conflictSelections: {},
+        consent: {
+          scope: 'one_time',
+          purpose: pending.purpose,
+          includedItemIds: pending.itemIds,
+          excludedItemIds: pending.excludedItemIds,
+          sourceModules: [pending.sourceModule],
+          acknowledgedAt: pending.consentAcknowledgedAt,
+        },
+        expectedContextVersion: pending.contextVersion,
+        clientRequestId: pending.snapshotClientRequestId,
+      });
+      const snapshotResponse = await apiClient.post(
+        '/career-context/snapshots',
+        GroundingSnapshotCreateResponseSchema,
+        snapshotRequest,
+      );
+      pending = { ...pending, snapshot: snapshotResponse.snapshot };
+      pendingGroundingRef.current = pending;
+    }
+
+    if (!pending.bridgeId) {
+      const bridgeRequest = ModuleBridgeCreateRequestSchema.parse({
+        sourceModule: pending.sourceModule,
+        targetModule: 'interview',
+        purpose: pending.purpose,
+        snapshotId: pending.snapshot.id,
+        sourceRecordId: pending.sourceRecordId,
+        clientRequestId: pending.bridgeClientRequestId,
+      });
+      const bridgeResponse = await apiClient.post(
+        '/career-context/bridges',
+        ModuleBridgeCreateResponseSchema,
+        bridgeRequest,
+      );
+      pending = { ...pending, bridgeId: bridgeResponse.bridge.id };
+      pendingGroundingRef.current = pending;
+    }
+
+    return { snapshot: pending.snapshot, bridgeId: pending.bridgeId };
+  };
+
   const startInterview = async () => {
     const trimmedRole = role.trim();
     const trimmedIntent = intent.trim();
@@ -143,18 +340,43 @@ export default function InterviewScreen() {
       return;
     }
 
+    if (hasPendingGrounding) {
+      const pending = pendingGroundingRef.current;
+      if (pending && (pending.role !== trimmedRole || pending.intent !== trimmedIntent)) {
+        Alert.alert('Exact retry required', 'A grounded launch is pending. Keep the original role and goal and retry that same launch to preserve authoritative lineage.');
+        return;
+      }
+    }
+
     const requestEpoch = sessionEpochRef.current;
     setPhase('starting');
     setErrorText('');
     try {
+      let grounding: { snapshot: CareerContextSnapshot; bridgeId: string } | null = null;
+      if (useCareerContext) {
+        grounding = await resolveGroundingLineage(trimmedRole, trimmedIntent);
+        if (!grounding) throw new Error('Grounding lineage could not be resolved.');
+        if (requestEpoch !== sessionEpochRef.current) return;
+      } else if (pendingGroundingRef.current) {
+        throw new Error('An exact grounded launch is pending. Retry it before switching to ungrounded practice.');
+      }
+
       const planRequest = PlanGenerationRequestSchema.parse({
         role: trimmedRole,
         intent: trimmedIntent,
         controls: MOBILE_CONTROLS,
         selectedPanelIDs: MOBILE_PANEL_IDS,
+        ...(grounding ? { snapshotId: grounding.snapshot.id, bridgeId: grounding.bridgeId } : {}),
       });
       const generatedPlan = await apiClient.post('/interview/plan', InterviewPlanSchema, planRequest);
       if (requestEpoch !== sessionEpochRef.current) return;
+
+      if (grounding) {
+        const authority = generatedPlan.authority;
+        if (!authority || authority.snapshotId !== grounding.snapshot.id || authority.bridgeId !== grounding.bridgeId) {
+          throw new Error('The server did not return matching authoritative grounding lineage for this Interview plan.');
+        }
+      }
 
       const sessionRequest = InterviewSessionStartRequestSchema.parse({
         context: {
@@ -165,6 +387,10 @@ export default function InterviewScreen() {
           interviewPlan: generatedPlan,
           sessionType: 'structured',
           jdInsights: generatedPlan.jdInsights,
+          ...(grounding ? {
+            groundingSnapshot: grounding.snapshot,
+            bridgeSessionId: grounding.bridgeId,
+          } : {}),
         },
       });
       const started = await apiClient.post(
@@ -174,6 +400,8 @@ export default function InterviewScreen() {
       );
       if (requestEpoch !== sessionEpochRef.current) return;
 
+      pendingGroundingRef.current = null;
+      setHasPendingGrounding(false);
       setPlan(generatedPlan);
       setSessionId(started.sessionId);
       // Backend createSession initializes adaptive v2 sessions at version 1.
@@ -193,6 +421,12 @@ export default function InterviewScreen() {
       setPhase('asking');
     } catch (error: any) {
       if (requestEpoch !== sessionEpochRef.current) return;
+      const terminal = error instanceof ApiError && [400, 401, 403, 404, 422].includes(error.status);
+      const staleBeforeSnapshot = error instanceof ApiError && error.status === 409 && !pendingGroundingRef.current?.snapshot;
+      if (terminal || staleBeforeSnapshot) {
+        clearGroundingDraft();
+        if (useCareerContext) await loadCareerContext();
+      }
       setPhase('setup');
       setErrorText(
         error instanceof ApiError && error.status === 429
@@ -298,13 +532,44 @@ export default function InterviewScreen() {
     await submitPendingTurn(pending);
   };
 
+  const toggleCareerContext = async () => {
+    if (hasPendingGrounding) {
+      Alert.alert('Exact retry required', 'A grounded launch may already have committed. Retry that exact launch before changing grounding mode.');
+      return;
+    }
+    const next = !useCareerContext;
+    setUseCareerContext(next);
+    setGroundingConsent(false);
+    setSelectedContextItemIds([]);
+    if (next && !careerContext) await loadCareerContext();
+  };
+
+  const chooseGroundingSource = (source: GroundingSource) => {
+    if (hasPendingGrounding) {
+      Alert.alert('Exact retry required', 'Retry the pending grounded launch before changing its source.');
+      return;
+    }
+    setGroundingSource(source);
+    setSelectedContextItemIds([]);
+    setGroundingConsent(false);
+  };
+
+  const toggleContextItem = (itemId: string) => {
+    if (hasPendingGrounding) return;
+    setSelectedContextItemIds((current) => current.includes(itemId)
+      ? current.filter((id) => id !== itemId)
+      : [...current, itemId]
+    );
+    setGroundingConsent(false);
+  };
+
   if (phase === 'setup' || phase === 'starting') {
     return (
       <SafeAreaView style={styles.container}>
         <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>Interview Practice</Text>
           <Text style={styles.subtitle}>
-            Native Interview uses the same server-authoritative adaptive engine as MockMate on the web. Questions, evaluation, progression and reports come from the backend; mobile does not invent fallbacks.
+            Native Interview uses the same server-authoritative adaptive engine as MockMate on the web. Questions, evaluation, progression and reports come from the backend; Career Context is optional and always explicit.
           </Text>
 
           <View style={styles.card}>
@@ -315,7 +580,7 @@ export default function InterviewScreen() {
               placeholder="e.g. Product Manager"
               placeholderTextColor="#64748b"
               style={styles.input}
-              editable={phase !== 'starting'}
+              editable={phase !== 'starting' && !hasPendingGrounding}
             />
             <Text style={styles.label}>Practice goal</Text>
             <TextInput
@@ -325,20 +590,122 @@ export default function InterviewScreen() {
               placeholderTextColor="#64748b"
               multiline
               style={[styles.input, styles.textArea]}
-              editable={phase !== 'starting'}
+              editable={phase !== 'starting' && !hasPendingGrounding}
             />
             <View style={styles.policyCard}>
-              <Text style={styles.policyTitle}>Mobile V1 session profile</Text>
-              <Text style={styles.muted}>3 core scenarios · coach mode · intermediate · typed answers · no coding · ungrounded unless a governed bridge is explicitly added later.</Text>
+              <Text style={styles.policyTitle}>Mobile session profile</Text>
+              <Text style={styles.muted}>3 core scenarios · coach mode · intermediate · typed answers · no coding. Ungrounded by default; optional Career Context requires one-time consent and server-authoritative lineage.</Text>
             </View>
-            <TouchableOpacity
-              style={[styles.primaryButton, phase === 'starting' && styles.disabled]}
-              disabled={phase === 'starting'}
-              onPress={() => void startInterview()}
-            >
-              {phase === 'starting' ? <ActivityIndicator color="#0b1329" /> : <Text style={styles.primaryButtonText}>Generate & start interview</Text>}
-            </TouchableOpacity>
           </View>
+
+          <View style={styles.card}>
+            <View style={styles.optionHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.policyTitle}>Use Career Context</Text>
+                <Text style={styles.muted}>Create a one-time immutable grounding snapshot from facts you explicitly select.</Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.toggleButton, useCareerContext && styles.toggleButtonActive, hasPendingGrounding && styles.disabled]}
+                disabled={phase === 'starting'}
+                onPress={() => void toggleCareerContext()}
+              >
+                <Text style={useCareerContext ? styles.toggleTextActive : styles.toggleText}>{useCareerContext ? 'ON' : 'OFF'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {useCareerContext ? (
+              <>
+                {loadingContext ? (
+                  <View style={styles.loadingBlock}>
+                    <ActivityIndicator color="#d4af37" />
+                    <Text style={styles.muted}>Loading authoritative Career Context…</Text>
+                  </View>
+                ) : careerContext ? (
+                  <>
+                    <Text style={styles.contextStatus}>
+                      Personalization: {careerContext.state.personalizationEnabled ? 'enabled' : 'disabled'} · Context v{careerContext.state.contextVersion}
+                    </Text>
+                    {unresolvedConflicts.length > 0 ? (
+                      <View style={styles.warningCard}>
+                        <Text style={styles.warningText}>Grounded launch is blocked by {unresolvedConflicts.length} unresolved Career Context conflict(s). Review Career Context first.</Text>
+                      </View>
+                    ) : null}
+
+                    <Text style={styles.label}>Grounding source</Text>
+                    <View style={styles.sourceRow}>
+                      {(['resume', 'clearspeak'] as GroundingSource[]).map((source) => (
+                        <TouchableOpacity
+                          key={source}
+                          style={[styles.sourceChoice, groundingSource === source && styles.sourceChoiceActive]}
+                          disabled={phase === 'starting' || hasPendingGrounding}
+                          onPress={() => chooseGroundingSource(source)}
+                        >
+                          <Text style={groundingSource === source ? styles.sourceChoiceTextActive : styles.sourceChoiceText}>
+                            {source === 'resume' ? 'Resume' : 'ClearSpeak'}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+
+                    <Text style={styles.label}>Select confirmed facts</Text>
+                    {eligibleContextItems.length === 0 ? (
+                      <Text style={styles.muted}>No standard-sensitivity active {groundingSource === 'resume' ? 'Resume' : 'ClearSpeak'} facts are available. Rebuild/confirm facts in Career Context first.</Text>
+                    ) : eligibleContextItems.map((item) => {
+                      const selected = selectedContextItemIds.includes(item.id);
+                      return (
+                        <TouchableOpacity
+                          key={item.id}
+                          style={[styles.contextItem, selected && styles.contextItemSelected]}
+                          disabled={phase === 'starting' || hasPendingGrounding}
+                          onPress={() => toggleContextItem(item.id)}
+                        >
+                          <Text style={styles.contextCheck}>{selected ? '✓' : '○'}</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.contextItemTitle}>{item.label || item.kind.replace(/_/g, ' ')}</Text>
+                            <Text style={styles.contextItemValue}>{careerItemValue(item)}</Text>
+                            <Text style={styles.contextItemMeta}>{item.provenance.replace(/_/g, ' ')} · {item.source.recordId}</Text>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+
+                    <TouchableOpacity
+                      style={[styles.consentBox, groundingConsent && styles.consentBoxActive, hasPendingGrounding && styles.disabled]}
+                      disabled={phase === 'starting' || hasPendingGrounding || selectedContextItemIds.length === 0}
+                      onPress={() => setGroundingConsent((current) => !current)}
+                    >
+                      <Text style={styles.contextCheck}>{groundingConsent ? '✓' : '○'}</Text>
+                      <Text style={styles.consentText}>I consent to use only the selected facts for this one Interview session. This creates immutable server-authoritative snapshot/bridge lineage.</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity style={styles.smallButton} disabled={phase === 'starting' || hasPendingGrounding} onPress={() => void loadCareerContext()}>
+                      <Text style={styles.smallButtonText}>Reload Career Context</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <TouchableOpacity style={styles.smallButton} onPress={() => void loadCareerContext()}>
+                    <Text style={styles.smallButtonText}>Load Career Context</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            ) : null}
+          </View>
+
+          {hasPendingGrounding ? (
+            <View style={styles.warningCard}>
+              <Text style={styles.warningText}>A grounded launch may already have committed server-side. Keep this setup unchanged and retry the exact launch; MockMate will reuse the same snapshot/bridge request IDs.</Text>
+            </View>
+          ) : null}
+
+          <TouchableOpacity
+            style={[styles.primaryButton, phase === 'starting' && styles.disabled]}
+            disabled={phase === 'starting'}
+            onPress={() => void startInterview()}
+          >
+            {phase === 'starting'
+              ? <ActivityIndicator color="#0b1329" />
+              : <Text style={styles.primaryButtonText}>{hasPendingGrounding ? 'Retry exact grounded launch' : 'Generate & start interview'}</Text>}
+          </TouchableOpacity>
 
           {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
         </ScrollView>
@@ -376,6 +743,12 @@ export default function InterviewScreen() {
             <Text style={styles.exitText}>Exit</Text>
           </TouchableOpacity>
         </View>
+
+        {plan?.authority ? (
+          <View style={styles.groundedBadge}>
+            <Text style={styles.groundedBadgeText}>Grounded · server-authoritative Career Context</Text>
+          </View>
+        ) : null}
 
         {openingMessage ? <Text style={styles.opening}>{openingMessage}</Text> : null}
 
@@ -473,14 +846,40 @@ const styles = StyleSheet.create({
   label: { color: '#94a3b8', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 7 },
   input: { backgroundColor: '#0b1329', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', color: '#ffffff', paddingHorizontal: 14, paddingVertical: 13, fontSize: 15, marginBottom: 16 },
   textArea: { minHeight: 110, textAlignVertical: 'top' },
-  policyCard: { backgroundColor: 'rgba(59,130,246,0.08)', borderRadius: 12, padding: 13, marginBottom: 16 },
+  policyCard: { backgroundColor: 'rgba(59,130,246,0.08)', borderRadius: 12, padding: 13, marginBottom: 4 },
   policyTitle: { color: '#ffffff', fontWeight: '700', fontSize: 13, marginBottom: 4 },
   muted: { color: '#94a3b8', fontSize: 12, lineHeight: 18 },
-  primaryButton: { backgroundColor: '#d4af37', borderRadius: 12, paddingVertical: 15, paddingHorizontal: 16, alignItems: 'center' },
+  primaryButton: { backgroundColor: '#d4af37', borderRadius: 12, paddingVertical: 15, paddingHorizontal: 16, alignItems: 'center', marginBottom: 14 },
   primaryButtonText: { color: '#0b1329', fontSize: 14, fontWeight: '800' },
   secondaryButton: { borderRadius: 12, borderWidth: 1, borderColor: 'rgba(212,175,55,0.35)', paddingVertical: 14, paddingHorizontal: 16, alignItems: 'center' },
   secondaryButtonText: { color: '#d4af37', fontSize: 13, fontWeight: '800' },
+  smallButton: { alignSelf: 'flex-start', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(212,175,55,0.30)', paddingVertical: 9, paddingHorizontal: 12, marginTop: 10 },
+  smallButtonText: { color: '#d4af37', fontSize: 11, fontWeight: '800' },
   disabled: { opacity: 0.5 },
+  optionHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  toggleButton: { minWidth: 54, alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#0b1329', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' },
+  toggleButtonActive: { backgroundColor: 'rgba(212,175,55,0.12)', borderColor: '#d4af37' },
+  toggleText: { color: '#94a3b8', fontSize: 11, fontWeight: '800' },
+  toggleTextActive: { color: '#d4af37', fontSize: 11, fontWeight: '800' },
+  contextStatus: { color: '#cbd5e1', fontSize: 12, lineHeight: 18, marginTop: 14, marginBottom: 12 },
+  sourceRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+  sourceChoice: { flex: 1, alignItems: 'center', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)', paddingVertical: 11 },
+  sourceChoiceActive: { borderColor: '#d4af37', backgroundColor: 'rgba(212,175,55,0.10)' },
+  sourceChoiceText: { color: '#94a3b8', fontSize: 12, fontWeight: '700' },
+  sourceChoiceTextActive: { color: '#d4af37', fontSize: 12, fontWeight: '800' },
+  contextItem: { flexDirection: 'row', gap: 10, backgroundColor: '#111c36', borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  contextItemSelected: { borderColor: 'rgba(212,175,55,0.55)', backgroundColor: 'rgba(212,175,55,0.07)' },
+  contextCheck: { color: '#d4af37', fontSize: 18, fontWeight: '800', minWidth: 20 },
+  contextItemTitle: { color: '#ffffff', fontSize: 13, fontWeight: '800', marginBottom: 3 },
+  contextItemValue: { color: '#cbd5e1', fontSize: 12, lineHeight: 18, marginBottom: 4 },
+  contextItemMeta: { color: '#64748b', fontSize: 10 },
+  consentBox: { flexDirection: 'row', gap: 10, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)', padding: 13, marginTop: 12 },
+  consentBoxActive: { borderColor: '#d4af37', backgroundColor: 'rgba(212,175,55,0.07)' },
+  consentText: { color: '#cbd5e1', fontSize: 12, lineHeight: 18, flex: 1 },
+  warningCard: { backgroundColor: 'rgba(245,158,11,0.08)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(245,158,11,0.25)', padding: 12, marginTop: 10, marginBottom: 14 },
+  warningText: { color: '#fde68a', fontSize: 12, lineHeight: 18 },
+  groundedBadge: { alignSelf: 'flex-start', backgroundColor: 'rgba(16,185,129,0.10)', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(16,185,129,0.25)' },
+  groundedBadgeText: { color: '#6ee7b7', fontSize: 10, fontWeight: '800' },
   headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 16 },
   progress: { color: '#94a3b8', fontSize: 12, marginTop: 4 },
   exitText: { color: '#f87171', fontSize: 12, fontWeight: '800', paddingVertical: 8 },
