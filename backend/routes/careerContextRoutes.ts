@@ -11,7 +11,10 @@ import { createGroundingSnapshot, getSnapshotById } from '../services/groundingS
 import { createModuleBridgeSession } from '../services/moduleBridgeService';
 import { projectCareerContext } from '../services/careerContextProjectionService';
 import { buildResumeContextItems } from '../services/careerContextAdapters/resumeContextAdapter';
-import { buildClearSpeakContextItems } from '../services/careerContextAdapters/clearSpeakContextAdapter';
+import {
+  buildAccentEvidenceContextItems,
+  buildClearSpeakContextItems,
+} from '../services/careerContextAdapters/clearSpeakContextAdapter';
 import { buildInterviewContextItems } from '../services/careerContextAdapters/interviewContextAdapter';
 import { supabaseAdmin } from '../supabaseAdmin';
 import {
@@ -93,7 +96,7 @@ router.post('/rebuild', async (req, res) => {
       });
     }
 
-    // 2. Rebuild from clearspeak_profiles & clearspeak_sessions
+    // 2. Rebuild from legacy ClearSpeak profile/session sources.
     const { data: csProfiles, error: csProfilesError } = await supabaseAdmin
       .from('clearspeak_profiles')
       .select('*')
@@ -142,6 +145,33 @@ router.post('/rebuild', async (req, res) => {
           drafts.push(...items);
         }
       });
+    }
+
+    // 2b. P0-5 Accent Practice: ingest only the newest persisted real V2
+    // scored attempt that actually contains strict evidence-backed coaching.
+    // V1/synthetic/unscored evidence produces no Career Context claims.
+    const { data: accentAttempts, error: accentAttemptsError } = await supabaseAdmin
+      .from('clearspeak_accent_attempts')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (accentAttemptsError) {
+      throw Object.assign(new Error(`Failed to read ClearSpeak Accent sources: ${accentAttemptsError.message}`), { status: 503 });
+    }
+
+    if (accentAttempts && accentAttempts.length > 0) {
+      for (const attempt of accentAttempts) {
+        if (attempt.fixture === true || attempt.scoring_contract_version !== 'accent-score.v2') continue;
+        const items = buildAccentEvidenceContextItems({
+          attemptId: attempt.attempt_id,
+          result: attempt.result,
+        });
+        if (items.length > 0) {
+          drafts.push(...items);
+          break;
+        }
+      }
     }
 
     // 3. Rebuild from interview_sessions & reports
