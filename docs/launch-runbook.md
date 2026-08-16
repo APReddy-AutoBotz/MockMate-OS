@@ -6,7 +6,7 @@ P0-7 Mobile Career Context & Account Authority Parity is merged on `main` at `38
 
 P0-8 Authorized Hosted Preview & Production-Like Acceptance is active in Draft PR #18. AP authorized a **dedicated preview/test environment only** on 2026-08-16. That authorization covers bounded preview infrastructure and controller-owned test identities; it does not authorize public production promotion, uncontrolled/public users, customer/job-candidate data, native store publication, or purchase/selection of a new paid ClearSpeak provider.
 
-Current terminal hosted state is **`DEDICATED_MOCKMATE_SUPABASE_TARGET_MISSING`**. The connected Supabase inventory contains no dedicated MockMate project. Existing unrelated projects must not be reused. The connected Vercel `Autobotz` team currently has no projects, so there is no legacy MockMate deployment to reconcile.
+Current terminal hosted state is **`DEDICATED_SUPABASE_ACTIVE__VERCEL_PREVIEW_NOT_BOUND`**. The isolated `MockMate-P0-8-Preview` project (`cysnsoeonyhcshjjpezk`, `ap-south-1`) is active, its ordered migrations are applied, and both Supabase advisors report zero WARN findings. Do not repeat database activation or reuse another project. The connected Vercel `Autobotz` team currently has no project, so no preview is bound.
 
 Use this runbook for P0-8 preview acceptance and for future launch milestones. A later public/native release still requires its own gate.
 
@@ -42,7 +42,7 @@ The full GitHub MockMate Production Readiness workflow is the retained merge aut
 
 ## 3. Dedicated Supabase Preview
 
-Use only a newly created or explicitly identified **MockMate preview/test** project. Do not use another product's project as a shortcut.
+The dedicated **MockMate preview/test** project is already active. Do not recreate, repurpose, or mutate it during source-only work.
 
 Before mutation:
 
@@ -57,7 +57,7 @@ Before mutation:
 9. Prove two-user RLS isolation, Career Context authority, ClearSpeak attempt lifecycle authority and account-data deletion.
 10. Remove bounded test data through authoritative deletion paths after evidence capture.
 
-If a dedicated target cannot be identified safely, stop with `DEDICATED_MOCKMATE_SUPABASE_TARGET_MISSING` rather than mutating an unrelated project.
+The next authorized hosted step is exact Vercel preview binding; until then stop with `DEDICATED_SUPABASE_ACTIVE__VERCEL_PREVIEW_NOT_BOUND`.
 
 ## 4. Vercel Preview
 

@@ -1,6 +1,6 @@
 # MockMate Free-First Production Setup
 
-> Current authority (2026-08-16): P0-7 Mobile Career Context & Account Authority Parity is merged on `main` at `38520a682d1ac6bd9e82724e753f03f67c87cb5f`, and post-merge Production Readiness run #316 / `31941312775` is fully green. P0-8 Authorized Hosted Preview & Production-Like Acceptance is active in Draft PR #18 and AP has authorized a **dedicated preview/test environment only**. The current hosted stop is `DEDICATED_MOCKMATE_SUPABASE_TARGET_MISSING`; unrelated Supabase projects must not be reused.
+> Current authority (2026-08-16): P0-7 Mobile Career Context & Account Authority Parity is merged on `main` at `38520a682d1ac6bd9e82724e753f03f67c87cb5f`, and post-merge Production Readiness run #316 / `31941312775` is fully green. P0-8 Authorized Hosted Preview & Production-Like Acceptance is active in Draft PR #18 and AP has authorized a **dedicated preview/test environment only**. The current hosted stop is `DEDICATED_SUPABASE_ACTIVE__VERCEL_PREVIEW_NOT_BOUND`; the isolated preview database is active and must not be recreated or replaced with an unrelated project.
 
 ## Runtime authority contract
 
@@ -14,9 +14,9 @@ MockMate is wired for Vercel + Supabase with a free-first launch posture: user-o
 
 ## 1. Supabase
 
-P0-8 authorizes a dedicated MockMate preview/test project only. The connected account currently has no such project, so hosted database work remains fail-closed until one is explicitly created or identified.
+The dedicated `MockMate-P0-8-Preview` project (`cysnsoeonyhcshjjpezk`, `ap-south-1`) is active with the complete ordered migration chain and zero WARN findings from both Supabase advisors. Database activation is complete; do not repeat it during Vercel binding.
 
-When the dedicated target is available:
+The retained database controls are:
 
 1. Record its non-secret project reference and pre-mutation migration state.
 2. Confirm exact-head P0-8 Production Readiness is green.
@@ -56,7 +56,7 @@ cd backend && npm install
 
 ## 3. Vercel Preview
 
-The connected `Autobotz` Vercel team currently contains no projects, so P0-8 has no legacy deployment to reconcile. Once the dedicated Supabase preview target is available, use the existing `vercel.json` architecture to create a **preview deployment only**.
+The connected `Autobotz` Vercel team currently contains no projects, so P0-8 has no legacy deployment to reconcile. Bind the already-active dedicated Supabase target using the existing `vercel.json` architecture in a separately authorized **preview deployment only**.
 
 Keep all service-role/provider/admin values server-only and bind the deployment with:
 

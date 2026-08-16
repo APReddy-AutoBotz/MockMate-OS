@@ -49,18 +49,24 @@ try {
   fail('HOSTED_ACCEPTANCE_SCENARIOS_FILE is not valid JSON.');
 }
 
-const requiredFamilies = new Set([
-  'runtime', 'pwa', 'auth', 'resume', 'clearspeak', 'interview', 'career-context',
-  'account-deletion', 'admin-privacy', 'concurrency', 'replay', 'cross-user-isolation',
+const requiredOperations = new Set([
+  'runtime.health', 'pwa.manifest', 'pwa.offline', 'auth.identity',
+  'resume.parse', 'resume.score', 'resume.suggest',
+  'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.delete',
+  'interview.create', 'interview.answer', 'interview.report',
+  'career-context.create', 'career-context.update', 'career-context.delete',
+  'admin.denied', 'cross-user.denied', 'partial-failure.malformed',
+  'concurrency.exactly-once', 'replay.response-loss',
+  'account.delete', 'account.owner-aftermath', 'account.cross-user-aftermath',
 ]);
-if (!manifest || manifest.schemaVersion !== 2 || !Array.isArray(manifest.scenarios) || manifest.scenarios.length === 0) {
-  fail('Scenario manifest must use schemaVersion 2 and contain scenarios.');
+if (!manifest || manifest.schemaVersion !== 3 || !Array.isArray(manifest.scenarios) || manifest.scenarios.length === 0 || manifest.scenarios.length > 64) {
+  fail('Scenario manifest must use schemaVersion 3 and contain 1-64 scenarios.');
 }
 if (JSON.stringify(manifest).includes('__CONTROLLER_REPLACE__')) {
   fail('Scenario manifest still contains controller placeholders.');
 }
-for (const family of requiredFamilies) {
-  if (!manifest.scenarios.some((scenario) => scenario.family === family)) fail(`Scenario manifest is missing required family: ${family}.`);
+for (const operation of requiredOperations) {
+  if (!manifest.scenarios.some((scenario) => scenario.operation === operation)) fail(`Scenario manifest is missing required governed operation: ${operation}.`);
 }
 
 const tokens = { userA: userAToken, userB: userBToken, admin: adminToken };
@@ -68,6 +74,8 @@ const results = [];
 const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const allowedAssertionOps = new Set(['exists', 'equals', 'oneOf', 'type', 'matches', 'includes']);
 const allowedJsonTypes = new Set(['string', 'number', 'boolean', 'object', 'array', 'null']);
+const MAX_RESPONSE_BYTES = 256 * 1024;
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 function exactTargetUrl(scenarioId, scenarioPath) {
   if (!scenarioPath.startsWith('/') || scenarioPath.startsWith('//') || scenarioPath.includes('\\')) {
@@ -106,7 +114,7 @@ function valueType(value) {
 }
 
 function validateAssertions(assertions, responseData, scenarioId, phase) {
-  if (!Array.isArray(assertions) || assertions.length === 0) {
+  if (!Array.isArray(assertions) || assertions.length === 0 || assertions.length > 24) {
     fail(`Scenario ${scenarioId} ${phase} must declare semantic assertions.`);
   }
   assertions.forEach((assertion, index) => {
@@ -157,6 +165,13 @@ function validateAssertions(assertions, responseData, scenarioId, phase) {
   });
 }
 
+function validateAssertionDeclarations(assertions, scenarioId, phase) {
+  if (!Array.isArray(assertions) || assertions.length === 0 || assertions.length > 24) fail(`Scenario ${scenarioId} ${phase} must declare 1-24 semantic assertions.`);
+  for (const assertion of assertions) {
+    if (!assertion || !['json', 'header', 'text'].includes(assertion.source) || !allowedAssertionOps.has(assertion.op)) fail(`Scenario ${scenarioId} ${phase} has an invalid assertion.`);
+  }
+}
+
 function validateRequestShape(spec, scenarioId, phase) {
   if (!spec || typeof spec.path !== 'string' || typeof spec.method !== 'string' || !Array.isArray(spec.expectedStatuses)) {
     fail(`Scenario ${scenarioId} ${phase} has an invalid request shape.`);
@@ -169,7 +184,7 @@ function validateRequestShape(spec, scenarioId, phase) {
   const auth = spec.auth ?? 'none';
   if (!['none', 'userA', 'userB', 'admin'].includes(auth)) fail(`Scenario ${scenarioId} ${phase} has an invalid auth selector.`);
   if (auth === 'admin' && !adminToken) fail(`Scenario ${scenarioId} ${phase} requires MOCKMATE_TEST_ADMIN_TOKEN.`);
-  validateAssertions(spec.assertions, { json: {}, headers: new Headers(), text: '' }, scenarioId, `${phase} declaration`);
+  validateAssertionDeclarations(spec.assertions, scenarioId, phase);
   return { method, auth, targetUrl: exactTargetUrl(scenarioId, spec.path) };
 }
 
@@ -187,22 +202,51 @@ async function executeRequest(spec, scenarioId, phase) {
 
   const headers = { Accept: 'application/json', Origin: origin };
   if (auth !== 'none') headers.Authorization = `Bearer ${tokens[auth]}`;
-  if (spec.body !== undefined) headers['Content-Type'] = 'application/json';
-
-  const response = await fetch(targetUrl, {
-    method,
-    headers,
-    redirect: 'manual',
-    body: spec.body === undefined ? undefined : JSON.stringify(spec.body),
-  });
-  const text = await response.text();
-  let json;
-  if (text) {
-    try { json = JSON.parse(text); } catch { json = undefined; }
+  if (spec.idempotencyKey) headers['Idempotency-Key'] = spec.idempotencyKey;
+  let requestBody;
+  let rawBuffer;
+  if (spec.multipart) {
+    const { fileEnv, fileField, filename, contentType, fields = {} } = spec.multipart;
+    if (!['RESUME_FIXTURE_PATH', 'CLEARSPEAK_FIXTURE_PATH'].includes(fileEnv) || !['resume', 'audio'].includes(fileField) || typeof filename !== 'string' || typeof contentType !== 'string') fail(`Scenario ${scenarioId} ${phase} has an invalid multipart declaration.`);
+    const fixturePath = requireValue(fileEnv);
+    const stat = fs.statSync(fixturePath);
+    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_UPLOAD_BYTES) fail(`Scenario ${scenarioId} ${phase} multipart fixture must be 1-${MAX_UPLOAD_BYTES} bytes.`);
+    rawBuffer = fs.readFileSync(fixturePath);
+    const form = new FormData();
+    form.append(fileField, new Blob([rawBuffer], { type: contentType }), filename);
+    for (const [key, value] of Object.entries(fields)) {
+      if (typeof value !== 'string' || value.length > 4096) fail(`Scenario ${scenarioId} ${phase} has an invalid multipart field.`);
+      form.append(key, value);
+    }
+    requestBody = form;
+  } else if (spec.body !== undefined) {
+    const encoded = JSON.stringify(spec.body);
+    if (Buffer.byteLength(encoded) > MAX_RESPONSE_BYTES) fail(`Scenario ${scenarioId} ${phase} JSON body is oversized.`);
+    headers['Content-Type'] = 'application/json';
+    requestBody = encoded;
   }
-  if (!spec.expectedStatuses.includes(response.status)) throw new Error(`Scenario ${scenarioId} ${phase} returned unexpected status ${response.status}.`);
-  validateAssertions(spec.assertions, { json, headers: response.headers, text }, scenarioId, phase);
-  return { status: response.status };
+
+  let response;
+  try {
+    response = await fetch(targetUrl, { method, headers, redirect: 'manual', body: requestBody });
+  } finally {
+    rawBuffer?.fill(0);
+  }
+  const responseBuffer = Buffer.from(await response.arrayBuffer());
+  if (responseBuffer.length > MAX_RESPONSE_BYTES) { responseBuffer.fill(0); throw new Error(`Scenario ${scenarioId} ${phase} response is oversized.`); }
+  try {
+    const text = responseBuffer.toString('utf8');
+    let json;
+    if (text) {
+      try { json = JSON.parse(text); } catch { json = undefined; }
+    }
+    if (!spec.expectedStatuses.includes(response.status)) throw new Error(`Scenario ${scenarioId} ${phase} returned unexpected status ${response.status}.`);
+    validateAssertions(spec.assertions, { json, headers: response.headers, text }, scenarioId, phase);
+    const canonical = (spec.canonicalPaths ?? []).map((pointer) => jsonPointerValue(json, pointer).value);
+    return { status: response.status, canonical };
+  } finally {
+    responseBuffer.fill(0);
+  }
 }
 
 function executionPlan(scenario) {
@@ -223,25 +267,38 @@ function executionPlan(scenario) {
 }
 
 async function requestScenario(scenario) {
-  if (!scenario || typeof scenario.id !== 'string' || typeof scenario.family !== 'string' || typeof scenario.path !== 'string' || typeof scenario.method !== 'string') {
+  if (!scenario || typeof scenario.id !== 'string' || typeof scenario.family !== 'string' || typeof scenario.operation !== 'string' || typeof scenario.path !== 'string' || typeof scenario.method !== 'string') {
     fail('Scenario manifest contains an invalid scenario shape.');
   }
   const plan = executionPlan(scenario);
+  validateRequestShape(scenario, scenario.id, 'request');
   const statuses = [];
+  const canonical = [];
   if (plan.mode === 'parallel') {
     const attempts = await Promise.all(Array.from({ length: plan.attempts }, (_, index) => executeRequest(scenario, scenario.id, `parallel attempt ${index + 1}`)));
     statuses.push(...attempts.map((attempt) => attempt.status));
+    canonical.push(...attempts.map((attempt) => attempt.canonical));
   } else {
     for (let index = 0; index < plan.attempts; index += 1) {
       const attempt = await executeRequest(scenario, scenario.id, `${plan.mode} attempt ${index + 1}`);
       statuses.push(attempt.status);
+      canonical.push(attempt.canonical);
     }
   }
 
   let verificationStatus;
   if (scenario.verification) {
+    validateRequestShape(scenario.verification, scenario.id, 'post-state verification');
     const verification = await executeRequest(scenario.verification, scenario.id, 'post-state verification');
     verificationStatus = verification.status;
+  }
+
+  if (plan.attempts > 1) {
+    if (typeof scenario.idempotencyKey !== 'string' || scenario.idempotencyKey.length < 8 || scenario.idempotencyKey.length > 128) fail(`Scenario ${scenario.id} requires a stable bounded idempotency identity.`);
+    if (!Array.isArray(scenario.canonicalPaths) || scenario.canonicalPaths.length === 0 || scenario.canonicalPaths.length > 12) fail(`Scenario ${scenario.id} requires bounded canonical response paths.`);
+    if (!canonical.every((value) => JSON.stringify(value) === JSON.stringify(canonical[0]))) throw new Error(`Scenario ${scenario.id} canonical responses diverged.`);
+    const provesOneEffect = scenario.verification.assertions.some((assertion) => assertion.op === 'equals' && assertion.value === 1);
+    if (!provesOneEffect) fail(`Scenario ${scenario.id} post-state oracle must prove exactly one authoritative effect.`);
   }
 
   results.push({
@@ -281,7 +338,7 @@ try {
 }
 
 const evidence = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   generatedAt: new Date().toISOString(),
   expectedHeadSha,
   previewOriginHost: originUrl.hostname,

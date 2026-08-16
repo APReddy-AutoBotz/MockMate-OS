@@ -35,7 +35,7 @@ assert.match(harness, /supabaseProjectRef/, 'hosted acceptance must verify Supab
 assert.match(harness, /Hostile origin was accepted by CORS/, 'hosted acceptance must reject hostile origins');
 
 // P1 closure: a passing HTTP status alone is never acceptance.
-assert.equal(template.schemaVersion, 2, 'hosted scenario template must use semantic schemaVersion 2');
+assert.equal(template.schemaVersion, 3, 'hosted scenario template must use governed-operation schemaVersion 3');
 assert.match(harness, /validateAssertions/, 'hosted acceptance must validate response semantics');
 assert.match(harness, /semantic assertion/, 'semantic assertion failures must fail the run');
 assert.ok(template.scenarios.every((scenario) => Array.isArray(scenario.assertions) && scenario.assertions.length > 0), 'every governed scenario must declare semantic assertions');
@@ -57,9 +57,25 @@ assert.match(harness, /family === 'replay'/, 'replay execution constraints must 
 
 // Evidence may carry statuses and counts, never response bodies or bearer material.
 const evidenceSlice = harness.slice(harness.indexOf('const evidence ='));
+const resultSlice = harness.slice(harness.indexOf('results.push('), harness.indexOf('async function preflight'));
 assert.ok(!/responseData|responseBody|responseText|Authorization|Bearer/.test(evidenceSlice), 'evidence construction must not persist response bodies or credentials');
-assert.match(evidenceSlice, /statuses/, 'evidence may retain non-secret status metadata');
-assert.match(evidenceSlice, /verificationStatus/, 'evidence may retain non-secret verification status metadata');
+assert.match(resultSlice, /statuses/, 'bounded results may retain non-secret status metadata');
+assert.match(resultSlice, /verificationStatus/, 'bounded results may retain non-secret verification status metadata');
+assert.match(evidenceSlice, /results/, 'evidence may contain only the privacy-bounded result collection');
+
+const operations = new Set(template.scenarios.map((scenario) => scenario.operation));
+for (const required of ['resume.parse', 'resume.score', 'resume.suggest', 'clearspeak.create', 'account.delete', 'account.owner-aftermath', 'account.cross-user-aftermath']) {
+  assert.ok(operations.has(required), `template must contain governed operation ${required}`);
+}
+assert.ok(template.scenarios.some((scenario) => scenario.multipart?.fileField === 'resume'), 'Resume must use the registered multipart file field');
+assert.ok(template.scenarios.some((scenario) => scenario.multipart?.fileField === 'audio'), 'ClearSpeak must use the registered multipart file field');
+assert.match(harness, /rawBuffer\?\.fill\(0\)/, 'raw multipart buffers must be wiped');
+assert.match(harness, /requiredOperations/, 'coverage must be explicit operations, not family labels');
+assert.match(harness, /canonical responses diverged/, 'retries must compare canonical responses');
+assert.match(harness, /exactly one authoritative effect/, 'retries must prove one authoritative effect');
+assert.equal(template.scenarios.at(-3).operation, 'account.delete', 'genuine deletion must precede aftermath probes');
+assert.equal(template.scenarios.at(-2).operation, 'account.owner-aftermath', 'owner aftermath must follow deletion');
+assert.equal(template.scenarios.at(-1).operation, 'account.cross-user-aftermath', 'cross-user aftermath must follow deletion');
 
 assert.equal(packageJson.scripts['acceptance:hosted'], 'node scripts/hosted-preview-acceptance.mjs');
 assert.equal(packageJson.scripts['test:hosted-acceptance-contract'], 'node scripts/test-hosted-acceptance-guard.mjs');

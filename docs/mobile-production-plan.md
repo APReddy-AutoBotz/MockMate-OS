@@ -117,7 +117,7 @@ P0-6 + P0-7 source scope now on `main` includes:
 
 ### Phase 3 — Hosted Browser/API Acceptance — P0-8 current milestone
 
-P0-8 first proves the shared backend and browser journeys in an exact, dedicated Vercel + Supabase preview before native device execution. Current blocker: `DEDICATED_MOCKMATE_SUPABASE_TARGET_MISSING`.
+P0-8 first proves the shared backend and browser journeys in an exact, dedicated Vercel + Supabase preview before native device execution. The dedicated Supabase target is active; current blocker: `DEDICATED_SUPABASE_ACTIVE__VERCEL_PREVIEW_NOT_BOUND`.
 
 Required hosted proof includes exact target binding, bounded auth identities, Resume, ClearSpeak, Interview, Career Context/grounding, account deletion, cross-user isolation, concurrency/replay, admin/privacy and PWA/offline truth. Mobile does not become release-ready merely because this browser/API gate passes.
 

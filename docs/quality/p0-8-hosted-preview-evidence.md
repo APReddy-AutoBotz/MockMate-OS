@@ -70,6 +70,17 @@ Before a mutation-capable hosted run, replace every `__CONTROLLER_REPLACE__` pla
 
 ## Dedicated Supabase activation gate
 
+## Frozen hosted-acceptance closure matrix
+
+- **Functional:** schema-v3 manifest → exact-target preflight → authenticated governed operation → family-specific semantic/state proof → bounded evidence.
+- **Authority/RLS:** exact origin, preview target, Supabase ref and deployed head remain bound; owner, non-admin and cross-user outcomes use semantic oracles rather than status proxies.
+- **Concurrency:** two-to-five parallel duplicate requests retain one stable idempotency identity, canonical responses and exactly one authoritative effect.
+- **Response-loss replay:** two-to-five sequential retries retain the same identity and prove canonical response/effect equality after a simulated lost response.
+- **Lifecycle:** registered create/update/delete and upload transitions culminate in genuine account deletion plus owner and cross-user aftermath.
+- **Partial failure:** missing operations/oracles, malformed responses, unauthorized access, provider unavailability, divergence and duplicate effects fail closed.
+- **Bounds/privacy:** at most 64 scenarios, 5 MiB synthetic uploads, 256 KiB parsed responses, 24 assertions and 12 canonical paths; raw buffers are wiped and bodies/tokens are excluded from evidence.
+- **Fallback/retention:** no localhost or family-label proxy represents hosted proof; all P0-1–P0-8 security, RLS, replay, privacy and mobile gates remain authoritative.
+
 The dedicated database portion of this gate is now satisfied through schema/advisor activation. Before hosted functional mutation, the remaining controls are:
 
 1. exact-head source CI must remain green after every source/evidence update;
