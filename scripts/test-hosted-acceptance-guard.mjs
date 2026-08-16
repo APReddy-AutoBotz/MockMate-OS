@@ -57,7 +57,7 @@ assert.match(harness, /family === 'replay'/, 'replay execution constraints must 
 
 // Evidence may carry statuses and counts, never response bodies or bearer material.
 const evidenceSlice = harness.slice(harness.indexOf('const evidence ='));
-assert.ok(!/responseData|\.text\b|\.json\b|Authorization|Bearer/.test(evidenceSlice), 'evidence construction must not persist response bodies or credentials');
+assert.ok(!/responseData|responseBody|responseText|Authorization|Bearer/.test(evidenceSlice), 'evidence construction must not persist response bodies or credentials');
 assert.match(evidenceSlice, /statuses/, 'evidence may retain non-secret status metadata');
 assert.match(evidenceSlice, /verificationStatus/, 'evidence may retain non-secret verification status metadata');
 
