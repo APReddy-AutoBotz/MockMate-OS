@@ -12,9 +12,11 @@ The production direction is Vercel + Supabase:
 
 ## Current App Status
 
-P0-6 Mobile Core Journey Parity is merged on `main` at `4a465aab6a412917780e9ac7a9a7ced778238388`. Post-merge MockMate Production Readiness run #273 is fully green across retained contracts, browser/adaptive/Career Context journeys, PostgreSQL/RLS assertions, mobile typecheck/lint/parity, security checks and source-only readiness evidence.
+P0-7 Mobile Career Context & Account Authority Parity is merged on `main` at `38520a682d1ac6bd9e82724e753f03f67c87cb5f`. Post-merge MockMate Production Readiness run #316 / `31941312775` is fully green across retained contracts, browser/adaptive/Career Context journeys, PostgreSQL/RLS assertions, account deletion, mobile typecheck/lint/governed parity, security checks, secret scans and source-only readiness evidence.
 
-P0-7 Mobile Career Context & Account Authority Parity is source-only work in Draft PR #16. It adds native Career Context controls, explicit one-time grounded Interview lineage, and governed app-data deletion. It does not authorize or prove a hosted preview, provider execution, real-user validation, deployment, EAS build, store release, or public native availability.
+P0-8 Authorized Hosted Preview & Production-Like Acceptance is active in Draft PR #18. AP has authorized a **dedicated preview/test environment only**. P0-8 adds exact preview/Supabase target binding, fail-closed hosted acceptance, non-secret evidence/rollback authority and the path to production-like browser/API proof. It does not authorize public production promotion, uncontrolled/public users, customer data, native store publication, or purchase/selection of a new paid ClearSpeak provider.
+
+The current infrastructure blocker is `DEDICATED_MOCKMATE_SUPABASE_TARGET_MISSING`: the connected Supabase account has no dedicated MockMate project, and unrelated projects must not be reused. The connected Vercel `Autobotz` team currently has no projects, so there is also no legacy deployment to reconcile.
 
 The browser app remains the primary working product.
 
@@ -24,10 +26,10 @@ The `mobile/` folder is an Android-first Expo app prepared for internal source v
 
 - Node.js 20+
 - npm
-- Supabase project
-- Gemini and/or Groq API keys for AI features
-- Vercel account for deployment
-- Expo/EAS account for Android internal testing
+- Dedicated MockMate Supabase preview/test project for hosted P0-8 work
+- Already-authorized Gemini and/or Groq API keys for AI features
+- Vercel account for preview deployment
+- Expo/EAS account for later Android internal testing
 
 ## Local Setup
 
@@ -45,7 +47,7 @@ npm install
 cd ..
 ```
 
-Copy `.env.example` to `.env` and fill the Supabase and AI keys:
+Copy `.env.example` to `.env` and fill the Supabase and AI keys for local development:
 
 ```env
 VITE_SUPABASE_URL=...
@@ -87,49 +89,60 @@ npm run build
 cd backend && npm run build
 ```
 
-Or run the combined production gate from the repo root:
+Or run the combined source gates from the repo root:
 
 ```bash
 npm run check:production
 npm run audit:production
 npm run check:mobile
 npm run check:preview-readiness
+npm run test:hosted-acceptance-contract
 ```
 
-The smoke contract defaults to a disposable local server. A future remote run is fail-closed unless AP has separately authorized the hosted inspection and `AUTHORIZE_HOSTED_PREVIEW_SMOKE=true` is deliberately set:
+The deployed smoke contract defaults to a disposable/local target. Remote smoke remains separately opt-in:
 
 ```bash
 npm run smoke:deployed -- https://your-preview.vercel.app
 ```
 
-## Production Deployment
+The P0-8 hosted acceptance runner is **not** part of ordinary PR/release CI. It refuses execution unless all controller authorization, bounded-test-data and exact-target variables are deliberately supplied. Start from `config/hosted-acceptance-scenarios.example.json`, create a non-committed reviewed manifest, and follow `docs/quality/p0-8-hosted-preview-evidence.md`.
 
-**STOP: `HOSTED_PREVIEW_NOT_AUTHORIZED`.** Current evidence proves source/disposable behavior only. Separate AP approval is required before configuring, inspecting, or mutating Vercel/Supabase; setting or using real credentials; calling providers; creating real users; deploying/promoting; or running EAS/store distribution.
+## P0-8 Preview Deployment
 
-When that future gate is explicitly authorized, use one Vercel project for the browser app and API functions. Set the variables listed in `.env.example`, with:
+P0-8 preview/test deployment is authorized, but only after a dedicated MockMate Supabase target is explicitly created or identified. Do not reuse Boundaryless RUT, WorkOS, Kootha, AvalaOS, Creator Studio or any other unrelated project.
+
+For preview runtime, the server must use:
 
 ```env
+MOCKMATE_RUNTIME_MODE=preview
 ENABLE_DEV_AUTH=false
-ALLOWED_ORIGINS=https://your-domain.vercel.app
+VITE_ENABLE_DEV_AUTH=false
+ALLOWED_ORIGINS=https://your-exact-preview.vercel.app
+PREVIEW_ORIGIN=https://your-exact-preview.vercel.app
+MOCKMATE_PREVIEW_TARGET_ID=mockmate-p0-8-preview
+MOCKMATE_SUPABASE_PROJECT_REF=<20-character-project-ref>
 ```
 
-`vercel.json` builds the frontend, builds the backend, and lets Vercel route `/api/*` through the Express app in `api/[...path].ts`.
+`SUPABASE_URL` and `VITE_SUPABASE_URL` must both resolve to that exact project reference. `SUPABASE_SERVICE_ROLE_KEY` remains server-only and must never equal or be exposed as the browser public/anon key. `vercel.json` continues to build the frontend, build the backend, and route `/api/*` through the Express app in `api/[...path].ts`.
+
+`/api/health` exposes only non-secret preview binding identity so the controller can prove it reached the exact authorized Vercel/Supabase pair.
 
 ## Production Launch Checklist
 
-Before inviting real users:
+P0-8 is preview acceptance, not public launch. Before inviting real users in a later milestone:
 
-- Obtain explicit hosted-preview authorization.
-- Deploy a Vercel preview with Supabase production-like environment variables.
-- Confirm `/api/health` works and protected APIs return `401` without a Supabase token.
-- Run a real signup, onboarding, resume review, speaking practice, interview practice, Career Context, report, and delete-app-data flow.
-- Confirm the app can be installed from Chrome as a PWA and shows a clear offline message.
-- Check `/api/admin/usage` using an email listed in `ADMIN_EMAILS`.
-- Review privacy and terms copy from the landing footer.
-- Run Android/iOS preview builds only after the deployed API and Supabase auth are separately authorized and working.
+- Complete a dedicated MockMate Supabase preview and exact Vercel preview deployment.
+- Prove `/api/health` target binding and protected API `401` rejection without a Supabase token.
+- Run the governed hosted acceptance matrix with two bounded controller-owned identities.
+- Prove signup/session, Resume, ClearSpeak, Interview, Career Context/grounding, report, account-data deletion, admin/privacy, PWA/offline truth, concurrency/replay and cross-user isolation.
+- Confirm no raw resume/audio evidence, credentials or private response bodies are retained in artifacts/logs.
+- Run a fresh exact-head independent Codex P1/P2 review.
+- Keep native internal builds and all public/store promotion in their separately authorized milestones.
 
 ## Documentation
 
 - `docs/free-first-production.md`: Supabase/Vercel setup, quotas, privacy, and launch checks
 - `docs/launch-runbook.md`: exact production preview and launch checklist
 - `docs/mobile-production-plan.md`: Android/iOS production path
+- `docs/planning/p0-8-hosted-preview-acceptance-plan.md`: frozen P0-8 controller plan
+- `docs/quality/p0-8-hosted-preview-evidence.md`: hosted target authority, evidence and rollback ledger
