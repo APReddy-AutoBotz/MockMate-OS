@@ -21,10 +21,11 @@ P0-8 preview runtime must fail closed unless all of these agree:
 5. `MOCKMATE_PREVIEW_TARGET_ID` is explicitly configured;
 6. `MOCKMATE_SUPABASE_PROJECT_REF` is a 20-character Supabase project reference;
 7. both server and browser Supabase URLs resolve to that exact project reference;
-8. service-role authority is server-only and cannot equal the browser public/anon key;
-9. at least one already-authorized AI provider is configured where production-like startup requires provider authority.
+8. Vercel's system-provided `VERCEL_GIT_COMMIT_SHA` is present and is a 40-character Git SHA;
+9. service-role authority is server-only and cannot equal the browser public/anon key;
+10. at least one already-authorized AI provider is configured where production-like startup requires provider authority.
 
-The preview health response may expose only non-secret target binding metadata (`mode`, authority state, preview target ID, Supabase project reference). It must never expose credentials, tokens, test-user identifiers, provider keys, raw resumes, raw audio, interview content, or recovery payloads.
+The preview health response may expose only non-secret target binding metadata (`mode`, authority state, preview target ID, Supabase project reference, deployed Git head SHA). It must never expose credentials, tokens, test-user identifiers, provider keys, raw resumes, raw audio, interview content, or recovery payloads.
 
 ## Hosted acceptance authority
 
@@ -38,6 +39,8 @@ The preview health response may expose only non-secret target binding metadata (
 - exact 40-character expected Git head;
 - two bounded controller-owned test-user tokens;
 - a controller-reviewed scenario manifest containing every required acceptance family.
+
+Before any bearer token is attached, each scenario path must be a single-slash relative path that resolves back to the exact authorized Vercel origin. Protocol-relative (`//...`), backslash-ambiguous, malformed, or cross-origin paths are rejected. Hosted preflight must also prove that `/api/health` reports the same deployed Git SHA as `EXPECTED_HEAD_SHA`; recording an expected SHA without verifying the deployed SHA is not acceptable evidence.
 
 Generated acceptance evidence contains non-secret target metadata, scenario IDs/families/statuses, a manifest SHA-256, and an artifact SHA-256. Response bodies and bearer tokens are never written to the evidence file. `artifacts/` remains Git-ignored.
 
@@ -63,13 +66,14 @@ Only a newly created or explicitly identified **MockMate preview/test** project 
 
 ## Vercel preview gate
 
-Use the existing `vercel.json` + Vite + Express serverless architecture. Preview only; never production promotion in P0-8. The exact Vercel preview origin must be bound into both runtime configuration and the hosted acceptance command. No deployment may proceed against an unrelated Supabase project.
+Use the existing `vercel.json` + Vite + Express serverless architecture. Preview only; never production promotion in P0-8. The exact Vercel preview origin must be bound into both runtime configuration and the hosted acceptance command. Vercel system environment variables must be exposed so runtime can receive `VERCEL_GIT_COMMIT_SHA`; the acceptance harness must compare that deployed SHA with the exact expected PR head. No deployment may proceed against an unrelated Supabase project.
 
 ## Immediate rollback / stop conditions
 
 Stop or roll back the preview if any of the following occurs:
 
-- preview origin, target ID, Git head or Supabase project binding mismatch;
+- preview origin, target ID, deployed Git head or Supabase project binding mismatch;
+- a scenario path can escape the exact authorized origin;
 - secret, bearer token, raw resume/audio, interview content, or private recovery state appears in logs/evidence;
 - cross-user access is observed;
 - RLS/RPC/grant or migration/advisor regression appears;
