@@ -175,29 +175,39 @@ requireBefore(
   'return materializePendingGrounding(pending);',
   'Interview fresh lineage persistence ordering',
 );
-requireBefore(
-  interview,
-  "const started = await apiClient.post(",
-  'await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);',
-  'Interview session success before durable recovery cleanup',
-);
-requireBefore(
-  interview,
-  'await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);',
-  'pendingGroundingRef.current = null;',
-  'Interview durable recovery cleanup before in-memory release',
-);
-requireBefore(
-  interview,
-  'await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);',
-  'setPlan(generatedPlan);',
-  'Interview durable recovery cleanup before local session progression',
-);
-requireText(
-  interview,
-  'Retry the exact grounded launch before continuing.',
-  'Interview durable cleanup failure must fail closed',
-);
+
+const sessionStartMarker = "const started = await apiClient.post(";
+const sessionEndMarker = '  const applyTurnResult = async';
+const sessionStartIndex = interview.indexOf(sessionStartMarker);
+const sessionEndIndex = interview.indexOf(sessionEndMarker, sessionStartIndex);
+if (sessionStartIndex < 0 || sessionEndIndex < 0 || sessionStartIndex >= sessionEndIndex) {
+  fail('Interview durable cleanup parity could not isolate the session-success block');
+} else {
+  const sessionSuccessSlice = interview.slice(sessionStartIndex, sessionEndIndex);
+  requireBefore(
+    sessionSuccessSlice,
+    sessionStartMarker,
+    'await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);',
+    'Interview session success before durable recovery cleanup',
+  );
+  requireBefore(
+    sessionSuccessSlice,
+    'await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);',
+    'pendingGroundingRef.current = null;',
+    'Interview durable recovery cleanup before in-memory release',
+  );
+  requireBefore(
+    sessionSuccessSlice,
+    'await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);',
+    'setPlan(generatedPlan);',
+    'Interview durable recovery cleanup before local session progression',
+  );
+  requireText(
+    sessionSuccessSlice,
+    'Retry the exact grounded launch before continuing.',
+    'Interview durable cleanup failure must fail closed',
+  );
+}
 rejectText(
   interview,
   'The server session remains authoritative.',
