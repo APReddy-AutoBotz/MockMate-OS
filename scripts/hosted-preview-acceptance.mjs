@@ -49,20 +49,76 @@ try {
   fail('HOSTED_ACCEPTANCE_SCENARIOS_FILE is not valid JSON.');
 }
 
+const operationContracts = new Map(Object.entries({
+  'runtime.health': ['GET', /^\/api\/health$/, 'none', 'none'],
+  'pwa.manifest': ['GET', /^\/manifest\.json$/, 'none', 'none'],
+  'pwa.offline': ['GET', /^\/offline\.html$/, 'none', 'none'],
+  'auth.identity': ['GET', /^\/api\/auth\/test$/, 'userA', 'none'],
+  'resume.parse': ['POST', /^\/api\/resume\/parse$/, 'userA', 'resume'],
+  'resume.score': ['POST', /^\/api\/resume\/score$/, 'userA', 'json'],
+  'resume.suggest': ['POST', /^\/api\/resume\/suggest$/, 'userA', 'json'],
+  'clearspeak.prompt': ['POST', /^\/api\/clearspeak\/v1\/accent\/prompts$/, 'userA', 'json'],
+  'clearspeak.create': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts$/, 'userA', 'audio'],
+  'clearspeak.submit': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/status$/, 'userA', 'none'],
+  'clearspeak.result': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/status$/, 'userA', 'none'],
+  'clearspeak.cancel': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/cancel$/, 'userA', 'json'],
+  'clearspeak.history': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts(?:\?.*)?$/, 'userA', 'none'],
+  'clearspeak.replay': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts$/, 'userA', 'audio'],
+  'clearspeak.delete': ['DELETE', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+$/, 'userA', 'none'],
+  'interview.create': ['POST', /^\/api\/interview\/sessions$/, 'userA', 'json'],
+  'interview.answer': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'interview.report': ['POST', /^\/api\/interview\/sessions\/[^/]+\/report$/, 'userA', 'json'],
+  'interview.version': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userA', 'none'],
+  'interview.stale': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'interview.interrupted': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userA', 'none'],
+  'career-context.create': ['POST', /^\/api\/career-context\/snapshots$/, 'userA', 'json'],
+  'career-context.update': ['POST', /^\/api\/career-context\/preference$/, 'userA', 'json'],
+  'career-context.delete': ['POST', /^\/api\/career-context\/items\/[^/]+\/decision$/, 'userA', 'json'],
+  'career-context.snapshot': ['GET', /^\/api\/career-context\/snapshots\/[^/]+$/, 'userA', 'none'],
+  'career-context.bridge': ['POST', /^\/api\/career-context\/bridges$/, 'userA', 'json'],
+  'career-context.stale': ['POST', /^\/api\/career-context\/preference$/, 'userA', 'json'],
+  'career-context.cross-user': ['GET', /^\/api\/career-context\/snapshots\/[^/]+$/, 'userB', 'none'],
+  'admin.denied': ['GET', /^\/api\/admin\/usage$/, 'userA', 'none'],
+  'cross-user.denied': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userB', 'none'],
+  'partial-failure.malformed': ['POST', /^\/api\/resume\/score$/, 'userA', 'json'],
+  'partial-failure.oversized': ['POST', /^\/api\/resume\/score$/, 'userA', 'json'],
+  'partial-failure.account-delete': ['DELETE', /^\/api\/me\/data$/, 'userA', 'none'],
+  'concurrency.exactly-once': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'replay.response-loss': ['POST', /^\/api\/career-context\/preference$/, 'userA', 'json'],
+  'account.delete': ['DELETE', /^\/api\/me\/data$/, 'userA', 'none'],
+  'account.owner-aftermath': ['GET', /^\/api\/user\/sessions$/, 'userA', 'none'],
+  'account.cross-user-aftermath': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userB', 'none'],
+}));
 const requiredOperations = new Set([
   'runtime.health', 'pwa.manifest', 'pwa.offline', 'auth.identity',
   'resume.parse', 'resume.score', 'resume.suggest',
-  'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.delete',
-  'interview.create', 'interview.answer', 'interview.report',
-  'career-context.create', 'career-context.update', 'career-context.delete',
-  'admin.denied', 'cross-user.denied', 'partial-failure.malformed',
+  'clearspeak.prompt', 'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.cancel', 'clearspeak.history', 'clearspeak.replay', 'clearspeak.delete',
+  'interview.create', 'interview.answer', 'interview.report', 'interview.version', 'interview.stale', 'interview.interrupted',
+  'career-context.create', 'career-context.update', 'career-context.delete', 'career-context.snapshot', 'career-context.bridge', 'career-context.stale', 'career-context.cross-user',
+  'admin.denied', 'cross-user.denied', 'partial-failure.malformed', 'partial-failure.oversized', 'partial-failure.account-delete',
   'concurrency.exactly-once', 'replay.response-loss',
   'account.delete', 'account.owner-aftermath', 'account.cross-user-aftermath',
 ]);
+const operationStatusContracts = new Map(Object.entries({
+  'runtime.health': [200], 'pwa.manifest': [200], 'pwa.offline': [200], 'auth.identity': [200],
+  'resume.parse': [200], 'resume.score': [200], 'resume.suggest': [200],
+  'clearspeak.prompt': [200, 201, 202], 'clearspeak.create': [200, 201, 202], 'clearspeak.submit': [200],
+  'clearspeak.result': [200], 'clearspeak.cancel': [200, 202], 'clearspeak.history': [200],
+  'clearspeak.replay': [200, 201, 202], 'clearspeak.delete': [200, 204],
+  'interview.create': [200, 201], 'interview.answer': [200], 'interview.report': [200],
+  'interview.version': [200], 'interview.stale': [409], 'interview.interrupted': [200],
+  'career-context.create': [200, 201], 'career-context.update': [200], 'career-context.delete': [200],
+  'career-context.snapshot': [200], 'career-context.bridge': [200, 201], 'career-context.stale': [409],
+  'career-context.cross-user': [403, 404], 'admin.denied': [403], 'cross-user.denied': [403, 404],
+  'partial-failure.malformed': [400, 422], 'partial-failure.oversized': [400, 413, 422],
+  'partial-failure.account-delete': [409, 500], 'concurrency.exactly-once': [200],
+  'replay.response-loss': [200], 'account.delete': [200], 'account.owner-aftermath': [200],
+  'account.cross-user-aftermath': [403, 404],
+}));
 if (!manifest || manifest.schemaVersion !== 3 || !Array.isArray(manifest.scenarios) || manifest.scenarios.length === 0 || manifest.scenarios.length > 64) {
   fail('Scenario manifest must use schemaVersion 3 and contain 1-64 scenarios.');
 }
-if (JSON.stringify(manifest).includes('__CONTROLLER_REPLACE__')) {
+if (JSON.stringify(manifest).includes('__CONTROLLER_REPLACE_')) {
   fail('Scenario manifest still contains controller placeholders.');
 }
 for (const operation of requiredOperations) {
@@ -76,6 +132,31 @@ const allowedAssertionOps = new Set(['exists', 'equals', 'oneOf', 'type', 'match
 const allowedJsonTypes = new Set(['string', 'number', 'boolean', 'object', 'array', 'null']);
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+function validateOperationContract(scenario) {
+  const contract = operationContracts.get(scenario.operation);
+  if (!contract) fail(`Scenario ${scenario.id} names an unregistered governed operation.`);
+  const [method, pathPattern, auth, bodyKind] = contract;
+  if (scenario.method?.toUpperCase() !== method || !pathPattern.test(scenario.path) || (scenario.auth ?? 'none') !== auth) {
+    fail(`Scenario ${scenario.id} does not match the registered method/path/auth contract for ${scenario.operation}.`);
+  }
+  const actualBodyKind = scenario.multipart?.fileField ?? (scenario.body === undefined ? 'none' : 'json');
+  if (actualBodyKind !== bodyKind) fail(`Scenario ${scenario.id} does not match the registered body contract for ${scenario.operation}.`);
+  if (JSON.stringify(scenario.expectedStatuses) !== JSON.stringify(operationStatusContracts.get(scenario.operation))) {
+    fail(`Scenario ${scenario.id} does not match the registered status contract for ${scenario.operation}.`);
+  }
+  if (!Array.isArray(scenario.assertions) || scenario.assertions.length === 0) {
+    fail(`Scenario ${scenario.id} does not provide the required semantic oracle for ${scenario.operation}.`);
+  }
+  if (bodyKind === 'audio') {
+    const metadata = scenario.multipart?.fields?.metadata;
+    if (typeof metadata !== 'string') fail(`Scenario ${scenario.id} must send ClearSpeak metadata as one JSON multipart field.`);
+    try { JSON.parse(metadata); } catch { fail(`Scenario ${scenario.id} has malformed ClearSpeak metadata.`); }
+  }
+  if (scenario.operation === 'resume.score' || scenario.operation === 'resume.suggest') {
+    if (!scenario.body?.resumeData || typeof scenario.body.rawText !== 'string' || typeof scenario.body.jdText !== 'string') fail(`Scenario ${scenario.id} does not match the strict Resume request schema.`);
+  }
+}
 
 function exactTargetUrl(scenarioId, scenarioPath) {
   if (!scenarioPath.startsWith('/') || scenarioPath.startsWith('//') || scenarioPath.includes('\\')) {
@@ -232,8 +313,30 @@ async function executeRequest(spec, scenarioId, phase) {
   } finally {
     rawBuffer?.fill(0);
   }
-  const responseBuffer = Buffer.from(await response.arrayBuffer());
-  if (responseBuffer.length > MAX_RESPONSE_BYTES) { responseBuffer.fill(0); throw new Error(`Scenario ${scenarioId} ${phase} response is oversized.`); }
+  const chunks = [];
+  let responseBytes = 0;
+  if (response.body) {
+    const reader = response.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        responseBytes += value.byteLength;
+        if (responseBytes > MAX_RESPONSE_BYTES) {
+          value.fill(0);
+          await reader.cancel();
+          throw new Error(`Scenario ${scenarioId} ${phase} response is oversized.`);
+        }
+        chunks.push(Buffer.from(value));
+        value.fill(0);
+      }
+    } catch (error) {
+      chunks.forEach((chunk) => chunk.fill(0));
+      throw error;
+    }
+  }
+  const responseBuffer = Buffer.concat(chunks, responseBytes);
+  chunks.forEach((chunk) => chunk.fill(0));
   try {
     const text = responseBuffer.toString('utf8');
     let json;
@@ -271,6 +374,7 @@ async function requestScenario(scenario) {
     fail('Scenario manifest contains an invalid scenario shape.');
   }
   const plan = executionPlan(scenario);
+  validateOperationContract(scenario);
   validateRequestShape(scenario, scenario.id, 'request');
   const statuses = [];
   const canonical = [];

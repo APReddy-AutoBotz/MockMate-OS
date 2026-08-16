@@ -71,6 +71,19 @@ assert.ok(template.scenarios.some((scenario) => scenario.multipart?.fileField ==
 assert.ok(template.scenarios.some((scenario) => scenario.multipart?.fileField === 'audio'), 'ClearSpeak must use the registered multipart file field');
 assert.match(harness, /rawBuffer\?\.fill\(0\)/, 'raw multipart buffers must be wiped');
 assert.match(harness, /requiredOperations/, 'coverage must be explicit operations, not family labels');
+assert.match(harness, /operationContracts/, 'operation names must be bound to registered request contracts');
+assert.match(harness, /does not match the registered method\/path\/auth contract/, 'mislabeled operations must fail closed');
+assert.match(harness, /__CONTROLLER_REPLACE_/, 'the real controller placeholder prefix must be rejected');
+assert.ok(!harness.includes('response.arrayBuffer()'), 'responses must not be retained before enforcing the bound');
+assert.match(harness, /response\.body\.getReader\(\)/, 'responses must be bounded while streaming');
+assert.match(harness, /reader\.cancel\(\)/, 'oversized response streams must be cancelled');
+assert.match(harness, /chunks\.forEach\(\(chunk\) => chunk\.fill\(0\)\)/, 'streamed response chunks must be wiped');
+assert.ok(template.scenarios.some((scenario) => scenario.operation === 'resume.score' && scenario.body?.resumeData && typeof scenario.body.rawText === 'string' && typeof scenario.body.jdText === 'string'), 'Resume score must use the strict registered body');
+assert.ok(template.scenarios.some((scenario) => scenario.operation === 'resume.suggest' && scenario.body?.resumeData && typeof scenario.body.rawText === 'string' && typeof scenario.body.jdText === 'string'), 'Resume suggest must use the strict registered body');
+assert.ok(template.scenarios.some((scenario) => scenario.operation === 'clearspeak.create' && typeof scenario.multipart?.fields?.metadata === 'string'), 'ClearSpeak must send registered JSON metadata');
+for (const operation of ['clearspeak.prompt', 'clearspeak.cancel', 'clearspeak.history', 'clearspeak.replay', 'interview.version', 'interview.stale', 'interview.interrupted', 'career-context.snapshot', 'career-context.bridge', 'career-context.stale', 'career-context.cross-user', 'partial-failure.oversized', 'partial-failure.account-delete']) {
+  assert.ok(operations.has(operation), `template must retain frozen lifecycle operation ${operation}`);
+}
 assert.match(harness, /canonical responses diverged/, 'retries must compare canonical responses');
 assert.match(harness, /exactly one authoritative effect/, 'retries must prove one authoritative effect');
 assert.equal(template.scenarios.at(-3).operation, 'account.delete', 'genuine deletion must precede aftermath probes');

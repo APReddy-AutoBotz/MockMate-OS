@@ -127,8 +127,16 @@
         }
       ],
       "body": {
-        "resumeText": "__CONTROLLER_REPLACE_BOUNDED_TEXT__",
-        "jobDescription": "__CONTROLLER_REPLACE_BOUNDED_JOB__"
+        "resumeData": {
+          "basics": {
+            "name": "Bounded P0-8 User"
+          },
+          "work": [],
+          "education": [],
+          "skills": []
+        },
+        "rawText": "Bounded synthetic resume text",
+        "jdText": "Bounded synthetic job description"
       }
     },
     {
@@ -150,8 +158,16 @@
         }
       ],
       "body": {
-        "resumeText": "__CONTROLLER_REPLACE_BOUNDED_TEXT__",
-        "jobDescription": "__CONTROLLER_REPLACE_BOUNDED_JOB__"
+        "resumeData": {
+          "basics": {
+            "name": "Bounded P0-8 User"
+          },
+          "work": [],
+          "education": [],
+          "skills": []
+        },
+        "rawText": "Bounded synthetic resume text",
+        "jdText": "Bounded synthetic job description"
       }
     },
     {
@@ -180,8 +196,7 @@
         "filename": "bounded-audio.webm",
         "contentType": "audio/webm",
         "fields": {
-          "promptId": "__CONTROLLER_REPLACE_PROMPT_ID__",
-          "idempotencyKey": "__CONTROLLER_REPLACE_ATTEMPT_KEY__"
+          "metadata": "{\"promptId\":\"__CONTROLLER_REPLACE_PROMPT_ID__\",\"idempotencyKey\":\"p0-8-clearspeak-create\"}"
         }
       }
     },
@@ -544,6 +559,326 @@
           }
         ]
       }
+    },
+    {
+      "id": "clearspeak-prompt",
+      "family": "clearspeak",
+      "operation": "clearspeak.prompt",
+      "method": "POST",
+      "path": "/api/clearspeak/v1/accent/prompts",
+      "auth": "userA",
+      "expectedStatuses": [
+        200,
+        201,
+        202
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/attemptId",
+          "op": "type",
+          "value": "string"
+        }
+      ],
+      "body": {
+        "difficulty": "medium"
+      }
+    },
+    {
+      "id": "clearspeak-cancel",
+      "family": "clearspeak",
+      "operation": "clearspeak.cancel",
+      "method": "POST",
+      "path": "/api/clearspeak/v1/accent/attempts/__CONTROLLER_REPLACE_ATTEMPT_ID__/cancel",
+      "auth": "userA",
+      "expectedStatuses": [
+        200,
+        202
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/status",
+          "op": "equals",
+          "value": "completed"
+        },
+        {
+          "source": "json",
+          "path": "/rawAudio",
+          "op": "exists",
+          "value": false
+        }
+      ],
+      "body": {
+        "reason": "controller_interrupted"
+      }
+    },
+    {
+      "id": "clearspeak-history",
+      "family": "clearspeak",
+      "operation": "clearspeak.history",
+      "method": "GET",
+      "path": "/api/clearspeak/v1/accent/attempts?limit=10",
+      "auth": "userA",
+      "expectedStatuses": [
+        200
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/status",
+          "op": "equals",
+          "value": "completed"
+        },
+        {
+          "source": "json",
+          "path": "/rawAudio",
+          "op": "exists",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "clearspeak-replay",
+      "family": "clearspeak",
+      "operation": "clearspeak.replay",
+      "method": "POST",
+      "path": "/api/clearspeak/v1/accent/attempts",
+      "auth": "userA",
+      "expectedStatuses": [
+        200,
+        201,
+        202
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/attemptId",
+          "op": "type",
+          "value": "string"
+        }
+      ],
+      "multipart": {
+        "fileEnv": "CLEARSPEAK_FIXTURE_PATH",
+        "fileField": "audio",
+        "filename": "bounded-audio.webm",
+        "contentType": "audio/webm",
+        "fields": {
+          "metadata": "{\"promptId\":\"__CONTROLLER_REPLACE_PROMPT_ID__\",\"idempotencyKey\":\"p0-8-clearspeak-replay\"}"
+        }
+      }
+    },
+    {
+      "id": "interview-version",
+      "family": "cross-user-isolation",
+      "operation": "interview.version",
+      "method": "GET",
+      "path": "/api/interview/sessions/__CONTROLLER_REPLACE_USER_A_SESSION_ID__",
+      "auth": "userA",
+      "expectedStatuses": [
+        200
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/session",
+          "op": "exists",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "interview-stale",
+      "family": "interview",
+      "operation": "interview.stale",
+      "method": "POST",
+      "path": "/api/interview/sessions/__CONTROLLER_REPLACE_SESSION_ID__/answers",
+      "auth": "userA",
+      "expectedStatuses": [
+        409
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/sessionId",
+          "op": "equals",
+          "value": "__CONTROLLER_REPLACE_SESSION_ID__"
+        }
+      ],
+      "body": {
+        "answer": "bounded stale answer",
+        "expectedVersion": -1
+      }
+    },
+    {
+      "id": "interview-interrupted",
+      "family": "cross-user-isolation",
+      "operation": "interview.interrupted",
+      "method": "GET",
+      "path": "/api/interview/sessions/__CONTROLLER_REPLACE_USER_A_SESSION_ID__",
+      "auth": "userA",
+      "expectedStatuses": [
+        200
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/session",
+          "op": "exists",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "career-context-snapshot",
+      "family": "career-context",
+      "operation": "career-context.snapshot",
+      "method": "GET",
+      "path": "/api/career-context/snapshots/__CONTROLLER_REPLACE_SNAPSHOT_ID__",
+      "auth": "userA",
+      "expectedStatuses": [
+        200
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/id",
+          "op": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "id": "career-context-bridge",
+      "family": "career-context",
+      "operation": "career-context.bridge",
+      "method": "POST",
+      "path": "/api/career-context/bridges",
+      "auth": "userA",
+      "expectedStatuses": [
+        200,
+        201
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/id",
+          "op": "type",
+          "value": "string"
+        }
+      ],
+      "body": {
+        "fromSnapshotId": "__CONTROLLER_REPLACE_SNAPSHOT_ID__",
+        "toSnapshotId": "__CONTROLLER_REPLACE_NEXT_SNAPSHOT_ID__"
+      }
+    },
+    {
+      "id": "career-context-stale",
+      "family": "career-context",
+      "operation": "career-context.stale",
+      "method": "POST",
+      "path": "/api/career-context/preference",
+      "auth": "userA",
+      "expectedStatuses": [
+        409
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/version",
+          "op": "type",
+          "value": "number"
+        }
+      ],
+      "body": {
+        "key": "targetRole",
+        "value": "__CONTROLLER_REPLACE_ROLE__",
+        "expectedVersion": -1
+      }
+    },
+    {
+      "id": "career-context-cross-user",
+      "family": "career-context",
+      "operation": "career-context.cross-user",
+      "method": "GET",
+      "path": "/api/career-context/snapshots/__CONTROLLER_REPLACE_SNAPSHOT_ID__",
+      "auth": "userB",
+      "expectedStatuses": [
+        403,
+        404
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/id",
+          "op": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "id": "partial-failure-oversized",
+      "family": "partial-failure",
+      "operation": "partial-failure.oversized",
+      "method": "POST",
+      "path": "/api/resume/score",
+      "auth": "userA",
+      "expectedStatuses": [
+        400,
+        413,
+        422
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/error",
+          "op": "exists",
+          "value": true
+        }
+      ],
+      "body": {
+        "resumeData": {},
+        "rawText": "bounded",
+        "jdText": "bounded"
+      }
+    },
+    {
+      "id": "partial-failure-account-delete",
+      "family": "account-deletion",
+      "operation": "partial-failure.account-delete",
+      "method": "DELETE",
+      "path": "/api/me/data",
+      "auth": "userA",
+      "expectedStatuses": [
+        409,
+        500
+      ],
+      "assertions": [
+        {
+          "source": "json",
+          "path": "/success",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "source": "json",
+          "path": "/operation",
+          "op": "equals",
+          "value": "app_data_deleted"
+        },
+        {
+          "source": "json",
+          "path": "/failedTables/0",
+          "op": "exists",
+          "value": false
+        },
+        {
+          "source": "json",
+          "path": "/authIdentityDeleted",
+          "op": "equals",
+          "value": false
+        }
+      ]
     },
     {
       "id": "account-delete",
