@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 const harness = fs.readFileSync(new URL('./hosted-preview-acceptance.mjs', import.meta.url), 'utf8');
+const runtimeConfig = fs.readFileSync(new URL('../backend/config/runtimeConfig.ts', import.meta.url), 'utf8');
+const server = fs.readFileSync(new URL('../backend/server.ts', import.meta.url), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const workflow = fs.readFileSync(new URL('../.github/workflows/production-readiness.yml', import.meta.url), 'utf8');
 
@@ -20,6 +22,13 @@ for (const required of [
   assert.match(harness, new RegExp(required), `harness must require ${required}`);
 }
 assert.match(harness, /\.vercel\.app/, 'hosted acceptance must bind to an exact Vercel preview origin');
+assert.match(harness, /resolved\.origin !== originUrl\.origin/, 'scenario URLs must remain on the exact authorized origin');
+assert.match(harness, /scenarioPath\.startsWith\('\/\/'\)/, 'protocol-relative scenario paths must be rejected');
+assert.match(harness, /scenarioPath\.includes\('\\\\'\)/, 'backslash URL ambiguity must be rejected');
+assert.match(harness, /body\?\.gitHeadSha !== expectedHeadSha/, 'hosted acceptance must verify the deployed Git head');
+assert.match(runtimeConfig, /VERCEL_GIT_COMMIT_SHA/, 'preview runtime must bind to Vercel deployed commit authority');
+assert.match(runtimeConfig, /GIT_HEAD_SHA/, 'preview runtime must validate the deployed commit shape');
+assert.match(server, /gitHeadSha: runtime\.previewAuthority\.gitHeadSha/, 'preview health must expose only the non-secret deployed head identity');
 assert.match(harness, /supabaseProjectRef/, 'hosted acceptance must verify Supabase target authority');
 assert.match(harness, /Hostile origin was accepted by CORS/, 'hosted acceptance must reject hostile origins');
 assert.equal(packageJson.scripts['acceptance:hosted'], 'node scripts/hosted-preview-acceptance.mjs');
