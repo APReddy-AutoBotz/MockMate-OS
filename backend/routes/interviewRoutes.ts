@@ -80,16 +80,16 @@ router.post('/plan', async (req: any, res) => {
       if (snapshotId && bridge.snapshotId !== snapshotId) {
         return res.status(422).json({ error: `Bridge snapshotId '${bridge.snapshotId}' does not match requested snapshotId '${snapshotId}'.` });
       }
-      if (bridge.status !== 'confirmed') {
-        return res.status(409).json({ error: `Bridge status is '${bridge.status}', cannot generate plan.` });
+      if (bridge.targetModule !== 'interview' || bridge.purpose !== groundingSnapshot?.purpose) {
+        return res.status(422).json({ error: 'Bridge target or purpose is incompatible with the requested Interview snapshot.' });
       }
-    }
-
-    if (snapshotId && bridgeId && userId) {
       const existing = await getAuthoritativePlanForBridge(userId, bridgeId);
       if (existing) {
         if (existing.snapshotId !== snapshotId) return res.status(422).json({ error: 'Existing authoritative plan snapshot mismatch.' });
         return res.json(InterviewPlanSchema.parse({ ...existing.plan, authority: { planId: existing.id, planHash: existing.hash, version: existing.version, snapshotId, bridgeId } }));
+      }
+      if (bridge.status !== 'confirmed') {
+        return res.status(409).json({ error: `Bridge status is '${bridge.status}', cannot generate plan.` });
       }
     }
     if (snapshotId && bridgeId && userId) {

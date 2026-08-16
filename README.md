@@ -12,11 +12,13 @@ The production direction is Vercel + Supabase:
 
 ## Current App Status
 
-P0-3 is merged on `main` at `b08250538b3efaf040f6fa6f33523bdf0164a7f7`. Draft PR #4 is a source-only production-preview-readiness change. It does not authorize or prove a hosted preview, provider execution, real-user validation, deployment, or native release.
+P0-6 Mobile Core Journey Parity is merged on `main` at `4a465aab6a412917780e9ac7a9a7ced778238388`. Post-merge MockMate Production Readiness run #273 is fully green across retained contracts, browser/adaptive/Career Context journeys, PostgreSQL/RLS assertions, mobile typecheck/lint/parity, security checks and source-only readiness evidence.
 
-The browser app is the primary working product.
+P0-7 Mobile Career Context & Account Authority Parity is source-only work in Draft PR #16. It adds native Career Context controls, explicit one-time grounded Interview lineage, and governed app-data deletion. It does not authorize or prove a hosted preview, provider execution, real-user validation, deployment, EAS build, store release, or public native availability.
 
-The `mobile/` folder is an Android-first Expo app prepared for internal Play Store testing. It is not ready for public store release until EAS builds, Play Console metadata, privacy declarations, and real-user QA are completed. See `docs/mobile-production-plan.md` for the production mobile path.
+The browser app remains the primary working product.
+
+The `mobile/` folder is an Android-first Expo app prepared for internal source validation. It is not ready for public store release until separately authorized hosted integration, EAS builds, Play Console/App Store metadata, privacy declarations, signing, and physical-device/real-user QA are completed. See `docs/mobile-production-plan.md` for the production mobile path.
 
 ## Prerequisites
 
@@ -59,11 +61,7 @@ ENABLE_DEV_AUTH=true
 
 For the Android app, copy `mobile/.env.example` to `mobile/.env` and fill `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`, and `EXPO_PUBLIC_API_URL`.
 
-Create the Supabase tables and RLS policies by running:
-
-```text
-supabase/migrations/001_initial_schema.sql
-```
+Create the Supabase tables and RLS policies by applying the complete ordered migration chain in `supabase/migrations/`. Do not apply only the initial migration to an existing environment.
 
 Run the browser app:
 
@@ -106,9 +104,9 @@ npm run smoke:deployed -- https://your-preview.vercel.app
 
 ## Production Deployment
 
-**STOP: `HOSTED_PREVIEW_NOT_AUTHORIZED`.** This repository is ready only for source/disposable validation. AP approval is required before configuring, inspecting, or mutating Vercel/Supabase; setting real credentials; calling providers; creating real users; deploying; or running EAS/store distribution.
+**STOP: `HOSTED_PREVIEW_NOT_AUTHORIZED`.** Current evidence proves source/disposable behavior only. Separate AP approval is required before configuring, inspecting, or mutating Vercel/Supabase; setting or using real credentials; calling providers; creating real users; deploying/promoting; or running EAS/store distribution.
 
-Use one Vercel project for the browser app and API functions. Set the variables listed in `.env.example`, with:
+When that future gate is explicitly authorized, use one Vercel project for the browser app and API functions. Set the variables listed in `.env.example`, with:
 
 ```env
 ENABLE_DEV_AUTH=false
@@ -121,13 +119,14 @@ ALLOWED_ORIGINS=https://your-domain.vercel.app
 
 Before inviting real users:
 
+- Obtain explicit hosted-preview authorization.
 - Deploy a Vercel preview with Supabase production-like environment variables.
 - Confirm `/api/health` works and protected APIs return `401` without a Supabase token.
-- Run a real signup, onboarding, resume review, speaking practice, interview practice, report, and delete-data flow.
+- Run a real signup, onboarding, resume review, speaking practice, interview practice, Career Context, report, and delete-app-data flow.
 - Confirm the app can be installed from Chrome as a PWA and shows a clear offline message.
 - Check `/api/admin/usage` using an email listed in `ADMIN_EMAILS`.
 - Review privacy and terms copy from the landing footer.
-- Run an Android preview build only after the deployed API and Supabase auth are working with real users.
+- Run Android/iOS preview builds only after the deployed API and Supabase auth are separately authorized and working.
 
 ## Documentation
 

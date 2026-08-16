@@ -43,6 +43,12 @@ export default function AppLayout() {
         }}
       />
       <Stack.Screen
+        name="career-context"
+        options={{
+          title: 'Career Context',
+        }}
+      />
+      <Stack.Screen
         name="journal"
         options={{
           title: 'Practice Journal',

@@ -11,7 +11,10 @@ import { createGroundingSnapshot, getSnapshotById } from '../services/groundingS
 import { createModuleBridgeSession } from '../services/moduleBridgeService';
 import { projectCareerContext } from '../services/careerContextProjectionService';
 import { buildResumeContextItems } from '../services/careerContextAdapters/resumeContextAdapter';
-import { buildClearSpeakContextItems } from '../services/careerContextAdapters/clearSpeakContextAdapter';
+import {
+  buildAccentEvidenceContextItems,
+  buildClearSpeakContextItems,
+} from '../services/careerContextAdapters/clearSpeakContextAdapter';
 import { buildInterviewContextItems } from '../services/careerContextAdapters/interviewContextAdapter';
 import { supabaseAdmin } from '../supabaseAdmin';
 import {
@@ -25,6 +28,13 @@ import {
 } from 'mockmate-shared';
 
 const router = Router();
+const ACCENT_ATTEMPT_REBUILD_PAGE_SIZE = 50;
+const ACCENT_CURSOR_ID_PATTERN = /^[a-z0-9-]{1,128}$/i;
+
+type AccentAttemptCursor = {
+  createdAt: string;
+  attemptId: string;
+};
 
 router.use(verifyAuthToken);
 
@@ -93,7 +103,7 @@ router.post('/rebuild', async (req, res) => {
       });
     }
 
-    // 2. Rebuild from clearspeak_profiles & clearspeak_sessions
+    // 2. Rebuild from legacy ClearSpeak profile/session sources.
     const { data: csProfiles, error: csProfilesError } = await supabaseAdmin
       .from('clearspeak_profiles')
       .select('*')
@@ -142,6 +152,67 @@ router.post('/rebuild', async (req, res) => {
           drafts.push(...items);
         }
       });
+    }
+
+    // 2b. P0-5 Accent Practice: ingest only the newest persisted real V2
+    // scored attempt that actually contains strict evidence-backed coaching.
+    // V1/synthetic/unscored evidence produces no Career Context claims.
+    // Traverse with a stable descending keyset so concurrent insert/delete
+    // cannot shift an eligible row across an offset boundary.
+    let accentCursor: AccentAttemptCursor | null = null;
+    let foundAccentEvidence = false;
+    while (!foundAccentEvidence) {
+      let accentQuery = supabaseAdmin
+        .from('clearspeak_accent_attempts')
+        .select('attempt_id,result,created_at')
+        .eq('user_id', userId)
+        .eq('fixture', false)
+        .eq('scoring_contract_version', 'accent-score.v2')
+        .order('created_at', { ascending: false })
+        .order('attempt_id', { ascending: false })
+        .limit(ACCENT_ATTEMPT_REBUILD_PAGE_SIZE);
+
+      if (accentCursor) {
+        accentQuery = accentQuery.or(
+          `created_at.lt.${accentCursor.createdAt},and(created_at.eq.${accentCursor.createdAt},attempt_id.lt.${accentCursor.attemptId})`
+        );
+      }
+
+      const { data: accentAttempts, error: accentAttemptsError } = await accentQuery;
+
+      if (accentAttemptsError) {
+        throw Object.assign(new Error(`Failed to read ClearSpeak Accent sources: ${accentAttemptsError.message}`), { status: 503 });
+      }
+
+      const accentPage = accentAttempts || [];
+      for (const attempt of accentPage) {
+        const items = buildAccentEvidenceContextItems({
+          attemptId: attempt.attempt_id,
+          result: attempt.result,
+        });
+        if (items.length > 0) {
+          drafts.push(...items);
+          foundAccentEvidence = true;
+          break;
+        }
+      }
+
+      if (foundAccentEvidence || accentPage.length < ACCENT_ATTEMPT_REBUILD_PAGE_SIZE) break;
+
+      const lastAttempt = accentPage[accentPage.length - 1];
+      const rawCreatedAt = typeof lastAttempt?.created_at === 'string' ? lastAttempt.created_at : '';
+      const parsedCreatedAt = rawCreatedAt ? Date.parse(rawCreatedAt) : Number.NaN;
+      const attemptId = typeof lastAttempt?.attempt_id === 'string' ? lastAttempt.attempt_id : '';
+      if (!Number.isFinite(parsedCreatedAt) || rawCreatedAt.length > 64 || /[(),]/.test(rawCreatedAt) || !ACCENT_CURSOR_ID_PATTERN.test(attemptId)) {
+        throw Object.assign(new Error('Failed to read ClearSpeak Accent sources: invalid pagination cursor'), { status: 503 });
+      }
+      // Preserve the exact server-returned timestamptz representation. Passing
+      // through JS Date would truncate PostgreSQL microseconds to milliseconds
+      // and could skip rows that are older only within the same millisecond.
+      accentCursor = {
+        createdAt: rawCreatedAt,
+        attemptId,
+      };
     }
 
     // 3. Rebuild from interview_sessions & reports

@@ -28,6 +28,50 @@ const headersUserB = {
 const USER_A = '11111111-1111-1111-1111-111111111111';
 const ITEM_ID = '55555555-5555-5555-5555-555555555555';
 const now = new Date().toISOString();
+const accentAttemptId = (index) => `70000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+const unsupportedAccentDimension = (summary) => ({ score: null, confidence: 0, evidenceStatus: 'unsupported', summary, evidenceRefs: [] });
+const scoredAccentResult = (attemptId) => ({
+  contractVersion: 'accent-score.v2',
+  attemptId,
+  resultId: '70000000-0000-4000-8000-000000000021',
+  promptId: '70000000-0000-4000-8000-000000000001',
+  promptVersion: 1,
+  promptContentHash: 'a'.repeat(64),
+  profileId: 'en-GB-general-v1',
+  profileVersion: 1,
+  referenceSetVersion: 'uk-general-reference.v1',
+  scoringPolicyVersion: 'real-speech-policy.v1',
+  evidenceProvenance: 'user_recording_scored',
+  fixture: false,
+  evidenceLineage: {
+    evidenceContractVersion: 'accent-scorer-evidence.v1',
+    adapterId: 'mockmate-test-adapter',
+    adapterVersion: 'v1',
+    providerExecutionState: 'completed',
+    audioSha256: 'b'.repeat(64),
+    evidenceSha256: 'c'.repeat(64),
+  },
+  dimensions: {
+    intelligibility: unsupportedAccentDimension('No reliable intelligibility evidence was returned.'),
+    pronunciation: {
+      score: 72,
+      confidence: 0.91,
+      evidenceStatus: 'sufficient',
+      summary: 'Bounded pronunciation evidence supports a focused practice action.',
+      evidenceRefs: ['pronunciation.segment.1'],
+    },
+    prosody: unsupportedAccentDimension('No reliable prosody evidence was returned.'),
+    fluency: unsupportedAccentDimension('No reliable fluency evidence was returned.'),
+    targetStyle: unsupportedAccentDimension('No reliable target-style evidence was returned.'),
+  },
+  coaching: [{
+    rank: 1,
+    dimension: 'pronunciation',
+    evidenceRefs: ['pronunciation.segment.1'],
+    action: 'Repeat the marked pronunciation window slowly, then once at normal pace.',
+  }],
+  disclaimer: 'This practice result evaluates bounded speech evidence only and does not infer identity or employability.',
+});
 
 function createAuthoritativePersistenceDouble() {
   const tables = {
@@ -47,18 +91,40 @@ function createAuthoritativePersistenceDouble() {
     interview_generated_plans: [],
     interview_plan_generation_reservations: [],
     usage_ledger: [],
-    resume_reviews: [], clearspeak_profiles: [], clearspeak_sessions: [],
+    resume_reviews: [], clearspeak_profiles: [], clearspeak_sessions: [], clearspeak_accent_attempts: [],
   };
   const calls = [];
+  const queryCalls = [];
   const sourceErrors = {};
+  const selectHooks = {};
   const rebuiltSourceIdentities = new Set();
 
   class Query {
-    constructor(table) { this.table = table; this.filters = []; this.operation = 'select'; this.payload = null; }
-    select() { return this; }
+    constructor(table) {
+      this.table = table;
+      this.filters = [];
+      this.operation = 'select';
+      this.payload = null;
+      this.columns = '*';
+      this.window = null;
+      this.limitCount = null;
+      this.orders = [];
+      this.keyset = null;
+    }
+    select(columns = '*') { this.columns = columns; return this; }
     eq(column, value) { this.filters.push(row => row[column] === value); return this; }
     in(column, values) { this.filters.push(row => values.includes(row[column])); return this; }
-    order() { return this; }
+    order(column, options = {}) { this.orders.push({ column, ascending: options.ascending !== false }); return this; }
+    range(from, to) { this.window = [from, to]; return this; }
+    limit(count) { this.limitCount = count; return this; }
+    or(expression) {
+      const match = /^created_at\.lt\.([^,]+),and\(created_at\.eq\.([^,]+),attempt_id\.lt\.([^)]+)\)$/.exec(expression);
+      if (!match || match[1] !== match[2]) throw new Error(`Unexpected keyset expression: ${expression}`);
+      const [, createdAt, , attemptId] = match;
+      this.keyset = { createdAt, attemptId };
+      this.filters.push(row => row.created_at < createdAt || (row.created_at === createdAt && row.attempt_id < attemptId));
+      return this;
+    }
     insert(payload) { this.operation = 'insert'; this.payload = payload; return this; }
     upsert(payload) { this.operation = 'upsert'; this.payload = payload; return this; }
     rows() { return (tables[this.table] || []).filter(row => this.filters.every(filter => filter(row))); }
@@ -79,6 +145,31 @@ function createAuthoritativePersistenceDouble() {
         writtenRows = rows;
       }
       let rows = writtenRows || this.rows();
+      if (this.operation === 'select') {
+        if (this.orders.length > 0) {
+          rows = [...rows].sort((left, right) => {
+            for (const { column, ascending } of this.orders) {
+              if (left[column] === right[column]) continue;
+              const direction = left[column] < right[column] ? -1 : 1;
+              return ascending ? direction : -direction;
+            }
+            return 0;
+          });
+        }
+        if (this.window) rows = rows.slice(this.window[0], this.window[1] + 1);
+        if (this.limitCount != null) rows = rows.slice(0, this.limitCount);
+        const queryCall = {
+          table: this.table,
+          columns: this.columns,
+          window: this.window,
+          limit: this.limitCount,
+          keyset: this.keyset,
+          orders: this.orders,
+        };
+        queryCalls.push(queryCall);
+        const hook = selectHooks[this.table];
+        if (hook) hook({ rows: [...rows], query: queryCall, tables });
+      }
       if (this.table === 'career_context_snapshot_items') {
         rows = rows.map(row => ({
           ...row,
@@ -210,7 +301,7 @@ function createAuthoritativePersistenceDouble() {
       return { data: null, error: { message: `Unexpected authoritative RPC: ${name}` } };
     },
   };
-  return { client, calls, tables, sourceErrors };
+  return { client, calls, queryCalls, tables, sourceErrors, selectHooks };
 }
 
 try {
@@ -252,8 +343,28 @@ try {
     { id: 'interview-invalid-report-1', user_id: USER_A, status: 'completed', report_summary: { overallSummary: 'invalid' }, created_at: now },
   );
 
+  const eligibleAccentAttemptId = accentAttemptId(50);
+  for (let index = 0; index < 50; index += 1) {
+    authoritative.tables.clearspeak_accent_attempts.push({
+      attempt_id: accentAttemptId(index),
+      user_id: USER_A,
+      fixture: false,
+      scoring_contract_version: 'accent-score.v2',
+      result: { contractVersion: 'accent-score.v2', malformed: true },
+      created_at: new Date(Date.parse(now) - index * 1000).toISOString(),
+    });
+  }
+  authoritative.tables.clearspeak_accent_attempts.push({
+    attempt_id: eligibleAccentAttemptId,
+    user_id: USER_A,
+    fixture: false,
+    scoring_contract_version: 'accent-score.v2',
+    result: scoredAccentResult(eligibleAccentAttemptId),
+    created_at: new Date(Date.parse(now) - 50 * 1000).toISOString(),
+  });
+
   // 3. Every authoritative rebuild source fails closed before the rebuild mutation.
-  for (const sourceTable of ['resume_reviews', 'clearspeak_profiles', 'clearspeak_sessions', 'interview_sessions']) {
+  for (const sourceTable of ['resume_reviews', 'clearspeak_profiles', 'clearspeak_sessions', 'clearspeak_accent_attempts', 'interview_sessions']) {
     authoritative.sourceErrors[sourceTable] = `${sourceTable} unavailable`;
     const callsBefore = authoritative.calls.filter(call => call.name === 'rebuild_career_context_tx').length;
     const versionBefore = authoritative.tables.career_context_state[0].context_version;
@@ -263,16 +374,38 @@ try {
     }
     delete authoritative.sourceErrors[sourceTable];
   }
+
+  let accentMutationApplied = false;
+  let eligibleIndexAfterDeletion = null;
+  authoritative.selectHooks.clearspeak_accent_attempts = ({ rows, tables }) => {
+    if (accentMutationApplied || rows.length !== 50) return;
+    const firstAttemptId = rows[0]?.attempt_id;
+    const deleteIndex = tables.clearspeak_accent_attempts.findIndex(row => row.attempt_id === firstAttemptId);
+    if (deleteIndex >= 0) tables.clearspeak_accent_attempts.splice(deleteIndex, 1);
+    eligibleIndexAfterDeletion = tables.clearspeak_accent_attempts
+      .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.attempt_id.localeCompare(a.attempt_id))
+      .findIndex(row => row.attempt_id === eligibleAccentAttemptId);
+    accentMutationApplied = true;
+    delete authoritative.selectHooks.clearspeak_accent_attempts;
+  };
+
   const successfulRebuild = await fetch(`${baseUrl}/api/career-context/rebuild`, { method: 'POST', headers: headersUserA });
   const successfulRebuildBody = await successfulRebuild.json();
   const firstRebuildCall = authoritative.calls.find(call => call.name === 'rebuild_career_context_tx');
   const interviewDrafts = firstRebuildCall?.args.p_drafts.filter(draft => draft.source.module === 'interview') || [];
+  const accentDrafts = firstRebuildCall?.args.p_drafts.filter(draft => draft.source.recordId === eligibleAccentAttemptId) || [];
   if (successfulRebuild.status !== 200 || authoritative.calls.filter(call => call.name === 'rebuild_career_context_tx').length !== 1 ||
-      successfulRebuildBody.addedCount < 1 || interviewDrafts.length < 1 ||
+      successfulRebuildBody.addedCount < 1 || interviewDrafts.length < 1 || accentDrafts.length < 1 ||
       interviewDrafts.some(draft => draft.source.recordId !== 'interview-completed-1') ||
       !firstRebuildCall.args.p_drafts.some(draft => draft.source.module === 'resume') ||
       !firstRebuildCall.args.p_drafts.some(draft => draft.source.module === 'clearspeak')) {
     throw new Error('All-source-success rebuild did not use exactly one authoritative atomic mutation');
+  }
+  const accentQueries = authoritative.queryCalls.filter(call => call.table === 'clearspeak_accent_attempts');
+  if (!accentMutationApplied || eligibleIndexAfterDeletion !== 49 || accentQueries.length < 2 ||
+      accentQueries.some(call => call.columns !== 'attempt_id,result,created_at' || call.limit !== 50 || call.window !== null) ||
+      accentQueries[0].keyset !== null || !accentQueries[1].keyset) {
+    throw new Error('Accent rebuild did not use privacy-minimal stable keyset pagination across concurrent deletion');
   }
   const versionAfterFirstRebuild = authoritative.tables.career_context_state[0].context_version;
   const replayedRebuild = await fetch(`${baseUrl}/api/career-context/rebuild`, { method: 'POST', headers: headersUserA });
@@ -445,6 +578,13 @@ try {
   const consumedBridge = authoritative.tables.career_context_bridges[0];
   if (consumedBridge.status !== 'consumed' || consumedBridge.target_session_id !== session.sessionId) {
     throw new Error('Grounded session did not atomically bind the consumed bridge to its real session ID');
+  }
+
+  const recoveredPlanResponse = await planRequest();
+  const recoveredPlan = await recoveredPlanResponse.json();
+  if (recoveredPlanResponse.status !== 200 || recoveredPlan.authority?.planId !== authoritativePlan.authority.planId ||
+      authoritative.tables.interview_generated_plans.length !== 1) {
+    throw new Error('Consumed-bridge response-loss recovery did not replay the existing authoritative plan');
   }
 
   // 9. Exact response-loss replay returns the one canonical session without another write or bridge consumption.

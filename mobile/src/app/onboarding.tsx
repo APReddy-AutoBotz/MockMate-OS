@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getCurrentUserId } from '../services/supabaseClient';
 
 export default function OnboardingScreen() {
   const [role, setRole] = useState('');
@@ -25,7 +26,14 @@ export default function OnboardingScreen() {
     }
 
     try {
+      const userId = await getCurrentUserId();
+      if (!userId) {
+        Alert.alert('Authentication Required', 'MockMate could not confirm the signed-in user. Sign in again before saving local preferences.');
+        return;
+      }
+
       const profile = {
+        userId,
         name: 'MockMate User',
         targetRole: role.trim(),
         experienceLevel,

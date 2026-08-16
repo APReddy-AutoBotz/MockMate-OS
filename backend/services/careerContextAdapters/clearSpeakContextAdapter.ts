@@ -1,4 +1,5 @@
 import { ClearSpeakProfile, ClearSpeakSessionScore, CareerContextItemDraft } from 'mockmate-shared';
+import { AccentScoreV2Schema, type AccentScoreV2 } from 'mockmate-shared/accent-evidence';
 import crypto from 'crypto';
 
 export interface ClearSpeakAdapterInput {
@@ -8,6 +9,11 @@ export interface ClearSpeakAdapterInput {
   practicedWords?: string[];
   topicTag?: string;
   revision?: string;
+}
+
+export interface AccentEvidenceAdapterInput {
+  attemptId: string;
+  result: unknown;
 }
 
 function computeHash(content: string): string {
@@ -111,7 +117,9 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
     }
   }
 
-  // 4. Speech Delivery Score (practice_metric - NEVER enters clearspeak_to_interview projection)
+  // 4. Legacy Speech Delivery Score (practice_metric - NEVER enters
+  // clearspeak_to_interview projection). This remains for legacy browser source
+  // compatibility only; P0-5 Accent evidence below never creates a composite.
   if (sessionScore && sessionRecordId) {
     items.push({
       kind: 'practice_metric',
@@ -140,4 +148,72 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
   }
 
   return items;
+}
+
+/**
+ * Convert a persisted P0-5 real-speech Accent result into bounded Career
+ * Context development priorities. Only strict AccentScoreV2 real-user scored
+ * evidence with evidence-grounded coaching is accepted. V1 results (including
+ * synthetic fixtures), evaluated-unscored V2 results, raw audio/transcripts,
+ * dimension scores, and any aggregate/native-ness claim are intentionally not
+ * represented in Career Context.
+ */
+export function buildAccentEvidenceContextItems(input: AccentEvidenceAdapterInput): CareerContextItemDraft[] {
+  const parsed = AccentScoreV2Schema.safeParse(input.result);
+  if (!parsed.success) return [];
+
+  const result: AccentScoreV2 = parsed.data;
+  if (
+    result.attemptId !== input.attemptId ||
+    result.fixture ||
+    result.evidenceProvenance !== 'user_recording_scored' ||
+    result.coaching.length === 0
+  ) {
+    return [];
+  }
+
+  const firstPriorityByDimension = new Map<string, { coaching: AccentScoreV2['coaching'][number]; index: number }>();
+  for (const [index, coaching] of result.coaching.entries()) {
+    if (!firstPriorityByDimension.has(coaching.dimension)) {
+      firstPriorityByDimension.set(coaching.dimension, { coaching, index });
+    }
+  }
+
+  const revision = [
+    result.scoringPolicyVersion,
+    result.evidenceLineage.adapterId,
+    result.evidenceLineage.adapterVersion,
+  ].join(':');
+
+  return [...firstPriorityByDimension.values()].map(({ coaching, index }) => {
+    const dimension = result.dimensions[coaching.dimension];
+    // AccentScoreV2Schema already guarantees coaching belongs to a scored
+    // dimension and that every coaching evidenceRef is present in that dimension.
+    const sourceHash = computeHash(JSON.stringify({
+      action: coaching.action,
+      dimension: coaching.dimension,
+      evidenceRefs: coaching.evidenceRefs,
+      evidenceSha256: result.evidenceLineage.evidenceSha256,
+      confidence: dimension.confidence,
+    }));
+
+    return {
+      kind: 'development_priority' as const,
+      canonicalKey: `clearspeak.accent.development.${coaching.dimension}`,
+      label: `ClearSpeak ${coaching.dimension.replace(/([A-Z])/g, ' $1')} Practice Priority`,
+      value: { type: 'text' as const, text: coaching.action },
+      source: {
+        module: 'clearspeak' as const,
+        recordId: input.attemptId,
+        fieldPath: `result.coaching.${index}.${coaching.dimension}`,
+        sourceRevision: revision,
+        sourceHash,
+        capturedAt: new Date().toISOString(),
+      },
+      exactExcerpt: coaching.action,
+      provenance: 'system_observed' as const,
+      status: 'active' as const,
+      sensitivity: 'standard' as const,
+    };
+  });
 }
