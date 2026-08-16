@@ -30,6 +30,7 @@ export function isProductionLike(env: NodeJS.ProcessEnv = process.env) {
 
 const PROJECT_REF = /^[a-z0-9]{20}$/;
 const PREVIEW_TARGET_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{2,79}$/;
+const GIT_HEAD_SHA = /^[0-9a-f]{40}$/;
 
 function supabaseProjectRef(urlValue: string | undefined) {
   if (!urlValue) return null;
@@ -47,6 +48,7 @@ export type PreviewAuthority = {
   previewOrigin: string;
   previewTargetId: string;
   supabaseProjectRef: string;
+  gitHeadSha: string;
 };
 
 /** Validate server authority once, without returning secret names or values to callers. */
@@ -70,16 +72,23 @@ export function assertServerRuntimeConfig(env: NodeJS.ProcessEnv = process.env) 
     const previewOrigin = env.PREVIEW_ORIGIN?.trim();
     const previewTargetId = env.MOCKMATE_PREVIEW_TARGET_ID?.trim();
     const expectedProjectRef = env.MOCKMATE_SUPABASE_PROJECT_REF?.trim();
+    const gitHeadSha = env.VERCEL_GIT_COMMIT_SHA?.trim();
     const previewInvalid = origins.length !== 1 || !previewOrigin || previewOrigin !== origins[0] ||
       !validRuntimeUrl(previewOrigin, { httpsRequired: true, originOnly: true }) ||
       !previewTargetId || !PREVIEW_TARGET_ID.test(previewTargetId) ||
       !expectedProjectRef || !PROJECT_REF.test(expectedProjectRef) ||
-      serverProjectRef !== expectedProjectRef || browserProjectRef !== expectedProjectRef;
+      serverProjectRef !== expectedProjectRef || browserProjectRef !== expectedProjectRef ||
+      !gitHeadSha || !GIT_HEAD_SHA.test(gitHeadSha);
     if (previewInvalid) throw new ConfigurationError();
     return {
       mode,
       productionLike: true,
-      previewAuthority: { previewOrigin, previewTargetId, supabaseProjectRef: expectedProjectRef } satisfies PreviewAuthority,
+      previewAuthority: {
+        previewOrigin,
+        previewTargetId,
+        supabaseProjectRef: expectedProjectRef,
+        gitHeadSha,
+      } satisfies PreviewAuthority,
     } as const;
   }
 
