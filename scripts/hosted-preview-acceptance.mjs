@@ -95,7 +95,7 @@ async function preflight() {
     throw new Error('Preview health authority does not match the explicitly authorized target.');
   }
 
-  const unauthorized = await fetch(new URL('/api/me', origin), { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
+  const unauthorized = await fetch(new URL('/api/auth/test', origin), { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
   if (unauthorized.status !== 401) throw new Error(`Protected unauthenticated probe returned ${unauthorized.status}; expected 401.`);
 
   const hostileOrigin = 'https://mockmate-hostile-origin.invalid';
