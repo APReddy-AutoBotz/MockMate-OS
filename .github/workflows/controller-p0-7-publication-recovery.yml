@@ -1,0 +1,69 @@
+name: Controller P0-7 Publication Recovery
+
+on:
+  push:
+    branches: [codex/p0-7-mobile-career-context-account-authority]
+
+permissions:
+  contents: write
+
+jobs:
+  publish-approved-correction:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: codex/p0-7-mobile-career-context-account-authority
+
+      - name: Recover verified compressed patch from PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/APReddy-AutoBotz/MockMate-OS/issues/comments/5304467533 --jq .body > /tmp/comment.txt
+          python - <<'PY'
+          import base64, gzip, hashlib, re
+          body = open('/tmp/comment.txt', encoding='utf-8').read()
+          chunks = []
+          for n in (1, 2):
+              m = re.search(rf'\*\*Chunk {n} of 2:\*\*\s*```text\s*([A-Za-z0-9+/=\r\n]+?)\s*```', body)
+              if not m:
+                  raise SystemExit(f'missing chunk {n}')
+              chunks.append(''.join(m.group(1).split()))
+          compressed = base64.b64decode(''.join(chunks), validate=True)
+          if len(compressed) != 4641:
+              raise SystemExit(f'compressed length mismatch: {len(compressed)}')
+          csha = hashlib.sha256(compressed).hexdigest()
+          if csha != 'ac347c0be333ff3c31cd03dad826a620de141ff5d309bc12f1912dd232506471':
+              raise SystemExit(f'compressed sha mismatch: {csha}')
+          patch = gzip.decompress(compressed)
+          if len(patch) != 14182:
+              raise SystemExit(f'patch length mismatch: {len(patch)}')
+          psha = hashlib.sha256(patch).hexdigest()
+          if psha != '8129fed317af09e70f6ec20c3d76c2a08852ecf60a0eba4f2866a06fc9aa647c':
+              raise SystemExit(f'patch sha mismatch: {psha}')
+          open('/tmp/recovery.diff','wb').write(patch)
+          print('verified recovery patch', psha)
+          PY
+          git apply --check /tmp/recovery.diff
+          git apply --index /tmp/recovery.diff
+          rm .github/workflows/controller-p0-7-publication-recovery.yml
+          git add -A
+          git diff --cached --check
+
+      - name: Validate exact correction
+        run: |
+          npm ci
+          npm run shared:build
+          npm run build --workspace=mockmate-backend
+          npm test --workspace=mockmate-backend -- --runInBand --runTestsByPath tests/accentCareerContextAdapter.test.ts
+          npm run test:career-context-api-journey
+          npm run test:mobile-governed-parity
+
+      - name: Publish to existing PR branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(career-context): converge replay and rebuild authority'
+          git push origin HEAD:codex/p0-7-mobile-career-context-account-authority
