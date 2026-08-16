@@ -200,13 +200,17 @@ router.post('/rebuild', async (req, res) => {
       if (foundAccentEvidence || accentPage.length < ACCENT_ATTEMPT_REBUILD_PAGE_SIZE) break;
 
       const lastAttempt = accentPage[accentPage.length - 1];
-      const parsedCreatedAt = typeof lastAttempt?.created_at === 'string' ? Date.parse(lastAttempt.created_at) : Number.NaN;
+      const rawCreatedAt = typeof lastAttempt?.created_at === 'string' ? lastAttempt.created_at : '';
+      const parsedCreatedAt = rawCreatedAt ? Date.parse(rawCreatedAt) : Number.NaN;
       const attemptId = typeof lastAttempt?.attempt_id === 'string' ? lastAttempt.attempt_id : '';
-      if (!Number.isFinite(parsedCreatedAt) || !ACCENT_CURSOR_ID_PATTERN.test(attemptId)) {
+      if (!Number.isFinite(parsedCreatedAt) || rawCreatedAt.length > 64 || /[(),]/.test(rawCreatedAt) || !ACCENT_CURSOR_ID_PATTERN.test(attemptId)) {
         throw Object.assign(new Error('Failed to read ClearSpeak Accent sources: invalid pagination cursor'), { status: 503 });
       }
+      // Preserve the exact server-returned timestamptz representation. Passing
+      // through JS Date would truncate PostgreSQL microseconds to milliseconds
+      // and could skip rows that are older only within the same millisecond.
       accentCursor = {
-        createdAt: new Date(parsedCreatedAt).toISOString(),
+        createdAt: rawCreatedAt,
         attemptId,
       };
     }
