@@ -207,6 +207,30 @@ if (sessionStartIndex < 0 || sessionEndIndex < 0 || sessionStartIndex >= session
     'Retry the exact grounded launch before continuing.',
     'Interview durable cleanup failure must fail closed',
   );
+  requireText(
+    sessionSuccessSlice,
+    'const pendingRecovery = pendingGroundingRef.current;',
+    'Interview interrupted cleanup recovery capture',
+  );
+  const interruptedCleanupMarker = 'if (requestEpoch !== sessionEpochRef.current) {';
+  const interruptedCleanupIndex = sessionSuccessSlice.indexOf(interruptedCleanupMarker);
+  const interruptedCleanupEnd = sessionSuccessSlice.indexOf('        pendingGroundingRef.current = null;', interruptedCleanupIndex);
+  if (interruptedCleanupIndex < 0 || interruptedCleanupEnd < 0 || interruptedCleanupIndex >= interruptedCleanupEnd) {
+    fail('Interview interrupted cleanup recovery block is missing or misplaced');
+  } else {
+    const interruptedCleanupSlice = sessionSuccessSlice.slice(interruptedCleanupIndex, interruptedCleanupEnd);
+    requireText(
+      interruptedCleanupSlice,
+      'await persistPendingGroundingRecovery(pendingRecovery);',
+      'Interview interrupted cleanup must restore exact recovery',
+    );
+    requireBefore(
+      interruptedCleanupSlice,
+      'await persistPendingGroundingRecovery(pendingRecovery);',
+      'return;',
+      'Interview interrupted cleanup must restore before return',
+    );
+  }
 }
 rejectText(
   interview,
