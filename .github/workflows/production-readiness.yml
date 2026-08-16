@@ -151,6 +151,9 @@ jobs:
       - name: 16a. Mobile governed core parity guard
         run: npm run test:mobile-governed-parity
 
+      - name: 16b. P0-8 hosted acceptance fail-closed contract
+        run: npm run test:hosted-acceptance-contract
+
       - name: 20. Recognized full-history secret scan
         uses: gitleaks/gitleaks-action@v2
         env:
