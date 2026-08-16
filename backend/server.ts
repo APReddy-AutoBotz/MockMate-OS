@@ -82,6 +82,7 @@ app.get('/api/health', (_req, res) => res.json({
     ? {
         previewTargetId: runtime.previewAuthority.previewTargetId,
         supabaseProjectRef: runtime.previewAuthority.supabaseProjectRef,
+        gitHeadSha: runtime.previewAuthority.gitHeadSha,
       }
     : {}),
 }));
