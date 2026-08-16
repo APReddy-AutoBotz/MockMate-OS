@@ -28,17 +28,60 @@ export function isProductionLike(env: NodeJS.ProcessEnv = process.env) {
   return mode === 'preview' || mode === 'production';
 }
 
-/** Validate server authority once, without returning names or values to callers. */
+const PROJECT_REF = /^[a-z0-9]{20}$/;
+const PREVIEW_TARGET_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{2,79}$/;
+
+function supabaseProjectRef(urlValue: string | undefined) {
+  if (!urlValue) return null;
+  try {
+    const url = new URL(urlValue);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || url.pathname !== '/' || url.search || url.hash) return null;
+    const match = /^([a-z0-9]{20})\.supabase\.co$/.exec(url.hostname);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export type PreviewAuthority = {
+  previewOrigin: string;
+  previewTargetId: string;
+  supabaseProjectRef: string;
+};
+
+/** Validate server authority once, without returning secret names or values to callers. */
 export function assertServerRuntimeConfig(env: NodeJS.ProcessEnv = process.env) {
   const mode = runtimeMode(env);
   if (mode === 'test' || mode === 'development') return { mode, productionLike: false } as const;
+
   const origins = (env.ALLOWED_ORIGINS || '').split(',').map(v => v.trim()).filter(Boolean);
   const validOrigins = origins.length > 0 && origins.every(origin => origin !== '*' &&
     validRuntimeUrl(origin, { httpsRequired: true, originOnly: true }));
   const providerConfigured = Boolean(env.GEMINI_API_KEY || env.GOOGLE_API_KEY || env.GROQ_API_KEY);
+  const serverProjectRef = supabaseProjectRef(env.SUPABASE_URL);
+  const browserProjectRef = supabaseProjectRef(env.VITE_SUPABASE_URL);
+
   const invalid = env.ENABLE_DEV_AUTH === 'true' || env.VITE_ENABLE_DEV_AUTH === 'true' ||
     !validRuntimeUrl(env.SUPABASE_URL, { httpsRequired: true }) || !env.SUPABASE_SERVICE_ROLE_KEY || !validOrigins ||
     !providerConfigured || Boolean(env.SUPABASE_SERVICE_ROLE_KEY && env.SUPABASE_SERVICE_ROLE_KEY === env.VITE_SUPABASE_ANON_KEY);
   if (invalid) throw new ConfigurationError();
+
+  if (mode === 'preview') {
+    const previewOrigin = env.PREVIEW_ORIGIN?.trim();
+    const previewTargetId = env.MOCKMATE_PREVIEW_TARGET_ID?.trim();
+    const expectedProjectRef = env.MOCKMATE_SUPABASE_PROJECT_REF?.trim();
+    const previewInvalid = origins.length !== 1 || !previewOrigin || previewOrigin !== origins[0] ||
+      !validRuntimeUrl(previewOrigin, { httpsRequired: true, originOnly: true }) ||
+      !previewTargetId || !PREVIEW_TARGET_ID.test(previewTargetId) ||
+      !expectedProjectRef || !PROJECT_REF.test(expectedProjectRef) ||
+      serverProjectRef !== expectedProjectRef || browserProjectRef !== expectedProjectRef;
+    if (previewInvalid) throw new ConfigurationError();
+    return {
+      mode,
+      productionLike: true,
+      previewAuthority: { previewOrigin, previewTargetId, supabaseProjectRef: expectedProjectRef } satisfies PreviewAuthority,
+    } as const;
+  }
+
   return { mode, productionLike: true } as const;
 }
