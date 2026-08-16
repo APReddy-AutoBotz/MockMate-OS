@@ -75,7 +75,7 @@ describe('P0-5 Accent → Career Context adapter', () => {
       source: {
         module: 'clearspeak',
         recordId: ATTEMPT_ID,
-        fieldPath: 'result.coaching.1',
+        fieldPath: 'result.coaching.0.pronunciation',
       },
       exactExcerpt: 'Repeat the marked pronunciation window slowly, then once at normal pace.',
       provenance: 'system_observed',
@@ -97,6 +97,28 @@ describe('P0-5 Accent → Career Context adapter', () => {
       result: scoredResult,
     });
     expect(items).toEqual([]);
+  });
+
+  it('uses canonical array position and dimension when display ranks collide', () => {
+    const duplicateRank = {
+      ...scoredResult,
+      dimensions: {
+        ...scoredResult.dimensions,
+        fluency: {
+          score: 68, confidence: 0.88, evidenceStatus: 'sufficient' as const,
+          summary: 'Bounded fluency evidence.', evidenceRefs: ['fluency.segment.1'],
+        },
+      },
+      coaching: [
+        scoredResult.coaching[0],
+        { rank: 1, dimension: 'fluency' as const, evidenceRefs: ['fluency.segment.1'], action: 'Practice one fluent phrase at a time.' },
+      ],
+    };
+    const items = buildAccentEvidenceContextItems({ attemptId: ATTEMPT_ID, result: duplicateRank });
+    expect(items.map(item => item.source.fieldPath)).toEqual([
+      'result.coaching.0.pronunciation',
+      'result.coaching.1.fluency',
+    ]);
   });
 
   it('does not turn V1/synthetic-shaped or malformed evidence into Career Context claims', () => {

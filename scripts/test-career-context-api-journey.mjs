@@ -50,15 +50,17 @@ function createAuthoritativePersistenceDouble() {
     resume_reviews: [], clearspeak_profiles: [], clearspeak_sessions: [], clearspeak_accent_attempts: [],
   };
   const calls = [];
+  const queryCalls = [];
   const sourceErrors = {};
   const rebuiltSourceIdentities = new Set();
 
   class Query {
-    constructor(table) { this.table = table; this.filters = []; this.operation = 'select'; this.payload = null; }
-    select() { return this; }
+    constructor(table) { this.table = table; this.filters = []; this.operation = 'select'; this.payload = null; this.columns = '*'; this.window = null; }
+    select(columns = '*') { this.columns = columns; return this; }
     eq(column, value) { this.filters.push(row => row[column] === value); return this; }
     in(column, values) { this.filters.push(row => values.includes(row[column])); return this; }
     order() { return this; }
+    range(from, to) { this.window = [from, to]; return this; }
     insert(payload) { this.operation = 'insert'; this.payload = payload; return this; }
     upsert(payload) { this.operation = 'upsert'; this.payload = payload; return this; }
     rows() { return (tables[this.table] || []).filter(row => this.filters.every(filter => filter(row))); }
@@ -79,6 +81,10 @@ function createAuthoritativePersistenceDouble() {
         writtenRows = rows;
       }
       let rows = writtenRows || this.rows();
+      if (this.operation === 'select') {
+        queryCalls.push({ table: this.table, columns: this.columns, window: this.window });
+        if (this.window) rows = rows.slice(this.window[0], this.window[1] + 1);
+      }
       if (this.table === 'career_context_snapshot_items') {
         rows = rows.map(row => ({
           ...row,
@@ -210,7 +216,7 @@ function createAuthoritativePersistenceDouble() {
       return { data: null, error: { message: `Unexpected authoritative RPC: ${name}` } };
     },
   };
-  return { client, calls, tables, sourceErrors };
+  return { client, calls, queryCalls, tables, sourceErrors };
 }
 
 try {
@@ -251,6 +257,16 @@ try {
     { id: 'interview-incomplete-1', user_id: USER_A, status: 'active', report_summary: completedInterviewReport, created_at: now },
     { id: 'interview-invalid-report-1', user_id: USER_A, status: 'completed', report_summary: { overallSummary: 'invalid' }, created_at: now },
   );
+  for (let index = 0; index < 51; index += 1) {
+    authoritative.tables.clearspeak_accent_attempts.push({
+      attempt_id: `accent-history-${String(index).padStart(3, '0')}`,
+      user_id: USER_A,
+      fixture: false,
+      scoring_contract_version: 'accent-score.v2',
+      result: { contractVersion: 'accent-score.v2', malformed: true },
+      created_at: new Date(Date.parse(now) - index * 1000).toISOString(),
+    });
+  }
 
   // 3. Every authoritative rebuild source fails closed before the rebuild mutation.
   for (const sourceTable of ['resume_reviews', 'clearspeak_profiles', 'clearspeak_sessions', 'clearspeak_accent_attempts', 'interview_sessions']) {
@@ -273,6 +289,11 @@ try {
       !firstRebuildCall.args.p_drafts.some(draft => draft.source.module === 'resume') ||
       !firstRebuildCall.args.p_drafts.some(draft => draft.source.module === 'clearspeak')) {
     throw new Error('All-source-success rebuild did not use exactly one authoritative atomic mutation');
+  }
+  const accentQueries = authoritative.queryCalls.filter(call => call.table === 'clearspeak_accent_attempts');
+  if (accentQueries.length < 2 || accentQueries.some(call => call.columns !== 'attempt_id,result') ||
+      accentQueries[0].window?.[0] !== 0 || accentQueries[1].window?.[0] !== 50) {
+    throw new Error('Accent rebuild did not use privacy-minimal deterministic bounded pagination');
   }
   const versionAfterFirstRebuild = authoritative.tables.career_context_state[0].context_version;
   const replayedRebuild = await fetch(`${baseUrl}/api/career-context/rebuild`, { method: 'POST', headers: headersUserA });
@@ -445,6 +466,13 @@ try {
   const consumedBridge = authoritative.tables.career_context_bridges[0];
   if (consumedBridge.status !== 'consumed' || consumedBridge.target_session_id !== session.sessionId) {
     throw new Error('Grounded session did not atomically bind the consumed bridge to its real session ID');
+  }
+
+  const recoveredPlanResponse = await planRequest();
+  const recoveredPlan = await recoveredPlanResponse.json();
+  if (recoveredPlanResponse.status !== 200 || recoveredPlan.authority?.planId !== authoritativePlan.authority.planId ||
+      authoritative.tables.interview_generated_plans.length !== 1) {
+    throw new Error('Consumed-bridge response-loss recovery did not replay the existing authoritative plan');
   }
 
   // 9. Exact response-loss replay returns the one canonical session without another write or bridge consumption.

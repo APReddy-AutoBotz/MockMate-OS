@@ -172,10 +172,10 @@ export function buildAccentEvidenceContextItems(input: AccentEvidenceAdapterInpu
     return [];
   }
 
-  const firstPriorityByDimension = new Map<string, AccentScoreV2['coaching'][number]>();
-  for (const coaching of [...result.coaching].sort((a, b) => a.rank - b.rank)) {
+  const firstPriorityByDimension = new Map<string, { coaching: AccentScoreV2['coaching'][number]; index: number }>();
+  for (const [index, coaching] of result.coaching.entries()) {
     if (!firstPriorityByDimension.has(coaching.dimension)) {
-      firstPriorityByDimension.set(coaching.dimension, coaching);
+      firstPriorityByDimension.set(coaching.dimension, { coaching, index });
     }
   }
 
@@ -185,7 +185,7 @@ export function buildAccentEvidenceContextItems(input: AccentEvidenceAdapterInpu
     result.evidenceLineage.adapterVersion,
   ].join(':');
 
-  return [...firstPriorityByDimension.values()].map((coaching) => {
+  return [...firstPriorityByDimension.values()].map(({ coaching, index }) => {
     const dimension = result.dimensions[coaching.dimension];
     // AccentScoreV2Schema already guarantees coaching belongs to a scored
     // dimension and that every coaching evidenceRef is present in that dimension.
@@ -205,7 +205,7 @@ export function buildAccentEvidenceContextItems(input: AccentEvidenceAdapterInpu
       source: {
         module: 'clearspeak' as const,
         recordId: input.attemptId,
-        fieldPath: `result.coaching.${coaching.rank}`,
+        fieldPath: `result.coaching.${index}.${coaching.dimension}`,
         sourceRevision: revision,
         sourceHash,
         capturedAt: new Date().toISOString(),

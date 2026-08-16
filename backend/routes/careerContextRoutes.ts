@@ -28,6 +28,7 @@ import {
 } from 'mockmate-shared';
 
 const router = Router();
+const ACCENT_ATTEMPT_REBUILD_PAGE_SIZE = 50;
 
 router.use(verifyAuthToken);
 
@@ -150,28 +151,36 @@ router.post('/rebuild', async (req, res) => {
     // 2b. P0-5 Accent Practice: ingest only the newest persisted real V2
     // scored attempt that actually contains strict evidence-backed coaching.
     // V1/synthetic/unscored evidence produces no Career Context claims.
-    const { data: accentAttempts, error: accentAttemptsError } = await supabaseAdmin
-      .from('clearspeak_accent_attempts')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
+    let accentOffset = 0;
+    let foundAccentEvidence = false;
+    while (!foundAccentEvidence) {
+      const { data: accentAttempts, error: accentAttemptsError } = await supabaseAdmin
+        .from('clearspeak_accent_attempts')
+        .select('attempt_id,result')
+        .eq('user_id', userId)
+        .eq('fixture', false)
+        .eq('scoring_contract_version', 'accent-score.v2')
+        .order('created_at', { ascending: false })
+        .order('attempt_id', { ascending: false })
+        .range(accentOffset, accentOffset + ACCENT_ATTEMPT_REBUILD_PAGE_SIZE - 1);
 
-    if (accentAttemptsError) {
-      throw Object.assign(new Error(`Failed to read ClearSpeak Accent sources: ${accentAttemptsError.message}`), { status: 503 });
-    }
+      if (accentAttemptsError) {
+        throw Object.assign(new Error(`Failed to read ClearSpeak Accent sources: ${accentAttemptsError.message}`), { status: 503 });
+      }
 
-    if (accentAttempts && accentAttempts.length > 0) {
-      for (const attempt of accentAttempts) {
-        if (attempt.fixture === true || attempt.scoring_contract_version !== 'accent-score.v2') continue;
+      for (const attempt of accentAttempts || []) {
         const items = buildAccentEvidenceContextItems({
           attemptId: attempt.attempt_id,
           result: attempt.result,
         });
         if (items.length > 0) {
           drafts.push(...items);
+          foundAccentEvidence = true;
           break;
         }
       }
+      if (foundAccentEvidence || !accentAttempts || accentAttempts.length < ACCENT_ATTEMPT_REBUILD_PAGE_SIZE) break;
+      accentOffset += ACCENT_ATTEMPT_REBUILD_PAGE_SIZE;
     }
 
     // 3. Rebuild from interview_sessions & reports
