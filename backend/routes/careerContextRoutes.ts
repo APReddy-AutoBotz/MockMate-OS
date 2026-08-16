@@ -29,6 +29,12 @@ import {
 
 const router = Router();
 const ACCENT_ATTEMPT_REBUILD_PAGE_SIZE = 50;
+const ACCENT_CURSOR_ID_PATTERN = /^[a-z0-9-]{1,128}$/i;
+
+type AccentAttemptCursor = {
+  createdAt: string;
+  attemptId: string;
+};
 
 router.use(verifyAuthToken);
 
@@ -151,24 +157,35 @@ router.post('/rebuild', async (req, res) => {
     // 2b. P0-5 Accent Practice: ingest only the newest persisted real V2
     // scored attempt that actually contains strict evidence-backed coaching.
     // V1/synthetic/unscored evidence produces no Career Context claims.
-    let accentOffset = 0;
+    // Traverse with a stable descending keyset so concurrent insert/delete
+    // cannot shift an eligible row across an offset boundary.
+    let accentCursor: AccentAttemptCursor | null = null;
     let foundAccentEvidence = false;
     while (!foundAccentEvidence) {
-      const { data: accentAttempts, error: accentAttemptsError } = await supabaseAdmin
+      let accentQuery = supabaseAdmin
         .from('clearspeak_accent_attempts')
-        .select('attempt_id,result')
+        .select('attempt_id,result,created_at')
         .eq('user_id', userId)
         .eq('fixture', false)
         .eq('scoring_contract_version', 'accent-score.v2')
         .order('created_at', { ascending: false })
         .order('attempt_id', { ascending: false })
-        .range(accentOffset, accentOffset + ACCENT_ATTEMPT_REBUILD_PAGE_SIZE - 1);
+        .limit(ACCENT_ATTEMPT_REBUILD_PAGE_SIZE);
+
+      if (accentCursor) {
+        accentQuery = accentQuery.or(
+          `created_at.lt.${accentCursor.createdAt},and(created_at.eq.${accentCursor.createdAt},attempt_id.lt.${accentCursor.attemptId})`
+        );
+      }
+
+      const { data: accentAttempts, error: accentAttemptsError } = await accentQuery;
 
       if (accentAttemptsError) {
         throw Object.assign(new Error(`Failed to read ClearSpeak Accent sources: ${accentAttemptsError.message}`), { status: 503 });
       }
 
-      for (const attempt of accentAttempts || []) {
+      const accentPage = accentAttempts || [];
+      for (const attempt of accentPage) {
         const items = buildAccentEvidenceContextItems({
           attemptId: attempt.attempt_id,
           result: attempt.result,
@@ -179,8 +196,19 @@ router.post('/rebuild', async (req, res) => {
           break;
         }
       }
-      if (foundAccentEvidence || !accentAttempts || accentAttempts.length < ACCENT_ATTEMPT_REBUILD_PAGE_SIZE) break;
-      accentOffset += ACCENT_ATTEMPT_REBUILD_PAGE_SIZE;
+
+      if (foundAccentEvidence || accentPage.length < ACCENT_ATTEMPT_REBUILD_PAGE_SIZE) break;
+
+      const lastAttempt = accentPage[accentPage.length - 1];
+      const parsedCreatedAt = typeof lastAttempt?.created_at === 'string' ? Date.parse(lastAttempt.created_at) : Number.NaN;
+      const attemptId = typeof lastAttempt?.attempt_id === 'string' ? lastAttempt.attempt_id : '';
+      if (!Number.isFinite(parsedCreatedAt) || !ACCENT_CURSOR_ID_PATTERN.test(attemptId)) {
+        throw Object.assign(new Error('Failed to read ClearSpeak Accent sources: invalid pagination cursor'), { status: 503 });
+      }
+      accentCursor = {
+        createdAt: new Date(parsedCreatedAt).toISOString(),
+        attemptId,
+      };
     }
 
     // 3. Rebuild from interview_sessions & reports
