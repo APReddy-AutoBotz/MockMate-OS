@@ -6,9 +6,12 @@
 - P0-7 post-merge Production Readiness: run #316 / `31941312775` — `SUCCESS`.
 - P0-8 delivery: Draft PR #18, branch `codex/p0-8-hosted-preview-acceptance`.
 - Authorization: dedicated preview/test environment only. Public production, uncontrolled/public users, customer data, native store publication, and purchase/selection of a new paid ClearSpeak scorer remain outside this milestone.
-- Current hosted state: `DEDICATED_MOCKMATE_SUPABASE_TARGET_MISSING`.
+- Dedicated Supabase preview target: `MockMate-P0-8-Preview`, project ref `cysnsoeonyhcshjjpezk`, region `ap-south-1`, `ACTIVE_HEALTHY` at controller activation.
+- Current hosted state: `DEDICATED_SUPABASE_ACTIVE__VERCEL_PREVIEW_NOT_BOUND`.
 
-The connected Supabase inventory contained no project dedicated to MockMate. The connected Vercel `Autobotz` team contained no projects. No unrelated Supabase project was reused and no hosted deployment was created as a workaround.
+A dedicated MockMate Supabase project now exists. No existing application database was repurposed as the MockMate target. The complete repository migration chain was applied in order, followed by the P0-8 advisor-hardening migration. Hosted migration history contains the same ordered migration names as the P0-8 branch. Supabase security and performance advisors report **zero WARN-level findings** after hardening. Remaining advisor notices are INFO-level only: two deliberately client-inaccessible RLS tables without client policies, optional unindexed foreign keys, and unused-index notices expected on a new empty preview database.
+
+The connected Vercel `Autobotz` team still contains no projects. No deployment has been created as a workaround and no production deployment has been promoted.
 
 ## Source-side preview authority
 
@@ -26,6 +29,21 @@ P0-8 preview runtime must fail closed unless all of these agree:
 10. at least one already-authorized AI provider is configured where production-like startup requires provider authority.
 
 The preview health response may expose only non-secret target binding metadata (`mode`, authority state, preview target ID, Supabase project reference, deployed Git head SHA). It must never expose credentials, tokens, test-user identifiers, provider keys, raw resumes, raw audio, interview content, or recovery payloads.
+
+## Supabase activation evidence
+
+The dedicated project was created only after the approved free-tier slot was made available. The initial project migration ledger was empty. The controller then applied every repository migration in exact branch order, with no skipped or failed migration, and applied the forward-only P0-8 advisor-hardening migration.
+
+The advisor-hardening migration:
+
+- pins `search_path` for internal `SECURITY DEFINER` trigger/helper functions;
+- removes `anon` and `authenticated` EXECUTE authority from those internal functions;
+- preserves owner-only RLS semantics while changing owner checks to `(select auth.uid())` so PostgreSQL initializes identity once per statement;
+- deliberately does not add client policies to `ai_cache` or `interview_plan_generation_reservations`, because both are server-only/service-role-only boundaries.
+
+After the migration, Supabase security advisor WARN count is `0` and performance advisor WARN count is `0`. INFO-level performance notices are recorded but are not represented as production-load proof; P0-8 is a bounded preview acceptance milestone, not a scale benchmark.
+
+The server service-role credential remains a server-only deployment secret. Browser configuration may use only the dedicated project's publishable/anon credential. Neither credential value is recorded in this evidence ledger.
 
 ## Hosted acceptance authority
 
@@ -52,21 +70,22 @@ Before a mutation-capable hosted run, replace every `__CONTROLLER_REPLACE__` pla
 
 ## Dedicated Supabase activation gate
 
-Only a newly created or explicitly identified **MockMate preview/test** project may be used. Before mutation:
+The dedicated database portion of this gate is now satisfied through schema/advisor activation. Before hosted functional mutation, the remaining controls are:
 
-1. record the project reference and current migration state without secrets;
-2. verify P0-8 exact-head source CI is green;
-3. apply the complete ordered migration chain;
-4. verify RLS, grants, RPC authority and migration history;
-5. configure only the exact preview Auth redirect/origin settings;
-6. run security and performance advisors after DDL;
-7. create only bounded controller-owned test identities;
-8. prove two-user isolation and authoritative app-data deletion;
-9. remove bounded test data through authoritative deletion paths after evidence is captured.
+1. exact-head source CI must remain green after every source/evidence update;
+2. configure only the dedicated project URL/ref and browser-safe publishable credential in the preview browser environment;
+3. configure the service-role credential only in the Vercel server environment;
+4. configure only an already-authorized AI provider credential required for production-like startup;
+5. bind the exact preview Auth redirect/origin settings;
+6. create only bounded controller-owned test identities;
+7. prove two-user isolation and authoritative app-data deletion;
+8. remove bounded test data through authoritative deletion paths after evidence is captured.
 
 ## Vercel preview gate
 
 Use the existing `vercel.json` + Vite + Express serverless architecture. Preview only; never production promotion in P0-8. The exact Vercel preview origin must be bound into both runtime configuration and the hosted acceptance command. Vercel system environment variables must be exposed so runtime can receive `VERCEL_GIT_COMMIT_SHA`; the acceptance harness must compare that deployed SHA with the exact expected PR head. No deployment may proceed against an unrelated Supabase project.
+
+A Vercel project/origin is not yet bound. The connected `Autobotz` team currently reports no projects. Until a project can be created with server-only environment secrets and an exact preview origin, hosted acceptance remains correctly closed.
 
 ## Immediate rollback / stop conditions
 
@@ -84,4 +103,4 @@ Stop or roll back the preview if any of the following occurs:
 
 ## Closure evidence still required
 
-P0-8 stays Draft until a dedicated MockMate Supabase target and a Vercel preview are explicitly bound, exact-head Production Readiness is green, the authorized hosted acceptance matrix is green, all review threads are resolved, and a fresh independent exact-head Codex P1/P2 review is clean.
+P0-8 stays Draft until the dedicated Supabase target and a Vercel preview are explicitly bound, exact-head Production Readiness is green, bounded hosted identities are established, the authorized hosted acceptance matrix is green, all review threads are resolved, and a fresh independent exact-head Codex P1/P2 review is clean.
