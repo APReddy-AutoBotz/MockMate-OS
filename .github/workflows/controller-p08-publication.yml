@@ -1,0 +1,87 @@
+name: Controller P0-8 Publication
+
+on:
+  push:
+    branches:
+      - codex/p0-8-hosted-preview-acceptance
+    paths:
+      - .github/workflows/controller-p08-publication.yml
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Verify exact publication base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "5b208d2b2bf4f4e223aa8b103688e19818d8d1bb"
+          test "$(git diff --name-only HEAD^..HEAD)" = ".github/workflows/controller-p08-publication.yml"
+      - name: Recover approved seven-file correction
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api repos/${GITHUB_REPOSITORY}/issues/comments/5308119512 --jq .body > /tmp/comment.md
+          python - <<'PY'
+          import base64,gzip,hashlib,pathlib,re
+          body=pathlib.Path('/tmp/comment.md').read_text()
+          matches=re.findall(r'\*\*Chunk\s+(\d+)/10\*\*\s*```text\n([A-Za-z0-9+/=\n]+)\n```', body, flags=re.S)
+          if len(matches)!=10: raise SystemExit(f'expected 10 chunks, got {len(matches)}')
+          chunks={int(n):''.join(data.split()) for n,data in matches}
+          if sorted(chunks)!=list(range(1,11)): raise SystemExit('chunk numbering incomplete')
+          b64=''.join(chunks[i] for i in range(1,11))
+          if len(b64)!=13524: raise SystemExit(f'bad b64 length {len(b64)}')
+          gz=base64.b64decode(b64,validate=True)
+          if len(gz)!=10141: raise SystemExit(f'bad gzip length {len(gz)}')
+          if hashlib.sha256(gz).hexdigest()!='fe8f7f882db8090e9e835848f4bcc9acde3d8d013fa99e0ca41f7c6fad2b5bfd': raise SystemExit('gzip sha mismatch')
+          patch=gzip.decompress(gz)
+          if len(patch)!=44724: raise SystemExit(f'bad raw length {len(patch)}')
+          if hashlib.sha256(patch).hexdigest()!='c068cf981416db9460390f1ffb5c730339ee4859762e12ddf595537be8d4f24d': raise SystemExit('raw sha mismatch')
+          pathlib.Path('/tmp/p08.patch').write_bytes(patch)
+          text=patch.decode()
+          paths=[]
+          for m in re.finditer(r'^diff --git a/(.+?) b/(.+?)$', text, flags=re.M):
+              if m.group(1)!=m.group(2): raise SystemExit('rename not allowed')
+              paths.append(m.group(1))
+          expected=[
+            'config/hosted-acceptance-scenarios.example.json',
+            'docs/free-first-production.md',
+            'docs/launch-runbook.md',
+            'docs/mobile-production-plan.md',
+            'docs/quality/p0-8-hosted-preview-evidence.md',
+            'scripts/hosted-preview-acceptance.mjs',
+            'scripts/test-hosted-acceptance-guard.mjs',
+          ]
+          if paths!=expected: raise SystemExit(f'unexpected patch paths: {paths}')
+          PY
+          git apply --check /tmp/p08.patch
+          git apply /tmp/p08.patch
+          test "$(git hash-object config/hosted-acceptance-scenarios.example.json)" = "023f29400670fb4c76ffb80d691e350d8f8de7c7"
+          test "$(git hash-object docs/free-first-production.md)" = "a046b2666f03d5af0328fb12c51cb159c6ea8645"
+          test "$(git hash-object docs/launch-runbook.md)" = "c0b625445d3dcba8302245a615ec522fb5fc1377"
+          test "$(git hash-object docs/mobile-production-plan.md)" = "978bfcdd78d15109408a4ec73d36318594b7b5d4"
+          test "$(git hash-object docs/quality/p0-8-hosted-preview-evidence.md)" = "9214a03d18df1535694075a08dd4204929891a63"
+          test "$(git hash-object scripts/hosted-preview-acceptance.mjs)" = "9f1d72eb6d588ec78e860f598b4e05f598990382"
+          test "$(git hash-object scripts/test-hosted-acceptance-guard.mjs)" = "3b3c446231d355cb3c79e6e50acc6dcc22488a51"
+      - name: Publish exact correction and remove transport scaffold
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/controller-p08-publication.yml
+          git add config/hosted-acceptance-scenarios.example.json docs/free-first-production.md docs/launch-runbook.md docs/mobile-production-plan.md docs/quality/p0-8-hosted-preview-evidence.md scripts/hosted-preview-acceptance.mjs scripts/test-hosted-acceptance-guard.mjs
+          mapfile -t paths < <(git diff --cached --name-only | sort)
+          mapfile -t expected < <(printf '%s\n' .github/workflows/controller-p08-publication.yml config/hosted-acceptance-scenarios.example.json docs/free-first-production.md docs/launch-runbook.md docs/mobile-production-plan.md docs/quality/p0-8-hosted-preview-evidence.md scripts/hosted-preview-acceptance.mjs scripts/test-hosted-acceptance-guard.mjs | sort)
+          test "${paths[*]}" = "${expected[*]}"
+          git config user.name 'portfolio-controller[bot]'
+          git config user.email 'portfolio-controller[bot]@users.noreply.github.com'
+          git commit -m 'test: converge governed hosted acceptance truth'
+          git push origin HEAD:codex/p0-8-hosted-preview-acceptance
