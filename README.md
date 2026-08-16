@@ -16,7 +16,7 @@ P0-7 Mobile Career Context & Account Authority Parity is merged on `main` at `38
 
 P0-8 Authorized Hosted Preview & Production-Like Acceptance is active in Draft PR #18. AP has authorized a **dedicated preview/test environment only**. P0-8 adds exact preview/Supabase target binding, fail-closed hosted acceptance, non-secret evidence/rollback authority and the path to production-like browser/API proof. It does not authorize public production promotion, uncontrolled/public users, customer data, native store publication, or purchase/selection of a new paid ClearSpeak provider.
 
-The current infrastructure blocker is `DEDICATED_MOCKMATE_SUPABASE_TARGET_MISSING`: the connected Supabase account has no dedicated MockMate project, and unrelated projects must not be reused. The connected Vercel `Autobotz` team currently has no projects, so there is also no legacy deployment to reconcile.
+The dedicated Supabase preview target is now active: `MockMate-P0-8-Preview` / `cysnsoeonyhcshjjpezk` in `ap-south-1`. The complete ordered repository migration chain plus the P0-8 advisor-hardening migration is applied. Post-DDL Supabase security and performance advisors have **zero WARN-level findings**; remaining notices are INFO-level only. The connected Vercel `Autobotz` team currently has no project, so the active hosted gate is `DEDICATED_SUPABASE_ACTIVE__VERCEL_PREVIEW_NOT_BOUND`.
 
 The browser app remains the primary working product.
 
@@ -78,71 +78,40 @@ cd backend
 npm run dev
 ```
 
-## Build Checks
+The API listens on port 3001 by default.
 
-Run these before deploying:
+## Production-like preview authority
 
-```bash
-npm run typecheck
-npm run verify:supabase
-npm run build
-cd backend && npm run build
-```
-
-Or run the combined source gates from the repo root:
-
-```bash
-npm run check:production
-npm run audit:production
-npm run check:mobile
-npm run check:preview-readiness
-npm run test:hosted-acceptance-contract
-```
-
-The deployed smoke contract defaults to a disposable/local target. Remote smoke remains separately opt-in:
-
-```bash
-npm run smoke:deployed -- https://your-preview.vercel.app
-```
-
-The P0-8 hosted acceptance runner is **not** part of ordinary PR/release CI. It refuses execution unless all controller authorization, bounded-test-data and exact-target variables are deliberately supplied. Start from `config/hosted-acceptance-scenarios.example.json`, create a non-committed reviewed manifest, and follow `docs/quality/p0-8-hosted-preview-evidence.md`.
-
-## P0-8 Preview Deployment
-
-P0-8 preview/test deployment is authorized, but only after a dedicated MockMate Supabase target is explicitly created or identified. Do not reuse Boundaryless RUT, WorkOS, Kootha, AvalaOS, Creator Studio or any other unrelated project.
-
-For preview runtime, the server must use:
+A hosted preview must be configured fail closed with:
 
 ```env
 MOCKMATE_RUNTIME_MODE=preview
 ENABLE_DEV_AUTH=false
 VITE_ENABLE_DEV_AUTH=false
-ALLOWED_ORIGINS=https://your-exact-preview.vercel.app
-PREVIEW_ORIGIN=https://your-exact-preview.vercel.app
-MOCKMATE_PREVIEW_TARGET_ID=mockmate-p0-8-preview
-MOCKMATE_SUPABASE_PROJECT_REF=<20-character-project-ref>
+ALLOWED_ORIGINS=https://<exact-preview-origin>
+PREVIEW_ORIGIN=https://<exact-preview-origin>
+MOCKMATE_PREVIEW_TARGET_ID=<explicit-preview-target-id>
+MOCKMATE_SUPABASE_PROJECT_REF=cysnsoeonyhcshjjpezk
+SUPABASE_URL=https://cysnsoeonyhcshjjpezk.supabase.co
+VITE_SUPABASE_URL=https://cysnsoeonyhcshjjpezk.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<server-only-secret>
+VITE_SUPABASE_ANON_KEY=<browser-publishable-or-anon-key>
 ```
 
-`SUPABASE_URL` and `VITE_SUPABASE_URL` must both resolve to that exact project reference. `SUPABASE_SERVICE_ROLE_KEY` remains server-only and must never equal or be exposed as the browser public/anon key. `vercel.json` continues to build the frontend, build the backend, and route `/api/*` through the Express app in `api/[...path].ts`.
+Vercel must expose its system `VERCEL_GIT_COMMIT_SHA` to runtime. At least one already-authorized AI provider key (`GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `GROQ_API_KEY`) is also required for production-like startup. Never put the service-role credential or provider credential in Git, a browser-prefixed variable, hosted acceptance evidence, or client logs.
 
-`/api/health` exposes only non-secret preview binding identity so the controller can prove it reached the exact authorized Vercel/Supabase pair.
+Run source checks:
 
-## Production Launch Checklist
+```bash
+npm run check:production
+npm run check:mobile
+npm run test:hosted-acceptance-contract
+```
 
-P0-8 is preview acceptance, not public launch. Before inviting real users in a later milestone:
+Actual hosted mutation/acceptance is a separate controller-only action and is intentionally excluded from ordinary CI:
 
-- Complete a dedicated MockMate Supabase preview and exact Vercel preview deployment.
-- Prove `/api/health` target binding and protected API `401` rejection without a Supabase token.
-- Run the governed hosted acceptance matrix with two bounded controller-owned identities.
-- Prove signup/session, Resume, ClearSpeak, Interview, Career Context/grounding, report, account-data deletion, admin/privacy, PWA/offline truth, concurrency/replay and cross-user isolation.
-- Confirm no raw resume/audio evidence, credentials or private response bodies are retained in artifacts/logs.
-- Run a fresh exact-head independent Codex P1/P2 review.
-- Keep native internal builds and all public/store promotion in their separately authorized milestones.
+```bash
+npm run acceptance:hosted
+```
 
-## Documentation
-
-- `docs/free-first-production.md`: Supabase/Vercel setup, quotas, privacy, and launch checks
-- `docs/launch-runbook.md`: exact production preview and launch checklist
-- `docs/mobile-production-plan.md`: Android/iOS production path
-- `docs/planning/p0-8-hosted-preview-acceptance-plan.md`: frozen P0-8 controller plan
-- `docs/quality/p0-8-hosted-preview-evidence.md`: hosted target authority, evidence and rollback ledger
+See `docs/quality/p0-8-hosted-preview-evidence.md` and `docs/launch-runbook.md` for the governed hosted path and stop/rollback conditions.
