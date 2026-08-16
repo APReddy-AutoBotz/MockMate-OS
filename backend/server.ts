@@ -73,11 +73,17 @@ app.use(compression());
 app.use(express.json({ limit: '2mb' }));
 app.use(morgan(':method :url :status :response-time ms'));
 
-// Health
+// Health exposes only non-secret binding metadata in preview so acceptance can prove exact-target authority.
 app.get('/api/health', (_req, res) => res.json({
   ok: true,
   mode: runtime.mode,
   authority: isSupabaseConfigured ? 'configured' : 'unavailable',
+  ...(runtime.mode === 'preview' && 'previewAuthority' in runtime
+    ? {
+        previewTargetId: runtime.previewAuthority.previewTargetId,
+        supabaseProjectRef: runtime.previewAuthority.supabaseProjectRef,
+      }
+    : {}),
 }));
 
 // Gemini Live Ephemeral Token
