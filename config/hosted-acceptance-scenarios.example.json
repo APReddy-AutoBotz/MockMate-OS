@@ -1,18 +1,175 @@
 {
-  "schemaVersion": 1,
-  "description": "Controller-reviewed template only. Copy to a non-committed file and replace placeholder paths/bodies with bounded test cases for the exact authorized preview. Never commit tokens or user data.",
+  "schemaVersion": 2,
+  "description": "Controller-reviewed template only. Copy to a non-committed file and replace every __CONTROLLER_REPLACE__ placeholder with bounded exact-target cases. Semantic assertions inspect responses in memory; response bodies, tokens and user content are never written to evidence.",
   "scenarios": [
-    { "id": "runtime-health", "family": "runtime", "method": "GET", "path": "/api/health", "auth": "none", "expectedStatuses": [200] },
-    { "id": "pwa-manifest", "family": "pwa", "method": "GET", "path": "/manifest.json", "auth": "none", "expectedStatuses": [200] },
-    { "id": "auth-protected", "family": "auth", "method": "GET", "path": "/api/auth/test", "auth": "userA", "expectedStatuses": [200] },
-    { "id": "resume-governed", "family": "resume", "method": "GET", "path": "/api/resume/__CONTROLLER_REPLACE__", "auth": "userA", "expectedStatuses": [200] },
-    { "id": "clearspeak-authority", "family": "clearspeak", "method": "GET", "path": "/api/clearspeak/__CONTROLLER_REPLACE__", "auth": "userA", "expectedStatuses": [200] },
-    { "id": "interview-authority", "family": "interview", "method": "GET", "path": "/api/interview/__CONTROLLER_REPLACE__", "auth": "userA", "expectedStatuses": [200] },
-    { "id": "career-context-authority", "family": "career-context", "method": "GET", "path": "/api/career-context", "auth": "userA", "expectedStatuses": [200] },
-    { "id": "account-deletion-dry-case", "family": "account-deletion", "method": "GET", "path": "/api/me/__CONTROLLER_REPLACE_NON_MUTATING_PROBE__", "auth": "userA", "expectedStatuses": [200] },
-    { "id": "admin-privacy", "family": "admin-privacy", "method": "GET", "path": "/api/admin/usage", "auth": "admin", "expectedStatuses": [200] },
-    { "id": "duplicate-request", "family": "concurrency", "method": "GET", "path": "/api/interview/__CONTROLLER_REPLACE_CONCURRENCY_PROBE__", "auth": "userA", "expectedStatuses": [200, 409] },
-    { "id": "response-loss-replay", "family": "replay", "method": "GET", "path": "/api/career-context/__CONTROLLER_REPLACE_REPLAY_PROBE__", "auth": "userA", "expectedStatuses": [200, 409] },
-    { "id": "cross-user-isolation", "family": "cross-user-isolation", "method": "GET", "path": "/api/career-context/__CONTROLLER_REPLACE_USER_A_RESOURCE__", "auth": "userB", "expectedStatuses": [403, 404] }
+    {
+      "id": "runtime-health",
+      "family": "runtime",
+      "method": "GET",
+      "path": "/api/health",
+      "auth": "none",
+      "expectedStatuses": [200],
+      "assertions": [
+        { "source": "json", "path": "/mode", "op": "equals", "value": "preview" },
+        { "source": "json", "path": "/authority", "op": "equals", "value": "configured" },
+        { "source": "json", "path": "/previewTargetId", "op": "exists", "value": true },
+        { "source": "json", "path": "/supabaseProjectRef", "op": "exists", "value": true },
+        { "source": "json", "path": "/gitHeadSha", "op": "matches", "value": "^[0-9a-f]{40}$" }
+      ]
+    },
+    {
+      "id": "pwa-manifest",
+      "family": "pwa",
+      "method": "GET",
+      "path": "/manifest.json",
+      "auth": "none",
+      "expectedStatuses": [200],
+      "assertions": [
+        { "source": "header", "name": "content-type", "op": "matches", "value": "application/(manifest\\+json|json)" },
+        { "source": "json", "path": "/name", "op": "type", "value": "string" },
+        { "source": "json", "path": "/icons", "op": "type", "value": "array" }
+      ]
+    },
+    {
+      "id": "auth-protected",
+      "family": "auth",
+      "method": "GET",
+      "path": "/api/auth/test",
+      "auth": "userA",
+      "expectedStatuses": [200],
+      "assertions": [
+        { "source": "json", "path": "/user/id", "op": "equals", "value": "__CONTROLLER_REPLACE_USER_A_ID__" }
+      ]
+    },
+    {
+      "id": "resume-governed",
+      "family": "resume",
+      "method": "GET",
+      "path": "/api/resume/__CONTROLLER_REPLACE_RESUME_ID__",
+      "auth": "userA",
+      "expectedStatuses": [200],
+      "assertions": [
+        { "source": "json", "path": "/id", "op": "equals", "value": "__CONTROLLER_REPLACE_RESUME_ID__" },
+        { "source": "json", "path": "/userId", "op": "equals", "value": "__CONTROLLER_REPLACE_USER_A_ID__" }
+      ]
+    },
+    {
+      "id": "clearspeak-authority",
+      "family": "clearspeak",
+      "method": "GET",
+      "path": "/api/clearspeak/__CONTROLLER_REPLACE_ATTEMPT_ID__",
+      "auth": "userA",
+      "expectedStatuses": [200],
+      "assertions": [
+        { "source": "json", "path": "/attemptId", "op": "equals", "value": "__CONTROLLER_REPLACE_ATTEMPT_ID__" },
+        { "source": "json", "path": "/evidenceProvenance", "op": "oneOf", "value": ["synthetic_fixture_scored", "user_recording_unscored", "user_recording_scored", "user_recording_evaluated_unscored"] }
+      ]
+    },
+    {
+      "id": "interview-authority",
+      "family": "interview",
+      "method": "GET",
+      "path": "/api/interview/sessions/__CONTROLLER_REPLACE_SESSION_ID__",
+      "auth": "userA",
+      "expectedStatuses": [200],
+      "assertions": [
+        { "source": "json", "path": "/id", "op": "equals", "value": "__CONTROLLER_REPLACE_SESSION_ID__" },
+        { "source": "json", "path": "/userId", "op": "equals", "value": "__CONTROLLER_REPLACE_USER_A_ID__" }
+      ]
+    },
+    {
+      "id": "career-context-authority",
+      "family": "career-context",
+      "method": "GET",
+      "path": "/api/career-context",
+      "auth": "userA",
+      "expectedStatuses": [200],
+      "assertions": [
+        { "source": "json", "path": "/contextVersion", "op": "type", "value": "number" },
+        { "source": "json", "path": "/items", "op": "type", "value": "array" }
+      ]
+    },
+    {
+      "id": "account-deletion-authority",
+      "family": "account-deletion",
+      "method": "GET",
+      "path": "/api/me/__CONTROLLER_REPLACE_NON_MUTATING_DELETION_READINESS_PROBE__",
+      "auth": "userA",
+      "expectedStatuses": [200],
+      "assertions": [
+        { "source": "json", "path": "/userId", "op": "equals", "value": "__CONTROLLER_REPLACE_USER_A_ID__" },
+        { "source": "json", "path": "/authoritative", "op": "equals", "value": true }
+      ]
+    },
+    {
+      "id": "admin-privacy",
+      "family": "admin-privacy",
+      "method": "GET",
+      "path": "/api/admin/usage",
+      "auth": "admin",
+      "expectedStatuses": [200],
+      "assertions": [
+        { "source": "json", "path": "/users", "op": "exists", "value": false },
+        { "source": "json", "path": "/summary", "op": "exists", "value": true }
+      ]
+    },
+    {
+      "id": "duplicate-request",
+      "family": "concurrency",
+      "method": "POST",
+      "path": "/api/interview/__CONTROLLER_REPLACE_CONCURRENCY_ENDPOINT__",
+      "auth": "userA",
+      "body": { "clientSubmissionId": "__CONTROLLER_REPLACE_STABLE_CONCURRENCY_ID__", "payload": "__CONTROLLER_REPLACE_BOUNDED_PAYLOAD__" },
+      "expectedStatuses": [200, 201, 409],
+      "assertions": [
+        { "source": "json", "path": "/canonicalId", "op": "exists", "value": true }
+      ],
+      "execution": { "mode": "parallel", "attempts": 2 },
+      "verification": {
+        "method": "GET",
+        "path": "/api/interview/__CONTROLLER_REPLACE_CONCURRENCY_STATE_PROBE__",
+        "auth": "userA",
+        "expectedStatuses": [200],
+        "assertions": [
+          { "source": "json", "path": "/authoritativeEffectCount", "op": "equals", "value": 1 },
+          { "source": "json", "path": "/canonicalId", "op": "equals", "value": "__CONTROLLER_REPLACE_CANONICAL_ID__" }
+        ]
+      }
+    },
+    {
+      "id": "response-loss-replay",
+      "family": "replay",
+      "method": "POST",
+      "path": "/api/career-context/__CONTROLLER_REPLACE_REPLAY_ENDPOINT__",
+      "auth": "userA",
+      "body": { "clientRequestId": "__CONTROLLER_REPLACE_STABLE_REPLAY_ID__", "payload": "__CONTROLLER_REPLACE_BOUNDED_PAYLOAD__" },
+      "expectedStatuses": [200, 201, 409],
+      "assertions": [
+        { "source": "json", "path": "/canonicalId", "op": "exists", "value": true }
+      ],
+      "execution": { "mode": "sequential", "attempts": 2 },
+      "verification": {
+        "method": "GET",
+        "path": "/api/career-context/__CONTROLLER_REPLACE_REPLAY_STATE_PROBE__",
+        "auth": "userA",
+        "expectedStatuses": [200],
+        "assertions": [
+          { "source": "json", "path": "/authoritativeEffectCount", "op": "equals", "value": 1 },
+          { "source": "json", "path": "/canonicalId", "op": "equals", "value": "__CONTROLLER_REPLACE_CANONICAL_ID__" }
+        ]
+      }
+    },
+    {
+      "id": "cross-user-isolation",
+      "family": "cross-user-isolation",
+      "method": "GET",
+      "path": "/api/career-context/__CONTROLLER_REPLACE_USER_A_RESOURCE__",
+      "auth": "userB",
+      "expectedStatuses": [403, 404],
+      "assertions": [
+        { "source": "json", "path": "/userId", "op": "exists", "value": false },
+        { "source": "text", "op": "matches", "value": "^(?![\\s\\S]*__CONTROLLER_REPLACE_USER_A_PRIVATE_MARKER__)[\\s\\S]*$" }
+      ]
+    }
   ]
 }
