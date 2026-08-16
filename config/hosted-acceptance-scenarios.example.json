@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "description": "Controller-reviewed template only. Copy to a non-committed file and replace placeholder paths/bodies with bounded test cases for the exact authorized preview. Never commit tokens or user data.",
+  "scenarios": [
+    { "id": "runtime-health", "family": "runtime", "method": "GET", "path": "/api/health", "auth": "none", "expectedStatuses": [200] },
+    { "id": "pwa-manifest", "family": "pwa", "method": "GET", "path": "/manifest.json", "auth": "none", "expectedStatuses": [200] },
+    { "id": "auth-protected", "family": "auth", "method": "GET", "path": "/api/auth/test", "auth": "userA", "expectedStatuses": [200] },
+    { "id": "resume-governed", "family": "resume", "method": "GET", "path": "/api/resume/__CONTROLLER_REPLACE__", "auth": "userA", "expectedStatuses": [200] },
+    { "id": "clearspeak-authority", "family": "clearspeak", "method": "GET", "path": "/api/clearspeak/__CONTROLLER_REPLACE__", "auth": "userA", "expectedStatuses": [200] },
+    { "id": "interview-authority", "family": "interview", "method": "GET", "path": "/api/interview/__CONTROLLER_REPLACE__", "auth": "userA", "expectedStatuses": [200] },
+    { "id": "career-context-authority", "family": "career-context", "method": "GET", "path": "/api/career-context", "auth": "userA", "expectedStatuses": [200] },
+    { "id": "account-deletion-dry-case", "family": "account-deletion", "method": "GET", "path": "/api/me/__CONTROLLER_REPLACE_NON_MUTATING_PROBE__", "auth": "userA", "expectedStatuses": [200] },
+    { "id": "admin-privacy", "family": "admin-privacy", "method": "GET", "path": "/api/admin/usage", "auth": "admin", "expectedStatuses": [200] },
+    { "id": "duplicate-request", "family": "concurrency", "method": "GET", "path": "/api/interview/__CONTROLLER_REPLACE_CONCURRENCY_PROBE__", "auth": "userA", "expectedStatuses": [200, 409] },
+    { "id": "response-loss-replay", "family": "replay", "method": "GET", "path": "/api/career-context/__CONTROLLER_REPLACE_REPLAY_PROBE__", "auth": "userA", "expectedStatuses": [200, 409] },
+    { "id": "cross-user-isolation", "family": "cross-user-isolation", "method": "GET", "path": "/api/career-context/__CONTROLLER_REPLACE_USER_A_RESOURCE__", "auth": "userB", "expectedStatuses": [403, 404] }
+  ]
+}
