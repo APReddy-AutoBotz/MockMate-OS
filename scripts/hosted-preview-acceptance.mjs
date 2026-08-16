@@ -62,12 +62,34 @@ for (const family of requiredFamilies) {
 
 const tokens = { userA: userAToken, userB: userBToken, admin: adminToken };
 const results = [];
+const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+
+function exactTargetUrl(scenarioId, scenarioPath) {
+  if (!scenarioPath.startsWith('/') || scenarioPath.startsWith('//') || scenarioPath.includes('\\')) {
+    fail(`Scenario ${scenarioId} path must be a single-slash relative path on the authorized origin.`);
+  }
+  let resolved;
+  try {
+    resolved = new URL(scenarioPath, originUrl);
+  } catch {
+    fail(`Scenario ${scenarioId} path is not a valid relative URL.`);
+  }
+  if (resolved.origin !== originUrl.origin || resolved.username || resolved.password) {
+    fail(`Scenario ${scenarioId} resolved outside the authorized origin.`);
+  }
+  return resolved;
+}
 
 async function requestScenario(scenario) {
   if (!scenario || typeof scenario.id !== 'string' || typeof scenario.path !== 'string' || typeof scenario.method !== 'string' || !Array.isArray(scenario.expectedStatuses)) {
     fail('Scenario manifest contains an invalid scenario shape.');
   }
-  if (!scenario.path.startsWith('/')) fail(`Scenario ${scenario.id} path must be relative to the authorized origin.`);
+  const method = scenario.method.toUpperCase();
+  if (!allowedMethods.has(method)) fail(`Scenario ${scenario.id} uses an unsupported method.`);
+  if (scenario.expectedStatuses.length === 0 || !scenario.expectedStatuses.every((status) => Number.isInteger(status) && status >= 100 && status <= 599)) {
+    fail(`Scenario ${scenario.id} must declare bounded HTTP status expectations.`);
+  }
+  const targetUrl = exactTargetUrl(scenario.id, scenario.path);
   const auth = scenario.auth ?? 'none';
   if (!['none', 'userA', 'userB', 'admin'].includes(auth)) fail(`Scenario ${scenario.id} has an invalid auth selector.`);
   if (auth === 'admin' && !adminToken) fail(`Scenario ${scenario.id} requires MOCKMATE_TEST_ADMIN_TOKEN.`);
@@ -76,8 +98,8 @@ async function requestScenario(scenario) {
   if (auth !== 'none') headers.Authorization = `Bearer ${tokens[auth]}`;
   if (scenario.body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const response = await fetch(new URL(scenario.path, origin), {
-    method: scenario.method.toUpperCase(),
+  const response = await fetch(targetUrl, {
+    method,
     headers,
     redirect: 'manual',
     body: scenario.body === undefined ? undefined : JSON.stringify(scenario.body),
@@ -88,18 +110,18 @@ async function requestScenario(scenario) {
 }
 
 async function preflight() {
-  const health = await fetch(new URL('/api/health', origin), { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
+  const health = await fetch(new URL('/api/health', originUrl), { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
   if (health.status !== 200) throw new Error(`Preview health returned ${health.status}.`);
   const body = await health.json();
-  if (body?.mode !== 'preview' || body?.authority !== 'configured' || body?.previewTargetId !== previewTargetId || body?.supabaseProjectRef !== supabaseProjectRef) {
-    throw new Error('Preview health authority does not match the explicitly authorized target.');
+  if (body?.mode !== 'preview' || body?.authority !== 'configured' || body?.previewTargetId !== previewTargetId || body?.supabaseProjectRef !== supabaseProjectRef || body?.gitHeadSha !== expectedHeadSha) {
+    throw new Error('Preview health authority does not match the explicitly authorized origin, project, target and Git head.');
   }
 
-  const unauthorized = await fetch(new URL('/api/auth/test', origin), { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
+  const unauthorized = await fetch(new URL('/api/auth/test', originUrl), { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
   if (unauthorized.status !== 401) throw new Error(`Protected unauthenticated probe returned ${unauthorized.status}; expected 401.`);
 
   const hostileOrigin = 'https://mockmate-hostile-origin.invalid';
-  const hostile = await fetch(new URL('/api/health', origin), { headers: { Accept: 'application/json', Origin: hostileOrigin }, redirect: 'manual' });
+  const hostile = await fetch(new URL('/api/health', originUrl), { headers: { Accept: 'application/json', Origin: hostileOrigin }, redirect: 'manual' });
   const allowOrigin = hostile.headers.get('access-control-allow-origin');
   if (allowOrigin === hostileOrigin || allowOrigin === '*') throw new Error('Hostile origin was accepted by CORS.');
 }
