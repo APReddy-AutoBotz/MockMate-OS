@@ -618,13 +618,16 @@ export default function InterviewScreen() {
       );
       if (requestEpoch !== sessionEpochRef.current) return;
 
-      pendingGroundingRef.current = null;
-      setHasPendingGrounding(false);
-      setGroundingConsent(false);
-      try {
-        await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);
-      } catch {
-        setErrorText('Interview started, but MockMate could not clear local grounded-launch recovery. The server session remains authoritative.');
+      if (grounding) {
+        try {
+          await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);
+        } catch {
+          throw new Error('Interview started, but MockMate could not clear the saved grounded-launch recovery. Retry the exact grounded launch before continuing.');
+        }
+        if (requestEpoch !== sessionEpochRef.current) return;
+        pendingGroundingRef.current = null;
+        setHasPendingGrounding(false);
+        setGroundingConsent(false);
       }
       setPlan(generatedPlan);
       setSessionId(started.sessionId);
