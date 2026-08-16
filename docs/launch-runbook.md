@@ -82,7 +82,9 @@ MOCKMATE_RUNTIME_MODE=preview
 VITE_RUNTIME_MODE=preview
 ```
 
-Preview startup must fail closed unless the server/browser Supabase URLs resolve to the exact `MOCKMATE_SUPABASE_PROJECT_REF`, exactly one HTTPS origin is allowed, and `PREVIEW_ORIGIN` matches it.
+The Vercel project must expose its system environment variables so the server receives the platform-provided `VERCEL_GIT_COMMIT_SHA` at runtime. Do not create a user-supplied replacement value for that variable. Preview startup fails closed if that deployed Git SHA is absent/malformed.
+
+Preview startup must also fail closed unless the server/browser Supabase URLs resolve to the exact `MOCKMATE_SUPABASE_PROJECT_REF`, exactly one HTTPS origin is allowed, and `PREVIEW_ORIGIN` matches it.
 
 The remote smoke command remains explicitly opt-in:
 
@@ -102,7 +104,7 @@ BOUNDED_TEST_DATA_CONFIRMED=true \
 MOCKMATE_PREVIEW_ORIGIN=https://your-exact-preview.vercel.app \
 MOCKMATE_PREVIEW_TARGET_ID=mockmate-p0-8-preview \
 MOCKMATE_SUPABASE_PROJECT_REF=<project-ref> \
-EXPECTED_HEAD_SHA=<40-char-git-sha> \
+EXPECTED_HEAD_SHA=<exact-40-char-pr-head> \
 HOSTED_ACCEPTANCE_SCENARIOS_FILE=/secure/path/mockmate-p0-8-cases.json \
 MOCKMATE_TEST_USER_A_TOKEN=<token> \
 MOCKMATE_TEST_USER_B_TOKEN=<token> \
@@ -111,9 +113,11 @@ npm run acceptance:hosted
 
 If admin/privacy cases are included, also supply `MOCKMATE_TEST_ADMIN_TOKEN` for an allowlisted controller-owned identity.
 
+Before any scenario bearer token is attached, the harness requires every scenario URL to resolve back to the exact authorized preview origin. Protocol-relative, backslash-ambiguous, malformed and cross-origin paths are refused. Preflight also requires `/api/health` to report the same Vercel-deployed Git SHA as `EXPECTED_HEAD_SHA`; merely recording an expected SHA is not sufficient.
+
 Acceptance must prove:
 
-- exact `/api/health` preview/Supabase target identity;
+- exact `/api/health` preview/Supabase/deployed-Git-head target identity;
 - protected endpoint `401` without a bearer token;
 - hostile-origin CORS rejection;
 - signup/signin/session behavior for bounded identities;
@@ -156,7 +160,7 @@ TestFlight/Play/App Store publication remains outside P0-8.
 
 ## 7. Rollback / Stop Conditions
 
-Stop or roll back immediately on any target-binding mismatch, secret leakage, cross-user access, migration/RLS/RPC/advisor regression, dev/mock auth in preview, placeholder provider success, duplicate authoritative effects, false deletion success, or unresolved P1/P2 security/privacy/authority finding.
+Stop or roll back immediately on any origin/target/Supabase/deployed-Git-head mismatch, scenario origin escape, secret leakage, cross-user access, migration/RLS/RPC/advisor regression, dev/mock auth in preview, placeholder provider success, duplicate authoritative effects, false deletion success, or unresolved P1/P2 security/privacy/authority finding.
 
 The detailed evidence/rollback record is `docs/quality/p0-8-hosted-preview-evidence.md`.
 
