@@ -619,12 +619,22 @@ export default function InterviewScreen() {
       if (requestEpoch !== sessionEpochRef.current) return;
 
       if (grounding) {
+        const pendingRecovery = pendingGroundingRef.current;
+        if (!pendingRecovery) {
+          throw new Error('Interview started, but the saved grounded-launch recovery is missing. Retry the exact grounded launch before continuing.');
+        }
         try {
           await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);
         } catch {
           throw new Error('Interview started, but MockMate could not clear the saved grounded-launch recovery. Retry the exact grounded launch before continuing.');
         }
-        if (requestEpoch !== sessionEpochRef.current) return;
+        if (requestEpoch !== sessionEpochRef.current) {
+          // Navigation/unmount can advance the epoch while durable deletion is
+          // in flight. Restore the exact validated retry marker before returning
+          // so the already-created version-0 session remains recoverable.
+          await persistPendingGroundingRecovery(pendingRecovery);
+          return;
+        }
         pendingGroundingRef.current = null;
         setHasPendingGrounding(false);
         setGroundingConsent(false);
