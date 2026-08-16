@@ -2,16 +2,13 @@ name: Controller P0-7 Publication Recovery
 
 on:
   push:
-    branches:
-      - codex/p0-7-mobile-career-context-account-authority
+    branches: [codex/p0-7-mobile-career-context-account-authority]
 
 permissions:
   contents: write
-  issues: read
 
 jobs:
   publish-approved-correction:
-    if: contains(github.event.head_commit.message, 'controller: stage P0-7 publication recovery')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact branch
@@ -20,42 +17,27 @@ jobs:
           fetch-depth: 0
           ref: codex/p0-7-mobile-career-context-account-authority
 
-      - name: Recover exact approved diff from PR comment
+      - name: Recover and apply approved PR-comment diff
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh api repos/APReddy-AutoBotz/MockMate-OS/issues/comments/5305439448 --jq .body > /tmp/comment.txt
           python - <<'PY'
-          import json, os, subprocess
-          body = subprocess.check_output([
-              'gh','api','repos/APReddy-AutoBotz/MockMate-OS/issues/comments/5305439448','--jq','.body'
-          ], text=True)
+          body = open('/tmp/comment.txt', encoding='utf-8').read()
           marker = '```diff\n'
           start = body.index(marker) + len(marker)
           end = body.index('\n```', start)
           patch = body[start:end]
-          with open('/tmp/p0-7-recovery.diff','w',encoding='utf-8',newline='') as f:
-              f.write(patch)
-          print(f'recovered_bytes={len(patch.encode("utf-8"))}')
+          open('/tmp/recovery.diff', 'w', encoding='utf-8', newline='').write(patch)
+          print('recovered', len(patch.encode('utf-8')), 'bytes')
           PY
-          git apply --check /tmp/p0-7-recovery.diff
-          git apply --index /tmp/p0-7-recovery.diff
-
-      - name: Remove controller scaffolding and verify scope
-        run: |
+          git apply --check /tmp/recovery.diff
+          git apply --index /tmp/recovery.diff
           rm .github/workflows/controller-p0-7-publication-recovery.yml
           git add -A
           git diff --cached --check
-          printf '%s\n' \
-            backend/routes/careerContextRoutes.ts \
-            backend/routes/interviewRoutes.ts \
-            backend/services/careerContextAdapters/clearSpeakContextAdapter.ts \
-            backend/tests/accentCareerContextAdapter.test.ts \
-            scripts/test-career-context-api-journey.mjs \
-            .github/workflows/controller-p0-7-publication-recovery.yml | sort > /tmp/expected
-          git diff --cached --name-only | sort > /tmp/actual
-          diff -u /tmp/expected /tmp/actual
 
-      - name: Focused validation
+      - name: Validate exact correction
         run: |
           npm ci
           npm run shared:build
@@ -64,7 +46,7 @@ jobs:
           npm run test:career-context-api-journey
           npm run test:mobile-governed-parity
 
-      - name: Publish exact correction to existing PR branch
+      - name: Publish to existing PR branch
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
