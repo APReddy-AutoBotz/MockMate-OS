@@ -178,8 +178,30 @@ requireBefore(
 requireBefore(
   interview,
   "const started = await apiClient.post(",
-  "setGroundingConsent(false);\n      try {\n        await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);",
-  'Interview post-session recovery cleanup ordering',
+  'await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);',
+  'Interview session success before durable recovery cleanup',
+);
+requireBefore(
+  interview,
+  'await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);',
+  'pendingGroundingRef.current = null;',
+  'Interview durable recovery cleanup before in-memory release',
+);
+requireBefore(
+  interview,
+  'await AsyncStorage.removeItem(PENDING_GROUNDING_STORAGE_KEY);',
+  'setPlan(generatedPlan);',
+  'Interview durable recovery cleanup before local session progression',
+);
+requireText(
+  interview,
+  'Retry the exact grounded launch before continuing.',
+  'Interview durable cleanup failure must fail closed',
+);
+rejectText(
+  interview,
+  'The server session remains authoritative.',
+  'Interview cleanup failure must not permit local session progression',
 );
 for (const forbiddenPersistedAuthority of ['rawText', 'audioBytes', 'transcript', 'answerText', 'accessToken', 'providerKey', 'modelId', 'serviceRole']) {
   if (interview.includes(`'${forbiddenPersistedAuthority}',`) || interview.includes(`\"${forbiddenPersistedAuthority}\",`)) {
