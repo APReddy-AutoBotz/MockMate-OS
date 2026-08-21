@@ -104,6 +104,9 @@ jobs:
       - name: 11e. Adaptive Browser UI Journey
         run: npm run test:adaptive-ui-journey
 
+      - name: 11e2. ClearSpeak UK/US Browser UI Journey
+        run: npm run test:clearspeak-ui-journey
+
       - name: 11g0. Architectural rejection assertions
         run: npm run test:rejection-checks
 
