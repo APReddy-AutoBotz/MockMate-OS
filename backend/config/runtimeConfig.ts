@@ -44,6 +44,10 @@ function supabaseProjectRef(urlValue: string | undefined) {
   }
 }
 
+function deployedGitHeadSha(env: NodeJS.ProcessEnv) {
+  return env.MOCKMATE_DEPLOYED_GIT_SHA?.trim() || env.VERCEL_GIT_COMMIT_SHA?.trim() || env.COMMIT_REF?.trim();
+}
+
 export type PreviewAuthority = {
   previewOrigin: string;
   previewTargetId: string;
@@ -72,7 +76,7 @@ export function assertServerRuntimeConfig(env: NodeJS.ProcessEnv = process.env) 
     const previewOrigin = env.PREVIEW_ORIGIN?.trim();
     const previewTargetId = env.MOCKMATE_PREVIEW_TARGET_ID?.trim();
     const expectedProjectRef = env.MOCKMATE_SUPABASE_PROJECT_REF?.trim();
-    const gitHeadSha = env.VERCEL_GIT_COMMIT_SHA?.trim();
+    const gitHeadSha = deployedGitHeadSha(env);
     const previewInvalid = origins.length !== 1 || !previewOrigin || previewOrigin !== origins[0] ||
       !validRuntimeUrl(previewOrigin, { httpsRequired: true, originOnly: true }) ||
       !previewTargetId || !PREVIEW_TARGET_ID.test(previewTargetId) ||
