@@ -68,9 +68,6 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
   };
 
   const handleInterviewBridge = (payload: ClearSpeakBridgePayload) => {
-    // Accepting the post-session bridge is also a canonical exit from the
-    // completed grounded ClearSpeak attempt. Release its one-time handoff
-    // before navigating so a later ordinary practice does not reuse it.
     if (grounding) notifyGroundingConsumed(grounding.bridge.id);
     onInterviewBridge(payload);
   };
@@ -144,7 +141,7 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
           Start today's practice
         </button>
         <button onClick={() => setView('accent')} className="w-full max-w-md rounded-xl border border-brand-primary/50 px-6 py-3 font-semibold text-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary">
-          Try UK / US accent practice (synthetic V1)
+          Practice UK / US reference styles
         </button>
         <p className="text-xs text-brand-tint">Your practice stays private.</p>
       </section>
@@ -156,7 +153,7 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <Metric label="Clarity" value={avgScore > 0 ? clarityLabel(avgScore) : '-'} />
-            <Metric label="Filler words" value={avgScore > 0 ? '2' : '-'} />
+            <Metric label="Hard words practiced" value={String(progress.hardWordCount)} />
             <Metric label="How clear you sound" value={avgScore > 0 ? `${avgScore}%` : '-'} />
             <Metric label="Practices done" value={String(progress.totalSessionsCompleted)} />
           </div>
