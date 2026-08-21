@@ -26,4 +26,16 @@ describe('ClearSpeak accent profile surface', () => {
     expect(source).toContain('No real-speech scorer is currently authorized');
     expect(source).toContain("item.result.profileId.includes('GB') ? 'UK' : 'US'");
   });
+
+  it('wires accent practice from the dashboard without stale synthetic labeling or fabricated metrics', () => {
+    const dashboard = fs.readFileSync(path.join(process.cwd(), 'components/clearspeak/ClearSpeakDashboard.tsx'), 'utf8');
+
+    expect(dashboard).toContain("import AccentPracticeV1 from './AccentPracticeV1'");
+    expect(dashboard).toContain("if (view === 'accent') return <AccentPracticeV1");
+    expect(dashboard).toContain('Practice UK / US reference styles');
+    expect(dashboard).toContain('Hard words practiced');
+    expect(dashboard).toContain('progress.hardWordCount');
+    expect(dashboard).not.toContain('synthetic V1');
+    expect(dashboard).not.toContain('Filler words');
+  });
 });
