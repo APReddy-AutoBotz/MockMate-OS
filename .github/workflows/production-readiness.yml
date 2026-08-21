@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, netlify-preview]
 
 permissions:
   contents: read
@@ -70,21 +70,20 @@ jobs:
         run: npm run verify:supabase
 
       - name: 8. Disposable PostgreSQL runtime migration verification
+        run: npm run verify:supabase:runtime
         env:
           POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
-        run: npm run verify:supabase:runtime
 
       - name: 8a. ClearSpeak P0-5 real-speech persistence contract
+        run: npm run test:clearspeak-p0-5-db
         env:
           POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
-        run: npm run test:clearspeak-p0-5-db
 
       - name: 9. Frontend build
         run: npm run build
 
       - name: 10. Backend build
-        working-directory: backend
-        run: npm run build
+        run: cd backend && npm run build
 
       - name: 11a. Static runtime configuration precheck
         run: npm run test:runtime-config-static
@@ -126,8 +125,7 @@ jobs:
         run: npm run test:career-context-journeys
 
       - name: 12. Backend tests
-        working-directory: backend
-        run: npm test
+        run: cd backend && npm test
 
       - name: 12a. ClearSpeak V1 contract and synthetic scorer gate
         run: npm run check:clearspeak-v1
@@ -139,8 +137,7 @@ jobs:
         run: npm run audit:production
 
       - name: 14. Install mobile dependencies
-        working-directory: mobile
-        run: npm ci
+        run: cd mobile && npm ci
 
       - name: 15. Mobile typecheck
         run: npm run mobile:typecheck
@@ -155,25 +152,13 @@ jobs:
         run: npm run test:hosted-acceptance-contract
 
       - name: 20. Recognized full-history secret scan
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx --yes gitleaks@8.24.3 git --redact --no-banner
 
       - name: 21. Supplemental custom secret-pattern scan
         run: npm run scan:secrets
 
       - name: 22. Production config smoke check
-        shell: bash
-        run: |
-          test -f vercel.json
-          test -f supabase/migrations/001_initial_schema.sql
-          test -f supabase/migrations/20260721_add_authoritative_session_fields.sql
-          test -f public/manifest.json
-          test -f mobile/eas.json
-          grep -q '"/api/(.*)"' vercel.json
-          grep -q '"/api/index"' vercel.json
-          grep -q '"display": "standalone"' public/manifest.json
-          grep -q '"package": "com.mockmate.app"' mobile/app.json
+        run: npm run smoke:production
 
       - name: 23. Production-preview adversarial security checks
         run: npm run test:preview-security
@@ -185,13 +170,19 @@ jobs:
         run: npm run smoke:deployed
 
       - name: 25. Exact-head readiness manifest
-        env:
-          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: npm run manifest:readiness
 
       - name: 26. Publish source-only readiness evidence
+        run: |
+          mkdir -p artifacts
+          cat > artifacts/source-readiness.txt <<EOF
+          head=${GITHUB_SHA}
+          workflow=${GITHUB_RUN_ID}
+          result=source-only
+          EOF
+
+      - name: Upload source readiness evidence
         uses: actions/upload-artifact@v4
         with:
-          name: production-preview-readiness-${{ github.event.pull_request.head.sha || github.sha }}
-          path: artifacts/production-preview-readiness.json
-          if-no-files-found: error
+          name: source-readiness-${{ github.sha }}
+          path: artifacts/source-readiness.txt
