@@ -1,6 +1,6 @@
 import { ACCENT_PROFILES } from '../../../backend/clearspeak/accentProfiles';
-import fs from 'node:fs';
-import path from 'node:path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 describe('ClearSpeak accent profile surface', () => {
   it('ships both General UK English and General US English learner-selected targets', () => {
