@@ -16,6 +16,7 @@
     "test:browser-runtime": "node scripts/test-browser-runtime.mjs",
     "test:adaptive-api-journey": "node scripts/test-adaptive-api-journey.mjs",
     "test:adaptive-ui-journey": "node scripts/test-adaptive-ui-journey.mjs",
+    "test:clearspeak-ui-journey": "node scripts/test-clearspeak-ui-journey.mjs",
     "test:adaptive-journey": "npm run test:adaptive-api-journey && npm run test:adaptive-ui-journey",
     "test:rejection-checks": "node scripts/test-rejection-checks.mjs",
     "test:career-context-account-deletion": "node scripts/test-career-context-account-deletion.mjs",
