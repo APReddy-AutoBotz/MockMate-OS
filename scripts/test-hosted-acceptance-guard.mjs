@@ -253,16 +253,26 @@ assert.ok(
 
 const concurrency = template.scenarios.find((scenario) => scenario.family === 'concurrency');
 const replay = template.scenarios.find((scenario) => scenario.family === 'replay');
-assert.equal(concurrency?.execution?.mode, 'parallel', 'concurrency must execute in parallel');
-assert.ok(concurrency.execution.attempts >= 2, 'concurrency must execute at least two duplicate requests');
-assert.ok(concurrency.verification?.assertions?.length > 0, 'concurrency must verify canonical post-state');
-assert.equal(replay?.execution?.mode, 'sequential', 'replay must execute repeated sequential requests');
-assert.ok(replay.execution.attempts >= 2, 'replay must execute at least two retries');
-assert.ok(replay.verification?.assertions?.length > 0, 'replay must verify canonical post-state');
+assert.equal(concurrency?.execution?.mode, 'parallel', 'concurrency template intent must remain parallel until the schema-v4 regeneration');
+assert.ok(concurrency.execution.attempts >= 2, 'concurrency template must retain duplicate intent');
+assert.equal(replay?.execution?.mode, 'sequential', 'replay template intent must remain sequential until the schema-v4 regeneration');
+assert.ok(replay.execution.attempts >= 2, 'replay template must retain retry intent');
+assert.match(harness, /repetitionContracts/, 'repeated execution authority must be owned by registered operations');
+assert.match(harness, /'concurrency\.exactly-once': \{ mode: 'parallel'/, 'concurrency operation must require parallel execution');
+assert.match(harness, /'replay\.response-loss': \{ mode: 'sequential'/, 'replay operation must require sequential recovery');
+assert.ok(!harness.includes("family === 'concurrency'"), 'concurrency authority must not be controlled by a manifest family label');
+assert.ok(!harness.includes("family === 'replay'"), 'replay authority must not be controlled by a manifest family label');
+assert.ok(harness.includes("'replay.response-loss': ['POST', /^\\/api\\/interview\\/sessions\\/[^/]+\\/answers$/, 'userA', 'json']"), 'response-loss replay must target the idempotent Interview answer endpoint');
+assert.match(harness, /clientSubmissionId/, 'repetition must require endpoint-native Interview clientSubmissionId');
+assert.match(harness, /expectedSessionVersion/, 'repetition must bind the expected Interview session version');
+assert.match(harness, /same session advanced by exactly one version/, 'post-state verification must prove exactly one authoritative Interview transition');
+assert.match(harness, /must use endpoint-native clientSubmissionId rather than Idempotency-Key/, 'repetition must reject controller-only idempotency metadata');
+assert.match(harness, /scenario\.operation === 'replay\.response-loss'/, 'response-loss behavior must be operation-owned');
 assert.match(harness, /Promise\.all/, 'parallel duplicate requests must actually be concurrent');
 assert.match(harness, /post-state verification/, 'duplicate/replay execution must run a semantic state probe');
-assert.match(harness, /family === 'concurrency'/, 'concurrency execution constraints must be enforced at runtime');
-assert.match(harness, /family === 'replay'/, 'replay execution constraints must be enforced at runtime');
+const repetitionValidation = harness.indexOf('validateInterviewRepetitionAuthority(scenario, verificationSpec, plan);');
+const repetitionExecution = harness.indexOf("if (plan.mode === 'parallel')", repetitionValidation);
+assert.ok(repetitionValidation > -1 && repetitionExecution > repetitionValidation, 'all repetition authority must validate before the first duplicate request');
 
 const evidenceSlice = harness.slice(harness.indexOf('const evidence ='));
 const resultSlice = harness.slice(harness.indexOf('results.push('), harness.indexOf('async function preflight'));
@@ -295,6 +305,7 @@ assert.ok(
   'ClearSpeak must use the registered multipart file field',
 );
 assert.match(harness, /requiredOperations/, 'coverage must be explicit operations, not family labels');
+assert.match(harness, /'clearspeak\.authority'/, 'ClearSpeak attempt authority must be a required governed operation');
 assert.match(harness, /operationContracts/, 'operation names must be bound to registered request contracts');
 assert.match(
   harness,
@@ -303,26 +314,9 @@ assert.match(
 );
 assert.match(harness, /__CONTROLLER_REPLACE_/, 'the real controller placeholder prefix must be rejected');
 assert.ok(!harness.includes('response.arrayBuffer()'), 'responses must not be retained before enforcing the bound');
-assert.ok(
-  template.scenarios.some(
-    (scenario) =>
-      scenario.operation === 'resume.score' &&
-      scenario.body?.resumeData &&
-      typeof scenario.body.rawText === 'string' &&
-      typeof scenario.body.jdText === 'string',
-  ),
-  'Resume score must use the strict registered body',
-);
-assert.ok(
-  template.scenarios.some(
-    (scenario) =>
-      scenario.operation === 'resume.suggest' &&
-      scenario.body?.resumeData &&
-      typeof scenario.body.rawText === 'string' &&
-      typeof scenario.body.jdText === 'string',
-  ),
-  'Resume suggest must use the strict registered body',
-);
+assert.match(harness, /scenario\.operation === 'resume\.score'/, 'Resume score must have its own body authority');
+assert.match(harness, /scenario\.operation === 'resume\.suggest'/, 'Resume suggest must have its own body authority');
+assert.match(harness, /Object\.prototype\.hasOwnProperty\.call\(scenario\.body, 'rawText'\)/, 'Resume suggest must refuse score-only rawText');
 assert.ok(
   template.scenarios.some(
     (scenario) =>
@@ -349,7 +343,6 @@ for (const operation of [
   assert.ok(operations.has(operation), `template must retain frozen lifecycle operation ${operation}`);
 }
 assert.match(harness, /canonical responses diverged/, 'retries must compare canonical responses');
-assert.match(harness, /exactly one authoritative effect/, 'retries must prove one authoritative effect');
 assert.equal(template.scenarios.at(-3).operation, 'account.delete', 'genuine deletion must precede aftermath probes');
 assert.equal(template.scenarios.at(-2).operation, 'account.owner-aftermath', 'owner aftermath must follow deletion');
 assert.equal(template.scenarios.at(-1).operation, 'account.cross-user-aftermath', 'cross-user aftermath must follow deletion');

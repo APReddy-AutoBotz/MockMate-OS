@@ -87,7 +87,7 @@ const operationContracts = new Map(Object.entries({
   'partial-failure.oversized': ['POST', /^\/api\/resume\/score$/, 'userA', 'json'],
   'partial-failure.account-delete': ['DELETE', /^\/api\/me\/data$/, 'userA', 'none'],
   'concurrency.exactly-once': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
-  'replay.response-loss': ['POST', /^\/api\/career-context\/preference$/, 'userA', 'json'],
+  'replay.response-loss': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
   'account.delete': ['DELETE', /^\/api\/me\/data$/, 'userA', 'none'],
   'account.owner-aftermath': ['GET', /^\/api\/user\/sessions$/, 'userA', 'none'],
   'account.cross-user-aftermath': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userB', 'none'],
@@ -96,7 +96,7 @@ const operationContracts = new Map(Object.entries({
 const requiredOperations = new Set([
   'runtime.health', 'pwa.manifest', 'pwa.offline', 'auth.identity',
   'resume.parse', 'resume.score', 'resume.suggest',
-  'clearspeak.prompt', 'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.cancel', 'clearspeak.history', 'clearspeak.replay', 'clearspeak.delete',
+  'clearspeak.prompt', 'clearspeak.authority', 'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.cancel', 'clearspeak.history', 'clearspeak.replay', 'clearspeak.delete',
   'interview.create', 'interview.answer', 'interview.report', 'interview.version', 'interview.stale', 'interview.interrupted',
   'career-context.create', 'career-context.update', 'career-context.delete', 'career-context.snapshot', 'career-context.bridge', 'career-context.stale', 'career-context.cross-user',
   'admin.denied', 'cross-user.denied', 'partial-failure.malformed', 'partial-failure.oversized', 'partial-failure.account-delete',
@@ -120,6 +120,13 @@ const operationStatusContracts = new Map(Object.entries({
   'replay.response-loss': [200], 'account.delete': [200], 'account.owner-aftermath': [200],
   'account.cross-user-aftermath': [403, 404],
 }));
+
+const repetitionContracts = new Map(Object.entries({
+  'concurrency.exactly-once': { mode: 'parallel', minAttempts: 2, maxAttempts: 5 },
+  'replay.response-loss': { mode: 'sequential', minAttempts: 2, maxAttempts: 5 },
+}));
+const interviewRepetitionCanonicalPaths = ['/completedTurnId', '/sessionVersion'];
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 if (!manifest || ![3, 4].includes(manifest.schemaVersion) || !Array.isArray(manifest.scenarios) || manifest.scenarios.length === 0 || manifest.scenarios.length > 64) {
   fail('Scenario manifest must use supported schemaVersion 3 or 4 and contain 1-64 scenarios.');
@@ -188,8 +195,11 @@ function validateOperationContract(scenario) {
     if (typeof metadata !== 'string') fail(`Scenario ${scenario.id} must send ClearSpeak metadata as one JSON multipart field.`);
     try { JSON.parse(metadata); } catch { fail(`Scenario ${scenario.id} has malformed ClearSpeak metadata.`); }
   }
-  if (scenario.operation === 'resume.score' || scenario.operation === 'resume.suggest') {
-    if (!scenario.body?.resumeData || typeof scenario.body.rawText !== 'string' || typeof scenario.body.jdText !== 'string') fail(`Scenario ${scenario.id} does not match the strict Resume request schema.`);
+  if (scenario.operation === 'resume.score') {
+    if (!scenario.body?.resumeData || typeof scenario.body.rawText !== 'string' || typeof scenario.body.jdText !== 'string') fail(`Scenario ${scenario.id} does not match the strict Resume score request schema.`);
+  }
+  if (scenario.operation === 'resume.suggest') {
+    if (!scenario.body?.resumeData || typeof scenario.body.jdText !== 'string' || Object.prototype.hasOwnProperty.call(scenario.body, 'rawText')) fail(`Scenario ${scenario.id} does not match the strict Resume suggestion request schema.`);
   }
 }
 
@@ -377,18 +387,49 @@ function executionPlan(scenario) {
   if (!['single', 'parallel', 'sequential'].includes(execution.mode)) fail(`Scenario ${scenario.id} has an invalid execution mode.`);
   const attempts = execution.attempts ?? 1;
   if (!Number.isInteger(attempts) || attempts < 1 || attempts > 5) fail(`Scenario ${scenario.id} must use 1-5 bounded attempts.`);
-  if (scenario.family === 'concurrency' && (execution.mode !== 'parallel' || attempts < 2 || !scenario.verification)) fail(`Concurrency scenario ${scenario.id} requires 2-5 parallel attempts and a semantic state verification probe.`);
-  if (scenario.family === 'replay' && (execution.mode !== 'sequential' || attempts < 2 || !scenario.verification)) fail(`Replay scenario ${scenario.id} requires 2-5 sequential attempts and a semantic state verification probe.`);
-  if (scenario.family !== 'concurrency' && scenario.family !== 'replay' && execution.mode !== 'single') fail(`Scenario ${scenario.id} may use repeated execution only for concurrency/replay families.`);
-  return { mode: execution.mode, attempts };
+  const contract = repetitionContracts.get(scenario.operation);
+  if (contract) {
+    if (execution.mode !== contract.mode || attempts < contract.minAttempts || attempts > contract.maxAttempts || !scenario.verification) {
+      fail(`Scenario ${scenario.id} does not match the operation-owned repetition contract for ${scenario.operation}.`);
+    }
+  } else if (execution.mode !== 'single' || attempts !== 1) {
+    fail(`Scenario ${scenario.id} may use repeated execution only for registered repetition operations.`);
+  }
+  return { mode: execution.mode, attempts, repetition: Boolean(contract) };
 }
 
 function validateCapturePlacement(rawScenario, plan) {
   if (rawScenario.verification?.captures !== undefined) fail(`Scenario ${rawScenario.id} verification cannot declare captures.`);
   if (rawScenario.captures !== undefined && !captureSchemaEnabled) fail(`Scenario ${rawScenario.id} capture declarations require schemaVersion 4.`);
-  if (rawScenario.captures !== undefined && (plan.mode !== 'single' || plan.attempts !== 1 || rawScenario.family === 'concurrency' || rawScenario.family === 'replay')) {
+  if (rawScenario.captures !== undefined && (plan.mode !== 'single' || plan.attempts !== 1)) {
     fail(`Scenario ${rawScenario.id} may capture only from an ordinary single successful request.`);
   }
+}
+
+function validateInterviewRepetitionAuthority(scenario, verificationSpec, plan) {
+  if (!plan.repetition) return;
+  const pathMatch = scenario.path.match(/^\/api\/interview\/sessions\/([^/]+)\/answers$/);
+  if (!pathMatch) fail(`Scenario ${scenario.id} repetition must target an Interview answer endpoint.`);
+  if (!scenario.body || typeof scenario.body !== 'object' || Array.isArray(scenario.body)) fail(`Scenario ${scenario.id} repetition requires an adaptive Interview answer body.`);
+  const { questionId, expectedSessionVersion, clientSubmissionId, answerKind, answerText } = scenario.body;
+  if (typeof questionId !== 'string' || !questionId.trim()) fail(`Scenario ${scenario.id} repetition requires questionId.`);
+  if (!Number.isInteger(expectedSessionVersion) || expectedSessionVersion < 1) fail(`Scenario ${scenario.id} repetition requires expectedSessionVersion >= 1.`);
+  if (typeof clientSubmissionId !== 'string' || !uuidPattern.test(clientSubmissionId)) fail(`Scenario ${scenario.id} repetition requires endpoint-native clientSubmissionId UUID authority.`);
+  if (!['answered', 'skipped'].includes(answerKind)) fail(`Scenario ${scenario.id} repetition requires a valid adaptive answerKind.`);
+  if (answerKind === 'answered' && (typeof answerText !== 'string' || !answerText.trim())) fail(`Scenario ${scenario.id} answered repetition requires non-empty answerText.`);
+  if (answerKind === 'skipped' && answerText !== undefined && answerText !== null && (typeof answerText !== 'string' || answerText.trim())) fail(`Scenario ${scenario.id} skipped repetition must not include answer text.`);
+  if (scenario.idempotencyKey !== undefined) fail(`Scenario ${scenario.id} must use endpoint-native clientSubmissionId rather than Idempotency-Key metadata.`);
+  if (JSON.stringify(scenario.canonicalPaths) !== JSON.stringify(interviewRepetitionCanonicalPaths)) fail(`Scenario ${scenario.id} must compare the registered Interview canonical response paths.`);
+  if (!verificationSpec) fail(`Scenario ${scenario.id} requires same-session post-state verification before execution.`);
+  const sessionId = pathMatch[1];
+  const expectedVerificationPath = `/api/interview/sessions/${sessionId}`;
+  if (verificationSpec.method?.toUpperCase() !== 'GET' || verificationSpec.path !== expectedVerificationPath || (verificationSpec.auth ?? 'none') !== 'userA' || JSON.stringify(verificationSpec.expectedStatuses) !== '[200]' || verificationSpec.body !== undefined || verificationSpec.multipart !== undefined) {
+    fail(`Scenario ${scenario.id} verification must read the same authoritative Interview session.`);
+  }
+  const expectedVersion = expectedSessionVersion + 1;
+  const hasSessionAssertion = verificationSpec.assertions?.some((assertion) => assertion.source === 'json' && assertion.path === '/id' && assertion.op === 'equals' && assertion.value === sessionId);
+  const hasVersionAssertion = verificationSpec.assertions?.some((assertion) => assertion.source === 'json' && assertion.path === '/sessionVersion' && assertion.op === 'equals' && assertion.value === expectedVersion);
+  if (!hasSessionAssertion || !hasVersionAssertion) fail(`Scenario ${scenario.id} verification must prove the same session advanced by exactly one version.`);
 }
 
 async function requestScenario(rawScenario) {
@@ -406,6 +447,12 @@ async function requestScenario(rawScenario) {
 
   validateOperationContract(scenario);
   validateRequestShape(scenario, scenario.id, 'request');
+  let verificationSpec;
+  if (rawScenario.verification) {
+    verificationSpec = resolveRequestSpec(rawScenario.verification, { allowCaptures: false });
+    validateRequestShape(verificationSpec, scenario.id, 'post-state verification');
+  }
+  validateInterviewRepetitionAuthority(scenario, verificationSpec, plan);
 
   const statuses = [];
   const canonical = [];
@@ -415,7 +462,7 @@ async function requestScenario(rawScenario) {
     const attempts = await Promise.all(Array.from({ length: plan.attempts }, (_, index) => executeRequest(scenario, scenario.id, `parallel attempt ${index + 1}`)));
     statuses.push(...attempts.map((attempt) => attempt.status));
     canonical.push(...attempts.map((attempt) => attempt.canonical));
-  } else if (rawScenario.family === 'replay') {
+  } else if (scenario.operation === 'replay.response-loss') {
     const abandoned = await executeAbandonedRequest(scenario, scenario.id, 'abandoned first response');
     statuses.push(abandoned.status);
     for (let index = 1; index < plan.attempts; index += 1) {
@@ -439,20 +486,13 @@ async function requestScenario(rawScenario) {
   captureJson = undefined;
 
   let verificationStatus;
-  if (rawScenario.verification) {
-    const verificationSpec = resolveRequestSpec(rawScenario.verification, { allowCaptures: false });
-    validateRequestShape(verificationSpec, scenario.id, 'post-state verification');
+  if (verificationSpec) {
     const verification = await executeRequest(verificationSpec, scenario.id, 'post-state verification');
     verificationStatus = verification.status;
   }
 
-  if (plan.attempts > 1) {
-    if (typeof scenario.idempotencyKey !== 'string' || scenario.idempotencyKey.length < 8 || scenario.idempotencyKey.length > 128) fail(`Scenario ${scenario.id} requires a stable bounded idempotency identity.`);
-    if (!Array.isArray(scenario.canonicalPaths) || scenario.canonicalPaths.length === 0 || scenario.canonicalPaths.length > 12) fail(`Scenario ${scenario.id} requires bounded canonical response paths.`);
+  if (plan.repetition) {
     if (canonical.length === 0 || !canonical.every((value) => JSON.stringify(value) === JSON.stringify(canonical[0]))) throw new Error(`Scenario ${scenario.id} canonical responses diverged.`);
-    const verificationAssertions = resolveAssertions(rawScenario.verification.assertions);
-    const provesOneEffect = verificationAssertions.some((assertion) => assertion.op === 'equals' && assertion.value === 1);
-    if (!provesOneEffect) fail(`Scenario ${scenario.id} post-state oracle must prove exactly one authoritative effect.`);
   }
 
   results.push({ id: scenario.id, family: scenario.family, executionMode: plan.mode, attempts: plan.attempts, statuses, verificationStatus, passed: true });
