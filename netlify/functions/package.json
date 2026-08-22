@@ -1,0 +1,8 @@
+{
+  "name": "mockmate-netlify-functions",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "serverless-http": "4.0.0"
+  }
+}
