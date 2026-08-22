@@ -33,7 +33,9 @@ assert.ok(!/\bawait fetch\s*\(/.test(harness), 'runner must not bypass shared bo
 assert.match(harness, /boundedAbandonedRequest/, 'response-loss replay must use explicit bounded response abandonment');
 assert.match(harness, /abandoned first response/, 'replay must distinguish the deliberately lost first response');
 assert.match(harness, /canonical responses diverged/, 'recovery replies must retain canonical equality checks');
-assert.match(harness, /exactly one authoritative effect/, 'replay/concurrency must retain post-state exactly-once proof');
+assert.match(harness, /same session advanced by exactly one version/, 'replay/concurrency must prove one authoritative effect on the same Interview session/version lineage');
+assert.match(harness, /expectedSessionVersion \+ 1/, 'one-effect verification must derive the exact next Interview session version');
+assert.match(harness, /verification must read the same authoritative Interview session/, 'one-effect verification must be tied to the mutated Interview session');
 assert.match(harness, /'clearspeak\.authority'/, 'ClearSpeak server-issued attempt authority must be a governed operation');
 assert.match(safety, /export async function boundedAbandonedRequest/, 'shared safety authority must own bounded abandonment');
 assert.match(safety, /response\.body\.cancel/, 'abandoned responses must cancel their body stream');
