@@ -1,5 +1,5 @@
 [build]
-  command = "npm install --no-save --package-lock=false serverless-http@4.0.0 && npm run build"
+  command = "npm ci && npm --prefix netlify/functions ci --omit=dev && npm run build"
   publish = "dist"
 
 [functions]
