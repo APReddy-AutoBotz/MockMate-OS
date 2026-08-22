@@ -10,9 +10,20 @@
 - Dedicated Supabase target: `MockMate-P0-8-Preview`, ref `cysnsoeonyhcshjjpezk`, region `ap-south-1`, healthy.
 - Dedicated Netlify target: `mockmate-os-preview`, protected by Netlify team login.
 - Governed Deploy Preview origin: `https://deploy-preview-21--mockmate-os-preview.netlify.app`.
-- Current controller state: `NETLIFY_PREVIEW_BOUND__EMAIL_AND_GOOGLE_AUTH_VERIFIED__SOURCE_GATES_GREEN__HOSTED_MUTATION_ACCEPTANCE_PENDING`.
+- Delivery branch has been non-force fast-forwarded to the tested QA lineage; PR #21 remains only the protected preview carrier.
+- Current controller state: `DELIVERY_BRANCH_SYNCED__NETLIFY_PREVIEW_BOUND__EMAIL_AND_GOOGLE_AUTH_VERIFIED__SOURCE_GATES_GREEN__HOSTED_MUTATION_ACCEPTANCE_PENDING`.
 
-No existing application database was repurposed. The complete repository migration chain plus the P0-8 advisor-hardening migration is applied to the dedicated Supabase project. Security and performance advisors have zero WARN-level findings. Remaining notices are INFO-only and do not represent production-load proof.
+No existing application database was repurposed. The complete repository migration chain plus the P0-8 advisor-hardening migration is applied to the dedicated Supabase project.
+
+Current Supabase advisor state is intentionally recorded precisely rather than represented as fully warning-free:
+
+- **Performance advisor:** `0 WARN`; remaining foreign-key/index notices are INFO-level only and do not represent production-load proof.
+- **Security advisor:** one external Auth-level WARN, `auth_leaked_password_protection`, because leaked-password protection is disabled. Supabase documents this control as available on the **Pro Plan and above**. P0-8 is intentionally using the free preview tier, so no paid-plan activation is authorized by this ledger.
+- The database/RLS security notices remain INFO-only: `ai_cache` and `interview_plan_generation_reservations` have RLS enabled without client policies by design because they are server/service-role-only boundaries.
+
+The leaked-password-protection WARN is therefore a **known plan-gated preview exception and a future public-production promotion blocker**, not a source-code defect and not authorization to purchase/upgrade Supabase. Before any future public production launch that retains password authentication, this control must be enabled on an eligible plan or an explicitly approved equivalent security design must replace it.
+
+Supabase remediation reference: https://supabase.com/docs/guides/auth/password-security
 
 ## Exact hosted target evidence
 
@@ -26,7 +37,9 @@ The source-hardening head `1e3156533c357fbbdf0936a3f4111e493d3efe8e` was deploye
 
 Production Readiness run #390 / `32565075294` completed `SUCCESS` on that exact source-hardening head. The retained matrix passed frontend/shared/backend tests, static and disposable PostgreSQL migrations, Resume validation, rendered Interview and ClearSpeak UK/US browser journeys, Career Context and cross-module grounding/deletion journeys, backend tests, mobile typecheck/lint/parity, dependency audit, both secret scans, preview security, runtime authority, the hardened hosted-acceptance contract, disposable smoke, and exact-head readiness evidence.
 
-This evidence-document update intentionally creates a later documentation-only head. That later head must receive its own exact-head Production Readiness and Netlify Deploy Preview before branch synchronization or review closure.
+The later evidence head `8e49065df8b5c62a9ee5d6ff24ad75e2d9e702a5` also completed Production Readiness #392 / `32565437252` with `SUCCESS` and was deployed by Netlify as Deploy Preview id `6a896dd3bc1c3d0009f3dfe4`, `ready`, with exact `commit_ref`, zero Netlify secret-scan matches and no production publication. That exact SHA was then non-force fast-forwarded into PR #18's delivery branch.
+
+This advisor-evidence correction intentionally creates a later documentation-only delivery head. That head must receive its own exact-head Production Readiness and the QA carrier must be fast-forwarded to the same commit before final hosted acceptance evidence is claimed.
 
 ## Runtime and deployment authority
 
@@ -57,6 +70,8 @@ Supabase Auth URL configuration is bound to the protected Netlify Deploy Preview
 - the dedicated project now contains two confirmed Auth users with two distinct provider identities, satisfying the identity-count prerequisite for cross-user acceptance.
 
 A read-only privacy check after login found no rows in the inspected application-domain tables (`profiles`, `career_context_state`, `clearspeak_profiles`, `clearspeak_accent_attempts`, `interview_sessions`, `resume_reviews`). Login alone therefore did not silently create domain data.
+
+The free-tier Auth configuration currently cannot enable Supabase's leaked-password protection. This does not affect OAuth sessions and is not treated as hidden clean evidence. Password-based authentication remains subject to that documented preview limitation until a future production security/plan decision is explicitly approved.
 
 ## Hosted acceptance authority
 
@@ -91,17 +106,17 @@ UK/US practice and microphone workflows are implemented and browser-tested. Real
 
 ## Remaining hosted closure gates
 
-The database, hosting, service-role, Auth URL, email-login, Google-login, two-identity prerequisite, source CI, Netlify binding, and hosted network-hardening gates are satisfied.
+The database, hosting, service-role, Auth URL, email-login, Google-login, two-identity prerequisite, source hardening, Netlify binding, hosted network-hardening, and delivery-branch synchronization gates are satisfied. The free-tier leaked-password-protection limitation is documented as a future public-production blocker rather than hidden.
 
 P0-8 remains Draft because these controls are still open:
 
-1. acquire two bounded controller test-user bearer tokens through a secure channel without placing tokens in chat, Git, PR comments, or evidence;
+1. acquire two bounded controller test-user bearer tokens through a secure channel without placing tokens in chat, Git, PR comments, logs, or evidence;
 2. prepare the noncommitted controller-reviewed real scenario manifest and bounded synthetic Resume/ClearSpeak fixtures;
 3. configure an already-authorized AI provider key if live hosted acceptance is expected to exercise AI-backed Resume/Interview generation endpoints successfully; no provider purchase/activation is authorized by this ledger;
 4. execute the controller-only hosted mutation matrix, prove two-user isolation/concurrency/replay/account deletion, retain only non-secret evidence, and remove bounded test data through authoritative deletion paths;
-5. update this ledger with actual hosted acceptance result/digest, then rerun exact-head Production Readiness and exact-head Netlify deployment;
+5. update this ledger with the actual hosted acceptance result/digest, then rerun exact-head Production Readiness and exact-head Netlify deployment;
 6. obtain a fresh independent exact-head Codex P1/P2 review and resolve all review threads;
-7. only after those gates, fast-forward the real P0-8 delivery branch from the tested QA lineage. PR #21 itself must remain unmerged/closeable as QA-only evidence.
+7. after final acceptance, close PR #21 without merging it. PR #18 remains the only delivery PR.
 
 ## Immediate rollback / stop conditions
 
@@ -111,7 +126,7 @@ Stop or roll back the preview if any of the following occurs:
 - any request can escape the authorized origin or bypass bounded timeout/body controls;
 - a secret, bearer token, raw resume/audio, interview content, or private recovery state appears in logs/evidence;
 - cross-user access is observed;
-- RLS/RPC/grant/migration/advisor regression appears;
+- RLS/RPC/grant/migration/advisor regression appears beyond the explicitly documented free-tier leaked-password-protection exception;
 - development/mock auth or fabricated provider/scorer success becomes reachable in preview;
 - stale/duplicate requests create duplicate authoritative effects instead of replay/conflict behavior;
 - app-data deletion can report success after partial authoritative failure;
@@ -119,4 +134,4 @@ Stop or roll back the preview if any of the following occurs:
 
 ## Closure rule
 
-P0-8 stays Draft until controller-only hosted acceptance is green on the exact protected preview, cleanup is proven, the resulting exact head is green in Production Readiness and Netlify, and a fresh independent exact-head P1/P2 review is clean with no unresolved threads. Public production promotion is explicitly outside this milestone.
+P0-8 stays Draft until controller-only hosted acceptance is green on the exact protected preview, cleanup is proven, the resulting exact head is green in Production Readiness and Netlify, and a fresh independent exact-head P1/P2 review is clean with no unresolved threads. Public production promotion is explicitly outside this milestone and remains blocked while the leaked-password-protection control is unavailable/unresolved for password authentication.
