@@ -348,7 +348,16 @@ assert.equal(template.scenarios.at(-2).operation, 'account.owner-aftermath', 'ow
 assert.equal(template.scenarios.at(-1).operation, 'account.cross-user-aftermath', 'cross-user aftermath must follow deletion');
 
 assert.equal(packageJson.scripts['acceptance:hosted'], 'node scripts/hosted-preview-acceptance.mjs');
-assert.equal(packageJson.scripts['test:hosted-acceptance-contract'], 'node scripts/test-hosted-acceptance-guard.mjs');
+assert.equal(
+  packageJson.scripts['test:hosted-acceptance-contract'],
+  'node scripts/test-hosted-acceptance-guard.mjs && npm run test:hosted-operation-authority',
+  'hosted contract script must retain the base guard and operation-authority test',
+);
+assert.equal(
+  packageJson.scripts['test:hosted-operation-authority'],
+  'node scripts/test-hosted-operation-authority.mjs',
+  'hosted operation-authority test must remain explicitly addressable',
+);
 assert.ok(
   !packageJson.scripts['check:production'].includes('acceptance:hosted'),
   'ordinary production source checks must never contact hosted resources',
