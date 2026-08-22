@@ -89,6 +89,11 @@ assert.ok(!/\bawait fetch\s*\(/.test(harness), 'the hosted runner must not bypas
 assert.match(harness, /method:\s*'OPTIONS'/, 'hosted acceptance must issue a bounded CORS preflight');
 assert.match(harness, /Access-Control-Request-Method/, 'CORS preflight must declare the requested method');
 assert.match(harness, /uploadBuffer\?\.fill\(0\)/, 'raw multipart upload buffers must be wiped');
+assert.match(harness, /multipartBuffer\?\.fill\(0\)/, 'encoded multipart request buffers must be wiped');
+assert.match(harness, /multipartPartBuffers\.forEach\(\(buffer\) => buffer\.fill\(0\)\)/, 'multipart framing buffers must be wiped');
+assert.match(harness, /Buffer\.concat\(multipartParts\)/, 'multipart bodies must use an explicitly wipeable Buffer representation');
+assert.ok(!harness.includes('new FormData()'), 'multipart requests must not use FormData-owned immutable storage');
+assert.ok(!harness.includes('new Blob([uploadBuffer]'), 'raw resume/audio fixtures must not be copied into an unwipeable Blob');
 assert.match(harness, /jsonBuffer\?\.fill\(0\)/, 'encoded JSON request buffers must be wiped');
 assert.match(harness, /responseData\.body\.fill\(0\)/, 'consumed response buffers must be wiped');
 assert.match(harness, /body\?\.gitHeadSha !== expectedHeadSha/, 'hosted acceptance must verify the deployed Git head');

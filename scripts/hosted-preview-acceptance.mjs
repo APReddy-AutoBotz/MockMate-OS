@@ -280,21 +280,34 @@ function prepareRequest(spec, scenarioId, phase) {
   if (spec.idempotencyKey) headers['Idempotency-Key'] = spec.idempotencyKey;
   let requestBody;
   let uploadBuffer;
+  let multipartBuffer;
+  let multipartPartBuffers = [];
   let jsonBuffer;
   if (spec.multipart) {
     const { fileEnv, fileField, filename, contentType, fields = {} } = spec.multipart;
     if (!['RESUME_FIXTURE_PATH', 'CLEARSPEAK_FIXTURE_PATH'].includes(fileEnv) || !['resume', 'audio'].includes(fileField) || typeof filename !== 'string' || typeof contentType !== 'string') fail(`Scenario ${scenarioId} ${phase} has an invalid multipart declaration.`);
+    if (!filename || filename.length > 180 || /[\r\n"]/u.test(filename) || !contentType || contentType.length > 128 || /[\r\n]/u.test(contentType)) fail(`Scenario ${scenarioId} ${phase} has unsafe multipart metadata.`);
     const fixturePath = requireValue(fileEnv);
     const stat = fs.statSync(fixturePath);
     if (!stat.isFile() || stat.size === 0 || stat.size > MAX_UPLOAD_BYTES) fail(`Scenario ${scenarioId} ${phase} multipart fixture must be 1-${MAX_UPLOAD_BYTES} bytes.`);
     uploadBuffer = fs.readFileSync(fixturePath);
-    const form = new FormData();
-    form.append(fileField, new Blob([uploadBuffer], { type: contentType }), filename);
+    const boundary = `----mockmate-${crypto.randomBytes(18).toString('hex')}`;
+    const multipartParts = [];
+    const appendTextPart = (value) => {
+      const buffer = Buffer.from(value, 'utf8');
+      multipartPartBuffers.push(buffer);
+      multipartParts.push(buffer);
+    };
     for (const [key, value] of Object.entries(fields)) {
-      if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 4096) fail(`Scenario ${scenarioId} ${phase} has an invalid multipart field.`);
-      form.append(key, value);
+      if (!/^[A-Za-z0-9_.-]{1,64}$/u.test(key) || typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 4096) fail(`Scenario ${scenarioId} ${phase} has an invalid multipart field.`);
+      appendTextPart(`--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`);
     }
-    requestBody = form;
+    appendTextPart(`--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`);
+    multipartParts.push(uploadBuffer);
+    appendTextPart(`\r\n--${boundary}--\r\n`);
+    multipartBuffer = Buffer.concat(multipartParts);
+    headers['Content-Type'] = `multipart/form-data; boundary=${boundary}`;
+    requestBody = multipartBuffer;
   } else if (spec.body !== undefined) {
     jsonBuffer = Buffer.from(JSON.stringify(spec.body));
     if (jsonBuffer.byteLength > MAX_RESPONSE_BYTES) fail(`Scenario ${scenarioId} ${phase} JSON body is oversized.`);
@@ -304,9 +317,13 @@ function prepareRequest(spec, scenarioId, phase) {
   const prepared = { method, targetUrl, headers, requestBody, cleanup: undefined };
   prepared.cleanup = () => {
     uploadBuffer?.fill(0);
+    multipartBuffer?.fill(0);
+    multipartPartBuffers.forEach((buffer) => buffer.fill(0));
+    multipartPartBuffers = [];
     jsonBuffer?.fill(0);
     prepared.requestBody = undefined;
     uploadBuffer = undefined;
+    multipartBuffer = undefined;
     jsonBuffer = undefined;
     requestBody = undefined;
   };
