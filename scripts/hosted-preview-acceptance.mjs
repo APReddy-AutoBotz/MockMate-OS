@@ -58,8 +58,8 @@ try {
 
 const operationContracts = new Map(Object.entries({
   'runtime.health': ['GET', /^\/api\/health$/, 'none', 'none'],
-  'pwa.manifest': ['GET', /^\/manifest\.json$/, 'none', 'none'],
-  'pwa.offline': ['GET', /^\/offline\.html$/, 'none', 'none'],
+  'pwa.manifest': ['GET', /^\/manifest\.webmanifest$/, 'none', 'none'],
+  'pwa.offline': ['GET', /^\/sw\.js$/, 'none', 'none'],
   'auth.identity': ['GET', /^\/api\/auth\/test$/, 'userA', 'none'],
   'resume.parse': ['POST', /^\/api\/resume\/parse$/, 'userA', 'resume'],
   'resume.score': ['POST', /^\/api\/resume\/score$/, 'userA', 'json'],
@@ -79,6 +79,8 @@ const operationContracts = new Map(Object.entries({
   'interview.version': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userA', 'none'],
   'interview.stale': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
   'interview.interrupted': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userA', 'none'],
+  'career-context.rebuild': ['POST', /^\/api\/career-context\/rebuild$/, 'userA', 'none'],
+  'career-context.state': ['GET', /^\/api\/career-context$/, 'userA', 'none'],
   'career-context.create': ['POST', /^\/api\/career-context\/snapshots$/, 'userA', 'json'],
   'career-context.update': ['POST', /^\/api\/career-context\/preference$/, 'userA', 'json'],
   'career-context.delete': ['POST', /^\/api\/career-context\/items\/[^/]+\/decision$/, 'userA', 'json'],
@@ -103,7 +105,7 @@ const requiredOperations = new Set([
   'resume.parse', 'resume.score', 'resume.suggest',
   'clearspeak.prompt', 'clearspeak.authority', 'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.cancel', 'clearspeak.history', 'clearspeak.replay', 'clearspeak.delete',
   'interview.create', 'interview.answer', 'interview.report', 'interview.version', 'interview.stale', 'interview.interrupted',
-  'career-context.create', 'career-context.update', 'career-context.delete', 'career-context.snapshot', 'career-context.bridge', 'career-context.stale', 'career-context.cross-user',
+  'career-context.rebuild', 'career-context.state', 'career-context.create', 'career-context.update', 'career-context.delete', 'career-context.snapshot', 'career-context.bridge', 'career-context.stale', 'career-context.cross-user',
   'admin.denied', 'cross-user.denied', 'partial-failure.malformed', 'partial-failure.oversized', 'partial-failure.account-delete',
   'concurrency.exactly-once', 'replay.response-loss',
   'account.delete', 'account.owner-aftermath', 'account.cross-user-aftermath',
@@ -111,19 +113,20 @@ const requiredOperations = new Set([
 
 const operationStatusContracts = new Map(Object.entries({
   'runtime.health': [200], 'pwa.manifest': [200], 'pwa.offline': [200], 'auth.identity': [200],
-  'resume.parse': [200], 'resume.score': [200], 'resume.suggest': [200],
-  'clearspeak.prompt': [200], 'clearspeak.authority': [201], 'clearspeak.create': [200, 201], 'clearspeak.submit': [200],
+  'resume.parse': [503], 'resume.score': [200], 'resume.suggest': [503],
+  'clearspeak.prompt': [200], 'clearspeak.authority': [201], 'clearspeak.create': [201], 'clearspeak.submit': [200],
   'clearspeak.result': [200], 'clearspeak.cancel': [200], 'clearspeak.history': [200],
-  'clearspeak.replay': [200, 201], 'clearspeak.delete': [200, 204],
-  'interview.create': [200, 201], 'interview.answer': [200], 'interview.report': [200],
+  'clearspeak.replay': [200], 'clearspeak.delete': [204],
+  'interview.create': [200], 'interview.answer': [200], 'interview.report': [409],
   'interview.version': [200], 'interview.stale': [409], 'interview.interrupted': [200],
-  'career-context.create': [200, 201], 'career-context.update': [200], 'career-context.delete': [200],
-  'career-context.snapshot': [200], 'career-context.bridge': [200, 201], 'career-context.stale': [409],
-  'career-context.cross-user': [403, 404], 'admin.denied': [403], 'cross-user.denied': [403, 404],
-  'partial-failure.malformed': [400, 422], 'partial-failure.oversized': [400, 413, 422],
-  'partial-failure.account-delete': [409, 500], 'concurrency.exactly-once': [200],
+  'career-context.rebuild': [200], 'career-context.state': [200],
+  'career-context.create': [200], 'career-context.update': [200], 'career-context.delete': [409],
+  'career-context.snapshot': [200], 'career-context.bridge': [200], 'career-context.stale': [409],
+  'career-context.cross-user': [404], 'admin.denied': [403], 'cross-user.denied': [404],
+  'partial-failure.malformed': [400], 'partial-failure.oversized': [400],
+  'partial-failure.account-delete': [409], 'concurrency.exactly-once': [200],
   'replay.response-loss': [200], 'account.delete': [200], 'account.owner-aftermath': [200],
-  'account.cross-user-aftermath': [403, 404],
+  'account.cross-user-aftermath': [404],
 }));
 
 const repetitionContracts = new Map(Object.entries({
@@ -135,6 +138,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 const captureNamePattern = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 const captureTokenPattern = /\{\{capture:([A-Za-z][A-Za-z0-9_.-]{0,63})\}\}/g;
 const fullCaptureTokenPattern = /^\{\{capture:([A-Za-z][A-Za-z0-9_.-]{0,63})\}\}$/;
+const GENERATED_OVERSIZED_RAW_TEXT = '{{generated:resume.rawText.500001}}';
 
 if (!manifest || ![3, 4].includes(manifest.schemaVersion) || !Array.isArray(manifest.scenarios) || manifest.scenarios.length === 0 || manifest.scenarios.length > 64) {
   fail('Scenario manifest must use supported schemaVersion 3 or 4 and contain 1-64 scenarios.');
@@ -164,6 +168,17 @@ function resolveAssertions(assertions) {
   }));
 }
 
+function materializeGeneratedProbe(spec) {
+  const serialized = JSON.stringify(spec);
+  if (spec?.operation === 'partial-failure.oversized') {
+    if (spec.body?.rawText !== GENERATED_OVERSIZED_RAW_TEXT) fail(`Scenario ${spec.id ?? 'unknown'} must use the registered generated oversized Resume probe marker.`);
+    spec.body = { ...spec.body, rawText: 'x'.repeat(500001) };
+    return spec;
+  }
+  if (serialized.includes(GENERATED_OVERSIZED_RAW_TEXT)) fail(`Scenario ${spec?.id ?? 'unknown'} uses the oversized Resume probe marker outside its registered operation.`);
+  return spec;
+}
+
 function resolveRequestSpec(rawSpec, { allowCaptures = false } = {}) {
   if (!rawSpec || typeof rawSpec !== 'object' || Array.isArray(rawSpec)) fail('Scenario request specification is invalid.');
   if (!allowCaptures && rawSpec.captures !== undefined) fail('Capture declarations are not allowed on this request phase.');
@@ -182,7 +197,7 @@ function resolveRequestSpec(rawSpec, { allowCaptures = false } = {}) {
   }
   if (rawSpec.canonicalPaths) resolved.canonicalPaths = captureStore.resolve(rawSpec.canonicalPaths);
   delete resolved.captures;
-  return resolved;
+  return materializeGeneratedProbe(resolved);
 }
 
 function validateOperationContract(scenario) {
@@ -543,7 +558,7 @@ function projectRequestSpecForPreflight(rawSpec, declarations, { allowCaptures =
   if (!allowCaptures && rawSpec.captures !== undefined) fail('Capture declarations are not allowed on this request phase.');
   const projected = resolvePreflightValue(rawSpec, declarations);
   delete projected.captures;
-  return projected;
+  return materializeGeneratedProbe(projected);
 }
 
 function validateProjectedJsonSize(spec, scenarioId, phase) {
