@@ -3,6 +3,10 @@ import { verifyAuthToken } from '../middleware/authMiddleware';
 import { getUsageSummary } from '../services/usageService';
 import { supabaseAdmin } from '../supabaseAdmin';
 import { AccountDeletionResponseSchema } from 'mockmate-shared';
+import {
+  ACCOUNT_DELETE_FAILURE_HEADER,
+  accountDeleteFailureSeamDecision,
+} from '../config/previewFailureSeams';
 
 const router = Router();
 
@@ -24,6 +28,34 @@ router.delete('/data', async (req, res) => {
   try {
     const userId = (req as any).user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    // P0-8 controller-only deterministic failure seam. A request that names
+    // this header is always intercepted before persistence. It can produce the
+    // synthetic 409 only in preview with an explicit environment gate; an
+    // unauthorized/malformed seam request fails closed and never falls through
+    // to the real deletion path.
+    const failureSeam = accountDeleteFailureSeamDecision(
+      process.env,
+      req.header(ACCOUNT_DELETE_FAILURE_HEADER),
+    );
+    if (failureSeam.requested) {
+      if (!failureSeam.authorized) {
+        return res.status(403).json({
+          error: 'Preview failure seam is not authorized. No deletion attempted.',
+          code: 'FORBIDDEN',
+        });
+      }
+      return res.status(409).json(AccountDeletionResponseSchema.parse({
+        success: false,
+        operation: 'app_data_deleted',
+        deletedTables: [],
+        failedTables: ['preview_failure_seam'],
+        authIdentityDeleted: false,
+        authIdentityRetainedReason: 'Preview-only deterministic failure seam; no deletion attempted.',
+        requestId,
+      }));
+    }
+
     if (!supabaseAdmin) {
       return res.status(503).json({
         success: false,
