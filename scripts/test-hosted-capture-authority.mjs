@@ -72,3 +72,4 @@ expectCode(() => limited.captureFromResponse('too-many', Array.from({ length: 9 
 
 console.log('P0-8 hosted capture/reference authority guard passed');
 await import('./test-hosted-v4-runner-contract.mjs');
+await import('./test-hosted-committed-manifest-preflight.mjs');
