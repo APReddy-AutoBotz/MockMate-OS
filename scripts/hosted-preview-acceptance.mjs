@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { boundedRequest, exactHostedOrigin, exactOriginUrl } from './hosted-acceptance-safety.mjs';
 
 const fail = (message) => {
   console.error(`[HOSTED_PREVIEW_ACCEPTANCE_REFUSED] ${message}`);
@@ -25,12 +26,9 @@ requireExact('BOUNDED_TEST_DATA_CONFIRMED', 'true');
 const origin = requireValue('MOCKMATE_PREVIEW_ORIGIN');
 let originUrl;
 try {
-  originUrl = new URL(origin);
-} catch {
-  fail('MOCKMATE_PREVIEW_ORIGIN must be an absolute URL.');
-}
-if (originUrl.protocol !== 'https:' || originUrl.username || originUrl.password || originUrl.port || originUrl.pathname !== '/' || originUrl.search || originUrl.hash || !originUrl.hostname.endsWith('.vercel.app')) {
-  fail('MOCKMATE_PREVIEW_ORIGIN must be an exact HTTPS Vercel origin.');
+  originUrl = exactHostedOrigin(origin);
+} catch (error) {
+  fail(error instanceof Error ? error.message : 'MOCKMATE_PREVIEW_ORIGIN is invalid.');
 }
 
 const previewTargetId = requireValue('MOCKMATE_PREVIEW_TARGET_ID', /^[a-zA-Z0-9][a-zA-Z0-9._-]{2,79}$/);
@@ -132,6 +130,10 @@ const allowedAssertionOps = new Set(['exists', 'equals', 'oneOf', 'type', 'match
 const allowedJsonTypes = new Set(['string', 'number', 'boolean', 'object', 'array', 'null']);
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+const REQUEST_TIMEOUT_MS = Number(process.env.HOSTED_ACCEPTANCE_TIMEOUT_MS ?? 30_000);
+if (!Number.isInteger(REQUEST_TIMEOUT_MS) || REQUEST_TIMEOUT_MS < 1_000 || REQUEST_TIMEOUT_MS > 120_000) {
+  fail('HOSTED_ACCEPTANCE_TIMEOUT_MS must be an integer between 1000 and 120000.');
+}
 
 function validateOperationContract(scenario) {
   const contract = operationContracts.get(scenario.operation);
@@ -159,19 +161,11 @@ function validateOperationContract(scenario) {
 }
 
 function exactTargetUrl(scenarioId, scenarioPath) {
-  if (!scenarioPath.startsWith('/') || scenarioPath.startsWith('//') || scenarioPath.includes('\\')) {
-    fail(`Scenario ${scenarioId} path must be a single-slash relative path on the authorized origin.`);
-  }
-  let resolved;
   try {
-    resolved = new URL(scenarioPath, originUrl);
-  } catch {
-    fail(`Scenario ${scenarioId} path is not a valid relative URL.`);
+    return exactOriginUrl(originUrl, scenarioPath);
+  } catch (error) {
+    fail(`Scenario ${scenarioId} ${error instanceof Error ? error.message : 'has an invalid path.'}`);
   }
-  if (resolved.origin !== originUrl.origin || resolved.username || resolved.password) {
-    fail(`Scenario ${scenarioId} resolved outside the authorized origin.`);
-  }
-  return resolved;
 }
 
 function jsonPointerValue(document, pointer) {
@@ -285,70 +279,52 @@ async function executeRequest(spec, scenarioId, phase) {
   if (auth !== 'none') headers.Authorization = `Bearer ${tokens[auth]}`;
   if (spec.idempotencyKey) headers['Idempotency-Key'] = spec.idempotencyKey;
   let requestBody;
-  let rawBuffer;
+  let uploadBuffer;
+  let jsonBuffer;
   if (spec.multipart) {
     const { fileEnv, fileField, filename, contentType, fields = {} } = spec.multipart;
     if (!['RESUME_FIXTURE_PATH', 'CLEARSPEAK_FIXTURE_PATH'].includes(fileEnv) || !['resume', 'audio'].includes(fileField) || typeof filename !== 'string' || typeof contentType !== 'string') fail(`Scenario ${scenarioId} ${phase} has an invalid multipart declaration.`);
     const fixturePath = requireValue(fileEnv);
     const stat = fs.statSync(fixturePath);
     if (!stat.isFile() || stat.size === 0 || stat.size > MAX_UPLOAD_BYTES) fail(`Scenario ${scenarioId} ${phase} multipart fixture must be 1-${MAX_UPLOAD_BYTES} bytes.`);
-    rawBuffer = fs.readFileSync(fixturePath);
+    uploadBuffer = fs.readFileSync(fixturePath);
     const form = new FormData();
-    form.append(fileField, new Blob([rawBuffer], { type: contentType }), filename);
+    form.append(fileField, new Blob([uploadBuffer], { type: contentType }), filename);
     for (const [key, value] of Object.entries(fields)) {
       if (typeof value !== 'string' || value.length > 4096) fail(`Scenario ${scenarioId} ${phase} has an invalid multipart field.`);
       form.append(key, value);
     }
     requestBody = form;
   } else if (spec.body !== undefined) {
-    const encoded = JSON.stringify(spec.body);
-    if (Buffer.byteLength(encoded) > MAX_RESPONSE_BYTES) fail(`Scenario ${scenarioId} ${phase} JSON body is oversized.`);
+    jsonBuffer = Buffer.from(JSON.stringify(spec.body));
+    if (jsonBuffer.byteLength > MAX_RESPONSE_BYTES) fail(`Scenario ${scenarioId} ${phase} JSON body is oversized.`);
     headers['Content-Type'] = 'application/json';
-    requestBody = encoded;
+    requestBody = jsonBuffer;
   }
 
-  let response;
+  let responseData;
   try {
-    response = await fetch(targetUrl, { method, headers, redirect: 'manual', body: requestBody });
+    responseData = await boundedRequest(targetUrl, { method, headers, redirect: 'manual', body: requestBody }, {
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      maxResponseBytes: MAX_RESPONSE_BYTES,
+    });
   } finally {
-    rawBuffer?.fill(0);
+    uploadBuffer?.fill(0);
+    jsonBuffer?.fill(0);
+    requestBody = undefined;
   }
-  const chunks = [];
-  let responseBytes = 0;
-  if (response.body) {
-    const reader = response.body.getReader();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        responseBytes += value.byteLength;
-        if (responseBytes > MAX_RESPONSE_BYTES) {
-          value.fill(0);
-          await reader.cancel();
-          throw new Error(`Scenario ${scenarioId} ${phase} response is oversized.`);
-        }
-        chunks.push(Buffer.from(value));
-        value.fill(0);
-      }
-    } catch (error) {
-      chunks.forEach((chunk) => chunk.fill(0));
-      throw error;
-    }
-  }
-  const responseBuffer = Buffer.concat(chunks, responseBytes);
-  chunks.forEach((chunk) => chunk.fill(0));
   try {
-    const text = responseBuffer.toString('utf8');
+    const text = responseData.body.toString('utf8');
     let json;
     if (text) {
       try { json = JSON.parse(text); } catch { json = undefined; }
     }
-    if (!spec.expectedStatuses.includes(response.status)) throw new Error(`Scenario ${scenarioId} ${phase} returned unexpected status ${response.status}.`);
-    validateAssertions(spec.assertions, { json, headers: response.headers, text }, scenarioId, phase);
+    if (!spec.expectedStatuses.includes(responseData.status)) throw new Error(`Scenario ${scenarioId} ${phase} returned unexpected status ${responseData.status}.`);
+    validateAssertions(spec.assertions, { json, headers: responseData.headers, text }, scenarioId, phase);
     const canonical = (spec.canonicalPaths ?? []).map((pointer) => jsonPointerValue(json, pointer).value);
-    return { status: response.status, canonical };
+    return { status: responseData.status, canonical };
   } finally {
-    responseBuffer.fill(0);
+    responseData.body.fill(0);
   }
 }
 
@@ -416,21 +392,53 @@ async function requestScenario(scenario) {
   });
 }
 
+async function boundedPreflight(pathname, options) {
+  return boundedRequest(exactOriginUrl(originUrl, pathname), options, {
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    maxResponseBytes: MAX_RESPONSE_BYTES,
+  });
+}
+
 async function preflight() {
-  const health = await fetch(new URL('/api/health', originUrl), { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
-  if (health.status !== 200) throw new Error(`Preview health returned ${health.status}.`);
-  const body = await health.json();
-  if (body?.mode !== 'preview' || body?.authority !== 'configured' || body?.previewTargetId !== previewTargetId || body?.supabaseProjectRef !== supabaseProjectRef || body?.gitHeadSha !== expectedHeadSha) {
-    throw new Error('Preview health authority does not match the explicitly authorized origin, project, target and Git head.');
+  const health = await boundedPreflight('/api/health', { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
+  try {
+    if (health.status !== 200) throw new Error(`Preview health returned ${health.status}.`);
+    let body;
+    try { body = JSON.parse(health.body.toString('utf8')); } catch { throw new Error('Preview health did not return valid JSON.'); }
+    if (body?.mode !== 'preview' || body?.authority !== 'configured' || body?.previewTargetId !== previewTargetId || body?.supabaseProjectRef !== supabaseProjectRef || body?.gitHeadSha !== expectedHeadSha) {
+      throw new Error('Preview health authority does not match the explicitly authorized origin, project, target and Git head.');
+    }
+  } finally {
+    health.body.fill(0);
   }
 
-  const unauthorized = await fetch(new URL('/api/auth/test', originUrl), { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
-  if (unauthorized.status !== 401) throw new Error(`Protected unauthenticated probe returned ${unauthorized.status}; expected 401.`);
+  const unauthorized = await boundedPreflight('/api/auth/test', { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
+  try {
+    if (unauthorized.status !== 401) throw new Error(`Protected unauthenticated probe returned ${unauthorized.status}; expected 401.`);
+  } finally {
+    unauthorized.body.fill(0);
+  }
 
   const hostileOrigin = 'https://mockmate-hostile-origin.invalid';
-  const hostile = await fetch(new URL('/api/health', originUrl), { headers: { Accept: 'application/json', Origin: hostileOrigin }, redirect: 'manual' });
-  const allowOrigin = hostile.headers.get('access-control-allow-origin');
-  if (allowOrigin === hostileOrigin || allowOrigin === '*') throw new Error('Hostile origin was accepted by CORS.');
+  const hostile = await boundedPreflight('/api/health', { headers: { Accept: 'application/json', Origin: hostileOrigin }, redirect: 'manual' });
+  try {
+    const allowOrigin = hostile.headers.get('access-control-allow-origin');
+    if (allowOrigin === hostileOrigin || allowOrigin === '*') throw new Error('Hostile origin was accepted by CORS.');
+  } finally {
+    hostile.body.fill(0);
+  }
+
+  const preflightResponse = await boundedPreflight('/api/health', {
+    method: 'OPTIONS',
+    headers: { Origin: hostileOrigin, 'Access-Control-Request-Method': 'GET' },
+    redirect: 'manual',
+  });
+  try {
+    const allowOrigin = preflightResponse.headers.get('access-control-allow-origin');
+    if (allowOrigin === hostileOrigin || allowOrigin === '*') throw new Error('Hostile CORS preflight was accepted.');
+  } finally {
+    preflightResponse.body.fill(0);
+  }
 }
 
 try {
