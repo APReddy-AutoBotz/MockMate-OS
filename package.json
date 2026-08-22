@@ -31,7 +31,7 @@
     "smoke:deployed": "node scripts/deployed-smoke.mjs",
     "test:preview-security": "node scripts/production-preview-security.mjs",
     "test:runtime-mode-authority": "node scripts/test-runtime-mode-authority.mjs",
-    "test:hosted-operation-authority": "npm run shared:build --silent && node scripts/test-hosted-operation-authority.mjs",
+    "test:hosted-operation-authority": "node scripts/test-hosted-operation-authority.mjs",
     "test:hosted-acceptance-contract": "node scripts/test-hosted-acceptance-guard.mjs && npm run test:hosted-operation-authority",
     "acceptance:hosted": "node scripts/hosted-preview-acceptance.mjs",
     "manifest:readiness": "node scripts/readiness-manifest.mjs",
