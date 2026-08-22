@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [backend, backendAuth, backendUsage, backendPersistence, browser, mobileMode, mobileApi, mobileAuth, shared, eas] = await Promise.all([
+const [backend, backendAuth, backendUsage, backendPersistence, browser, mobileMode, mobileApi, mobileAuth, llmGateway, shared, eas] = await Promise.all([
   readFile('backend/config/runtimeConfig.ts', 'utf8'),
   readFile('backend/middleware/authMiddleware.ts', 'utf8'),
   readFile('backend/services/usageService.ts', 'utf8'),
@@ -10,6 +10,7 @@ const [backend, backendAuth, backendUsage, backendPersistence, browser, mobileMo
   readFile('mobile/src/services/runtimeMode.ts', 'utf8'),
   readFile('mobile/src/services/apiBase.ts', 'utf8'),
   readFile('mobile/src/services/supabaseClient.ts', 'utf8'),
+  readFile('backend/services/llmProviderGateway.ts', 'utf8'),
   readFile('shared/src/index.ts', 'utf8'),
   readFile('mobile/eas.json', 'utf8').then(JSON.parse),
 ]);
@@ -25,6 +26,10 @@ assert.doesNotMatch(backendAuth, /process\.env\.NODE_ENV/, 'auth must consume ca
 assert.match(backendAuth, /mode === 'test'/, 'test-token authority must require canonical test mode');
 assert.doesNotMatch(backendUsage, /process\.env\.NODE_ENV/, 'quota fallback must consume canonical runtime mode');
 assert.match(backendPersistence, /runtimeMode\(\) !== 'test'/, 'test persistence must require canonical test mode');
+assert.doesNotMatch(backend, /GEMINI_API_KEY|GOOGLE_API_KEY|GROQ_API_KEY/,
+  'production-like server startup must not require AI-provider credentials');
+assert.match(llmGateway, /throw new Error\('All AI providers failed or no API keys provided\.'\)/,
+  'AI provider unavailability must fail visibly at the feature boundary');
 assert.match(browser, /throw new Error\('Runtime configuration is invalid \(CONFIGURATION_INVALID\)\.'\)/,
   'unknown browser mode must fail closed');
 assert.match(mobileMode, /if \(isDevelopmentBuild\) return 'development';[\s\S]*throw configurationError\(\)/,

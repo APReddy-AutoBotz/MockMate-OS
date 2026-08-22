@@ -63,13 +63,14 @@ export function assertServerRuntimeConfig(env: NodeJS.ProcessEnv = process.env) 
   const origins = (env.ALLOWED_ORIGINS || '').split(',').map(v => v.trim()).filter(Boolean);
   const validOrigins = origins.length > 0 && origins.every(origin => origin !== '*' &&
     validRuntimeUrl(origin, { httpsRequired: true, originOnly: true }));
-  const providerConfigured = Boolean(env.GEMINI_API_KEY || env.GOOGLE_API_KEY || env.GROQ_API_KEY);
   const serverProjectRef = supabaseProjectRef(env.SUPABASE_URL);
   const browserProjectRef = supabaseProjectRef(env.VITE_SUPABASE_URL);
 
+  // AI provider readiness is feature-level authority. The server must remain available for
+  // authentication, account, persistence, and other non-AI routes when no provider is configured.
   const invalid = env.ENABLE_DEV_AUTH === 'true' || env.VITE_ENABLE_DEV_AUTH === 'true' ||
     !validRuntimeUrl(env.SUPABASE_URL, { httpsRequired: true }) || !env.SUPABASE_SERVICE_ROLE_KEY || !validOrigins ||
-    !providerConfigured || Boolean(env.SUPABASE_SERVICE_ROLE_KEY && env.SUPABASE_SERVICE_ROLE_KEY === env.VITE_SUPABASE_ANON_KEY);
+    Boolean(env.SUPABASE_SERVICE_ROLE_KEY && env.SUPABASE_SERVICE_ROLE_KEY === env.VITE_SUPABASE_ANON_KEY);
   if (invalid) throw new ConfigurationError();
 
   if (mode === 'preview') {
