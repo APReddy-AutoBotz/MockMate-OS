@@ -25,6 +25,11 @@ validateHostedOperationBody({ operation: 'resume.score', body: { resumeData, raw
 validateHostedOperationBody({ operation: 'resume.suggest', body: { resumeData, jdText: 'Role description' } });
 expectRefused({ operation: 'resume.suggest', body: { resumeData, rawText: 'score-only field', jdText: '' } }, 'Resume suggest must use its exact shared schema');
 
+validateHostedOperationBody({ operation: 'career-context.rebuild' });
+validateHostedOperationBody({ operation: 'career-context.state' });
+expectRefused({ operation: 'career-context.rebuild', body: {} }, 'Career Context rebuild setup must not hide request-body authority');
+expectRefused({ operation: 'career-context.state', body: {} }, 'Career Context state setup must remain a bodyless read');
+
 validateHostedOperationBody({
   operation: 'partial-failure.malformed',
   body: { resumeData, rawText: '', jdText: '', unsupportedProbeField: 'reject-me' },
