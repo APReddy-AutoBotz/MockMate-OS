@@ -82,6 +82,10 @@ function parseMultipartMetadata(operation, scenario) {
   }
 }
 
+function requireNoBody(operation, scenario) {
+  if (scenario.body !== undefined || scenario.multipart !== undefined) refuse(operation, 'must not carry a request body.');
+}
+
 export function jsonRequestLimitForOperation(operation) {
   return operation === 'partial-failure.oversized'
     ? OVERSIZED_RESUME_REQUEST_BYTES
@@ -106,7 +110,7 @@ export function validateHostedOperationBody(scenario) {
     case 'resume.suggest':
       schemaPass(operation, ResumeSuggestRequestSchema, scenario.body);
       return;
-    case 'partial-failure.malformed': { // one intentional strict-schema violation; the rest must be valid
+    case 'partial-failure.malformed': {
       exactKeys(operation, scenario.body, ['resumeData', 'rawText', 'jdText', 'unsupportedProbeField']);
       if (scenario.body.unsupportedProbeField !== 'reject-me') refuse(operation, 'requires the deterministic unsupported field probe.');
       const base = { resumeData: scenario.body.resumeData, rawText: scenario.body.rawText, jdText: scenario.body.jdText };
@@ -114,7 +118,7 @@ export function validateHostedOperationBody(scenario) {
       if (ResumeScoreRequestSchema.safeParse(scenario.body).success) refuse(operation, 'must remain intentionally invalid under the strict Resume score schema.');
       return;
     }
-    case 'partial-failure.oversized': { // only rawText length may be invalid
+    case 'partial-failure.oversized': {
       exactKeys(operation, scenario.body, ['resumeData', 'rawText', 'jdText']);
       if (typeof scenario.body.rawText !== 'string' || scenario.body.rawText.length <= 500000 || scenario.body.rawText.length > 600000 || Buffer.byteLength(scenario.body.rawText, 'utf8') !== scenario.body.rawText.length) {
         refuse(operation, 'requires 500001-600000 single-byte rawText characters.');
@@ -131,6 +135,10 @@ export function validateHostedOperationBody(scenario) {
     case 'concurrency.exactly-once':
     case 'replay.response-loss':
       schemaPass(operation, AdaptiveAnswerSubmissionRequestSchema, scenario.body);
+      return;
+    case 'career-context.rebuild':
+    case 'career-context.state':
+      requireNoBody(operation, scenario);
       return;
     case 'career-context.create':
       schemaPass(operation, GroundingSnapshotCreateRequestSchema, scenario.body);
@@ -161,7 +169,7 @@ export function validateHostedOperationBody(scenario) {
       if (typeof scenario.body.submissionCapability !== 'string' || !capability.test(scenario.body.submissionCapability)) refuse(operation, 'requires a process-local 64-hex submissionCapability.');
       return;
     case 'partial-failure.account-delete':
-      if (scenario.body !== undefined || scenario.multipart !== undefined) refuse(operation, 'must not carry a request body.');
+      requireNoBody(operation, scenario);
       return;
     default:
       return;
