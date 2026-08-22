@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import {
+import { spawnSync } from 'node:child_process';
+
+const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const sharedBuild = spawnSync(npmExecutable, ['run', 'shared:build', '--silent'], { stdio: 'inherit' });
+assert.equal(sharedBuild.status, 0, 'shared artifacts must build before hosted operation-authority assertions');
+
+const {
   ACCOUNT_DELETE_FAILURE_HEADER,
   ACCOUNT_DELETE_FAILURE_VALUE,
   DEFAULT_JSON_REQUEST_BYTES,
@@ -8,7 +14,7 @@ import {
   jsonRequestLimitForOperation,
   operationOwnedHeaders,
   validateHostedOperationBody,
-} from './hosted-acceptance-operation-authority.mjs';
+} = await import('./hosted-acceptance-operation-authority.mjs');
 
 const expectRefused = (scenario, message) => {
   assert.throws(() => validateHostedOperationBody(scenario), HostedOperationAuthorityError, message);
