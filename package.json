@@ -32,6 +32,7 @@
     "test:preview-security": "node scripts/production-preview-security.mjs",
     "test:runtime-mode-authority": "node scripts/test-runtime-mode-authority.mjs",
     "test:hosted-acceptance-contract": "node scripts/test-hosted-acceptance-guard.mjs",
+    "test:hosted-operation-authority": "npm run shared:build --silent && node scripts/test-hosted-operation-authority.mjs",
     "acceptance:hosted": "node scripts/hosted-preview-acceptance.mjs",
     "manifest:readiness": "node scripts/readiness-manifest.mjs",
     "check:preview-readiness": "npm run check:production && npm run audit:production && npm run check:mobile && npm run test:preview-security && npm run smoke:deployed && npm run manifest:readiness",
