@@ -44,8 +44,17 @@ function supabaseProjectRef(urlValue: string | undefined) {
   }
 }
 
-function deployedGitHeadSha(env: NodeJS.ProcessEnv) {
-  return env.MOCKMATE_DEPLOYED_GIT_SHA?.trim() || env.VERCEL_GIT_COMMIT_SHA?.trim() || env.COMMIT_REF?.trim();
+function deployedGitHeadSha(env: NodeJS.ProcessEnv): string | null {
+  const override = env.MOCKMATE_DEPLOYED_GIT_SHA?.trim() || undefined;
+  const providerShas = [
+    env.VERCEL_GIT_COMMIT_SHA?.trim() || undefined,
+    env.COMMIT_REF?.trim() || undefined,
+  ].filter((value): value is string => Boolean(value));
+
+  const providerSha = providerShas[0];
+  if (providerSha && providerShas.some(value => value !== providerSha)) return null;
+  if (providerSha && override && override !== providerSha) return null;
+  return providerSha || override || null;
 }
 
 export type PreviewAuthority = {
