@@ -65,3 +65,28 @@ export async function boundedRequest(url, options, { timeoutMs, maxResponseBytes
     clearTimeout(timeout);
   }
 }
+
+export async function boundedAbandonedRequest(url, options, { timeoutMs, fetchImpl = fetch } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error('Hosted abandoned request timed out.')), timeoutMs);
+  const aborted = new Promise((_, reject) => {
+    controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+  });
+  let response;
+  try {
+    response = await Promise.race([fetchImpl(url, { ...options, signal: controller.signal }), aborted]);
+    if (response.body) {
+      try { await response.body.cancel(); } catch { /* abandonment is best effort */ }
+    }
+    return { status: response.status, headers: response.headers };
+  } catch (error) {
+    controller.abort();
+    if (response?.body) {
+      try { await response.body.cancel(); } catch { /* cancellation is best effort */ }
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+  }
+}

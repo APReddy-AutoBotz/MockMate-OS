@@ -71,3 +71,4 @@ expectCode(() => limited.captureFromResponse('too-many', Array.from({ length: 9 
 })), Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`n${index}`, index]))), 'CAPTURE_DECLARATIONS_INVALID');
 
 console.log('P0-8 hosted capture/reference authority guard passed');
+await import('./test-hosted-v4-runner-contract.mjs');
