@@ -3,6 +3,11 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { boundedAbandonedRequest, boundedRequest, exactHostedOrigin, exactOriginUrl } from './hosted-acceptance-safety.mjs';
 import { createCaptureStore } from './hosted-acceptance-captures.mjs';
+import {
+  jsonRequestLimitForOperation,
+  operationOwnedHeaders,
+  validateHostedOperationBody,
+} from './hosted-acceptance-operation-authority.mjs';
 
 const captureStore = createCaptureStore();
 process.on('exit', () => captureStore.clear());
@@ -127,6 +132,9 @@ const repetitionContracts = new Map(Object.entries({
 }));
 const interviewRepetitionCanonicalPaths = ['/completedTurnId', '/sessionVersion'];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const captureNamePattern = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+const captureTokenPattern = /\{\{capture:([A-Za-z][A-Za-z0-9_.-]{0,63})\}\}/g;
+const fullCaptureTokenPattern = /^\{\{capture:([A-Za-z][A-Za-z0-9_.-]{0,63})\}\}$/;
 
 if (!manifest || ![3, 4].includes(manifest.schemaVersion) || !Array.isArray(manifest.scenarios) || manifest.scenarios.length === 0 || manifest.scenarios.length > 64) {
   fail('Scenario manifest must use supported schemaVersion 3 or 4 and contain 1-64 scenarios.');
@@ -203,6 +211,14 @@ function validateOperationContract(scenario) {
   }
 }
 
+function validateResolvedOperationBody(scenario) {
+  try {
+    validateHostedOperationBody(scenario);
+  } catch (error) {
+    fail(`Scenario ${scenario.id} ${error instanceof Error ? error.message : 'failed operation body authority.'}`);
+  }
+}
+
 function exactTargetUrl(scenarioId, scenarioPath) {
   try {
     return exactOriginUrl(originUrl, scenarioPath);
@@ -268,6 +284,11 @@ function validateAssertionDeclarations(assertions, scenarioId, phase) {
   if (!Array.isArray(assertions) || assertions.length === 0 || assertions.length > 24) fail(`Scenario ${scenarioId} ${phase} must declare 1-24 semantic assertions.`);
   for (const assertion of assertions) {
     if (!assertion || !['json', 'header', 'text'].includes(assertion.source) || !allowedAssertionOps.has(assertion.op)) fail(`Scenario ${scenarioId} ${phase} has an invalid assertion.`);
+    if (assertion.source === 'header' && (typeof assertion.name !== 'string' || !assertion.name.trim())) fail(`Scenario ${scenarioId} ${phase} has an invalid header assertion.`);
+    if (assertion.op === 'matches') {
+      if (typeof assertion.value !== 'string' || assertion.value.length > 500) fail(`Scenario ${scenarioId} ${phase} has an invalid regex assertion.`);
+      try { new RegExp(assertion.value); } catch { fail(`Scenario ${scenarioId} ${phase} has an invalid regex assertion.`); }
+    }
   }
 }
 
@@ -279,13 +300,25 @@ function validateRequestShape(spec, scenarioId, phase) {
   const auth = spec.auth ?? 'none';
   if (!['none', 'userA', 'userB', 'admin'].includes(auth)) fail(`Scenario ${scenarioId} ${phase} has an invalid auth selector.`);
   if (auth === 'admin' && !adminToken) fail(`Scenario ${scenarioId} ${phase} requires MOCKMATE_TEST_ADMIN_TOKEN.`);
+  if (spec.headers !== undefined) fail(`Scenario ${scenarioId} ${phase} may not supply controller-owned headers.`);
   validateAssertionDeclarations(spec.assertions, scenarioId, phase);
   return { method, auth, targetUrl: exactTargetUrl(scenarioId, spec.path) };
 }
 
+function validateMultipartDeclaration(spec, scenarioId, phase) {
+  if (!spec.multipart) return;
+  const { fileEnv, fileField, filename, contentType, fields = {} } = spec.multipart;
+  if (!['RESUME_FIXTURE_PATH', 'CLEARSPEAK_FIXTURE_PATH'].includes(fileEnv) || !['resume', 'audio'].includes(fileField) || typeof filename !== 'string' || typeof contentType !== 'string') fail(`Scenario ${scenarioId} ${phase} has an invalid multipart declaration.`);
+  if (!filename || filename.length > 180 || /[\r\n"]/u.test(filename) || !contentType || contentType.length > 128 || /[\r\n]/u.test(contentType)) fail(`Scenario ${scenarioId} ${phase} has unsafe multipart metadata.`);
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) fail(`Scenario ${scenarioId} ${phase} has invalid multipart fields.`);
+  for (const [key, value] of Object.entries(fields)) {
+    if (!/^[A-Za-z0-9_.-]{1,64}$/u.test(key) || typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 4096) fail(`Scenario ${scenarioId} ${phase} has an invalid multipart field.`);
+  }
+}
+
 function prepareRequest(spec, scenarioId, phase) {
   const { method, auth, targetUrl } = validateRequestShape(spec, scenarioId, phase);
-  const headers = { Accept: 'application/json', Origin: origin };
+  const headers = { Accept: 'application/json', Origin: origin, ...operationOwnedHeaders(spec.operation) };
   if (auth !== 'none') headers.Authorization = `Bearer ${tokens[auth]}`;
   if (spec.idempotencyKey) headers['Idempotency-Key'] = spec.idempotencyKey;
   let requestBody;
@@ -294,9 +327,8 @@ function prepareRequest(spec, scenarioId, phase) {
   let multipartPartBuffers = [];
   let jsonBuffer;
   if (spec.multipart) {
+    validateMultipartDeclaration(spec, scenarioId, phase);
     const { fileEnv, fileField, filename, contentType, fields = {} } = spec.multipart;
-    if (!['RESUME_FIXTURE_PATH', 'CLEARSPEAK_FIXTURE_PATH'].includes(fileEnv) || !['resume', 'audio'].includes(fileField) || typeof filename !== 'string' || typeof contentType !== 'string') fail(`Scenario ${scenarioId} ${phase} has an invalid multipart declaration.`);
-    if (!filename || filename.length > 180 || /[\r\n"]/u.test(filename) || !contentType || contentType.length > 128 || /[\r\n]/u.test(contentType)) fail(`Scenario ${scenarioId} ${phase} has unsafe multipart metadata.`);
     const fixturePath = requireValue(fileEnv);
     const stat = fs.statSync(fixturePath);
     if (!stat.isFile() || stat.size === 0 || stat.size > MAX_UPLOAD_BYTES) fail(`Scenario ${scenarioId} ${phase} multipart fixture must be 1-${MAX_UPLOAD_BYTES} bytes.`);
@@ -309,7 +341,6 @@ function prepareRequest(spec, scenarioId, phase) {
       multipartParts.push(buffer);
     };
     for (const [key, value] of Object.entries(fields)) {
-      if (!/^[A-Za-z0-9_.-]{1,64}$/u.test(key) || typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 4096) fail(`Scenario ${scenarioId} ${phase} has an invalid multipart field.`);
       appendTextPart(`--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`);
     }
     appendTextPart(`--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`);
@@ -320,7 +351,8 @@ function prepareRequest(spec, scenarioId, phase) {
     requestBody = multipartBuffer;
   } else if (spec.body !== undefined) {
     jsonBuffer = Buffer.from(JSON.stringify(spec.body));
-    if (jsonBuffer.byteLength > MAX_RESPONSE_BYTES) fail(`Scenario ${scenarioId} ${phase} JSON body is oversized.`);
+    const jsonLimit = jsonRequestLimitForOperation(spec.operation);
+    if (jsonBuffer.byteLength > jsonLimit) fail(`Scenario ${scenarioId} ${phase} JSON body exceeds its operation-specific ${jsonLimit}-byte authority.`);
     headers['Content-Type'] = 'application/json';
     requestBody = jsonBuffer;
   }
@@ -432,6 +464,166 @@ function validateInterviewRepetitionAuthority(scenario, verificationSpec, plan) 
   if (!hasSessionAssertion || !hasVersionAssertion) fail(`Scenario ${scenario.id} verification must prove the same session advanced by exactly one version.`);
 }
 
+function validateCaptureDeclarationForPreflight(rawDeclaration, seenNames) {
+  if (!rawDeclaration || typeof rawDeclaration !== 'object' || Array.isArray(rawDeclaration)) fail('Capture declaration is invalid.');
+  const allowed = new Set(['name', 'path', 'type', 'pattern', 'maxLength']);
+  if (Object.keys(rawDeclaration).some((key) => !allowed.has(key))) fail('Capture declaration contains an unsupported field.');
+  const { name, path: pointer, type, pattern, maxLength } = rawDeclaration;
+  if (typeof name !== 'string' || !captureNamePattern.test(name) || seenNames.has(name)) fail(`Capture ${String(name)} has an invalid or duplicate name.`);
+  if (typeof pointer !== 'string' || pointer.length > 256 || (pointer !== '' && !pointer.startsWith('/'))) fail(`Capture ${name} has an invalid JSON pointer.`);
+  if (!['string', 'number', 'boolean'].includes(type)) fail(`Capture ${name} must declare an explicit scalar type for preflight authority.`);
+  if (pattern !== undefined) {
+    if (type !== 'string' || typeof pattern !== 'string' || !pattern || pattern.length > 256) fail(`Capture ${name} has an invalid pattern.`);
+    try { new RegExp(pattern); } catch { fail(`Capture ${name} has an invalid pattern.`); }
+  }
+  if (maxLength !== undefined && (type !== 'string' || !Number.isInteger(maxLength) || maxLength < 1 || maxLength > 512)) fail(`Capture ${name} has an invalid maxLength.`);
+  return { name, path: pointer, type, pattern, maxLength };
+}
+
+function syntheticCaptureValue(declaration) {
+  if (declaration.type === 'number') return 2;
+  if (declaration.type === 'boolean') return true;
+  const maxLength = declaration.maxLength ?? 512;
+  const candidates = [
+    '00000000-0000-4000-8000-000000000001',
+    'a'.repeat(64),
+    'en-GB-general-v1',
+    'sentence_reading',
+    'preflight-value',
+    'v1',
+    '1',
+  ];
+  const matcher = declaration.pattern ? new RegExp(declaration.pattern) : null;
+  const candidate = candidates.find((value) => Buffer.byteLength(value, 'utf8') <= maxLength && (!matcher || matcher.test(value)));
+  if (!candidate) fail(`Capture ${declaration.name} pattern cannot be safely projected for network-free preflight.`);
+  return candidate;
+}
+
+function resolvePreflightString(input, declarations) {
+  if (!input.includes('{{capture:')) return input;
+  const full = fullCaptureTokenPattern.exec(input);
+  if (full) {
+    const declaration = declarations.get(full[1]);
+    if (!declaration) fail(`Capture reference ${full[1]} is unknown or forward-referenced.`);
+    return syntheticCaptureValue(declaration);
+  }
+  captureTokenPattern.lastIndex = 0;
+  let malformedRemainder = input;
+  const resolved = input.replace(captureTokenPattern, (_match, name) => {
+    const declaration = declarations.get(name);
+    if (!declaration) fail(`Capture reference ${name} is unknown or forward-referenced.`);
+    const value = syntheticCaptureValue(declaration);
+    malformedRemainder = malformedRemainder.replace(`{{capture:${name}}}`, '');
+    return String(value);
+  });
+  if (malformedRemainder.includes('{{capture:')) fail('Manifest contains a malformed capture reference.');
+  if (Buffer.byteLength(resolved, 'utf8') > 8192) fail('Projected capture reference is oversized.');
+  return resolved;
+}
+
+function resolvePreflightValue(input, declarations, depth = 0, state = { nodes: 0 }) {
+  if (depth > 24) fail('Manifest capture projection is too deep.');
+  state.nodes += 1;
+  if (state.nodes > 4096) fail('Manifest capture projection is too complex.');
+  if (typeof input === 'string') return resolvePreflightString(input, declarations);
+  if (Array.isArray(input)) return input.map((value) => resolvePreflightValue(value, declarations, depth + 1, state));
+  if (input && typeof input === 'object') {
+    const output = {};
+    for (const [key, value] of Object.entries(input)) {
+      if (key.includes('{{capture:')) fail('Capture references are forbidden in object keys.');
+      output[key] = resolvePreflightValue(value, declarations, depth + 1, state);
+    }
+    return output;
+  }
+  return input;
+}
+
+function projectRequestSpecForPreflight(rawSpec, declarations, { allowCaptures = false } = {}) {
+  if (!rawSpec || typeof rawSpec !== 'object' || Array.isArray(rawSpec)) fail('Scenario request specification is invalid.');
+  if (!allowCaptures && rawSpec.captures !== undefined) fail('Capture declarations are not allowed on this request phase.');
+  const projected = resolvePreflightValue(rawSpec, declarations);
+  delete projected.captures;
+  return projected;
+}
+
+function validateProjectedJsonSize(spec, scenarioId, phase) {
+  if (spec.body === undefined) return;
+  const encoded = Buffer.from(JSON.stringify(spec.body));
+  try {
+    const limit = jsonRequestLimitForOperation(spec.operation);
+    if (encoded.byteLength > limit) fail(`Scenario ${scenarioId} ${phase} JSON body exceeds its operation-specific ${limit}-byte authority during preflight.`);
+  } finally {
+    encoded.fill(0);
+  }
+}
+
+function validateTerminalAccountOrdering() {
+  const operations = manifest.scenarios.map((scenario) => scenario.operation);
+  const requiredTail = [
+    'partial-failure.account-delete',
+    'account.delete',
+    'account.owner-aftermath',
+    'account.cross-user-aftermath',
+  ];
+  if (operations.length < requiredTail.length || JSON.stringify(operations.slice(-requiredTail.length)) !== JSON.stringify(requiredTail)) {
+    fail('Hosted manifest must keep the non-destructive account-deletion failure seam and real account deletion/aftermath as the terminal sequence.');
+  }
+}
+
+function validateManifestBeforeNetwork() {
+  const captureDeclarations = new Map();
+  const scenarioIds = new Set();
+  const operationCounts = new Map();
+
+  validateTerminalAccountOrdering();
+
+  for (const rawScenario of manifest.scenarios) {
+    if (!rawScenario || typeof rawScenario.id !== 'string' || !rawScenario.id || rawScenario.id.length > 128 || scenarioIds.has(rawScenario.id)) fail('Scenario manifest contains an invalid or duplicate scenario id.');
+    if (typeof rawScenario.family !== 'string' || typeof rawScenario.operation !== 'string' || typeof rawScenario.path !== 'string' || typeof rawScenario.method !== 'string') fail(`Scenario ${rawScenario.id} has an invalid shape.`);
+    scenarioIds.add(rawScenario.id);
+    operationCounts.set(rawScenario.operation, (operationCounts.get(rawScenario.operation) ?? 0) + 1);
+
+    const plan = executionPlan(rawScenario);
+    validateCapturePlacement(rawScenario, plan);
+
+    const scenario = projectRequestSpecForPreflight(rawScenario, captureDeclarations, { allowCaptures: true });
+    scenario.id = rawScenario.id;
+    scenario.family = rawScenario.family;
+    scenario.operation = rawScenario.operation;
+    scenario.method = rawScenario.method;
+    scenario.auth = rawScenario.auth;
+    scenario.expectedStatuses = rawScenario.expectedStatuses;
+
+    validateOperationContract(scenario);
+    validateRequestShape(scenario, scenario.id, 'request preflight');
+    validateMultipartDeclaration(scenario, scenario.id, 'request preflight');
+    validateResolvedOperationBody(scenario);
+    validateProjectedJsonSize(scenario, scenario.id, 'request preflight');
+
+    let verificationSpec;
+    if (rawScenario.verification) {
+      verificationSpec = projectRequestSpecForPreflight(rawScenario.verification, captureDeclarations, { allowCaptures: false });
+      validateRequestShape(verificationSpec, scenario.id, 'post-state verification preflight');
+      validateMultipartDeclaration(verificationSpec, scenario.id, 'post-state verification preflight');
+      validateProjectedJsonSize(verificationSpec, scenario.id, 'post-state verification preflight');
+    }
+    validateInterviewRepetitionAuthority(scenario, verificationSpec, plan);
+
+    if (rawScenario.captures !== undefined) {
+      if (!Array.isArray(rawScenario.captures) || rawScenario.captures.length === 0 || rawScenario.captures.length > 8) fail(`Scenario ${rawScenario.id} must declare 1-8 bounded captures.`);
+      if (captureDeclarations.size + rawScenario.captures.length > 64) fail('Manifest capture count exceeds the bounded authority.');
+      const pending = rawScenario.captures.map((declaration) => validateCaptureDeclarationForPreflight(declaration, new Set([...captureDeclarations.keys(), ...rawScenario.captures.filter((candidate) => candidate !== declaration).map((candidate) => candidate?.name)])));
+      const names = new Set(pending.map((declaration) => declaration.name));
+      if (names.size !== pending.length || pending.some((declaration) => captureDeclarations.has(declaration.name))) fail(`Scenario ${rawScenario.id} contains duplicate capture names.`);
+      for (const declaration of pending) captureDeclarations.set(declaration.name, declaration);
+    }
+  }
+
+  for (const operation of requiredOperations) {
+    if (operationCounts.get(operation) !== 1) fail(`Scenario manifest must contain exactly one governed operation: ${operation}.`);
+  }
+}
+
 async function requestScenario(rawScenario) {
   if (!rawScenario || typeof rawScenario.id !== 'string' || typeof rawScenario.family !== 'string' || typeof rawScenario.operation !== 'string' || typeof rawScenario.path !== 'string' || typeof rawScenario.method !== 'string') fail('Scenario manifest contains an invalid scenario shape.');
   const plan = executionPlan(rawScenario);
@@ -447,10 +639,15 @@ async function requestScenario(rawScenario) {
 
   validateOperationContract(scenario);
   validateRequestShape(scenario, scenario.id, 'request');
+  validateMultipartDeclaration(scenario, scenario.id, 'request');
+  validateResolvedOperationBody(scenario);
+  validateProjectedJsonSize(scenario, scenario.id, 'request');
   let verificationSpec;
   if (rawScenario.verification) {
     verificationSpec = resolveRequestSpec(rawScenario.verification, { allowCaptures: false });
     validateRequestShape(verificationSpec, scenario.id, 'post-state verification');
+    validateMultipartDeclaration(verificationSpec, scenario.id, 'post-state verification');
+    validateProjectedJsonSize(verificationSpec, scenario.id, 'post-state verification');
   }
   validateInterviewRepetitionAuthority(scenario, verificationSpec, plan);
 
@@ -536,6 +733,7 @@ async function preflight() {
 
 let runError;
 try {
+  validateManifestBeforeNetwork();
   await preflight();
   for (const scenario of manifest.scenarios) await requestScenario(scenario);
 } catch (error) {
