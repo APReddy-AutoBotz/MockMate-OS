@@ -157,6 +157,9 @@ jobs:
       - name: 16b. P0-8 hosted acceptance fail-closed contract
         run: npm run test:hosted-acceptance-contract
 
+      - name: 16c. P0-8 hosted capture/reference authority guard
+        run: node scripts/test-hosted-capture-authority.mjs
+
       - name: 20. Recognized full-history secret scan
         uses: gitleaks/gitleaks-action@v2
         env:
