@@ -16,7 +16,14 @@ const memoryUsage = new Map<string, { used: number; limit: number }>();
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RESERVATION_RENEW_MS = 20_000;
 const RESERVATION_WAIT_MS = 25_000;
-const RESERVATION_POLL_BASE_MS = process.env.NODE_ENV === 'test' ? 1 : 125;
+
+function reservationPollBaseMs(): number {
+  return runtimeMode() === 'test' ? 1 : 125;
+}
+
+function reservationPollMaxMs(): number {
+  return runtimeMode() === 'test' ? 2 : 750;
+}
 
 type AdaptiveReservationInput = {
   userId: string;
@@ -190,12 +197,12 @@ function attachReservationLease(res: Response, input: AdaptiveReservationInput, 
 
 async function waitForAdaptiveProviderOwner(input: AdaptiveReservationInput, first: AdaptiveReservationResult): Promise<AdaptiveReservationResult> {
   let result = first;
-  let delay = RESERVATION_POLL_BASE_MS;
+  let delay = reservationPollBaseMs();
   const deadline = Date.now() + RESERVATION_WAIT_MS;
   while (result.state === 'pending' && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, delay));
     result = await reserveAdaptiveProviderWork(input);
-    delay = Math.min(Math.ceil(delay * 1.6), process.env.NODE_ENV === 'test' ? 2 : 750);
+    delay = Math.min(Math.ceil(delay * 1.6), reservationPollMaxMs());
   }
   return result;
 }
