@@ -13,6 +13,9 @@ const captureGuard = fs.readFileSync(new URL('./test-hosted-capture-authority.mj
 const scenarioTemplate = fs.readFileSync(new URL('../config/hosted-acceptance-scenarios.example.json', import.meta.url), 'utf8');
 const runtimeConfig = fs.readFileSync(new URL('../backend/config/runtimeConfig.ts', import.meta.url), 'utf8');
 const server = fs.readFileSync(new URL('../backend/server.ts', import.meta.url), 'utf8');
+const usageService = fs.readFileSync(new URL('../backend/services/usageService.ts', import.meta.url), 'utf8');
+const sessionService = fs.readFileSync(new URL('../backend/services/sessionService.ts', import.meta.url), 'utf8');
+const quotaMigration = fs.readFileSync(new URL('../supabase/migrations/20260823060000_p0_8_interview_answer_usage_exactly_once.sql', import.meta.url), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const workflow = fs.readFileSync(new URL('../.github/workflows/production-readiness.yml', import.meta.url), 'utf8');
 const template = JSON.parse(scenarioTemplate);
@@ -177,6 +180,7 @@ assert.ok(oversizedChunk.every((byte) => byte === 0), 'oversized response chunks
 assert.equal(template.schemaVersion, 4, 'committed hosted scenario template must use captured schemaVersion 4');
 assert.ok(!scenarioTemplate.includes('__CONTROLLER_REPLACE_'), 'committed schema-v4 template must require no manual controller substitution');
 assert.match(harness, /validateManifestBeforeNetwork\(\);[\s\S]*await preflight\(\);/, 'whole-manifest authority must run before the first hosted preflight');
+assert.match(harness, /validateP0EightLifecycleOrdering\(\)/, 'P0-8 lifecycle order must fail closed before network');
 assert.match(harness, /validateResolvedOperationBody\(scenario\)/, 'whole-manifest preflight must execute strict operation body authority');
 assert.match(harness, /unknown or forward-referenced/, 'capture references must fail closed on forward or unknown authority');
 assert.match(harness, /schemaVersion === 4/, 'capture authority must be enabled only for schema-v4 manifests');
@@ -207,6 +211,21 @@ assert.match(harness, /Promise\.all/, 'parallel duplicate requests must actually
 assert.match(harness, /boundedAbandonedRequest/, 'response-loss replay must abandon the first response through bounded authority');
 assert.match(harness, /canonical responses diverged/, 'retries must compare canonical responses');
 
+// P0-8 exactly-once quota authority: replay and stale rejection must precede
+// the transactional usage increment, which must precede the business mutation.
+const replayIndex = quotaMigration.indexOf('IF FOUND THEN');
+const staleIndex = quotaMigration.indexOf("IF v_session.status <> 'active'");
+const usageIndex = quotaMigration.indexOf("consume_daily_usage_tx(p_user_id, 'interview_question', 20)");
+const insertIndex = quotaMigration.indexOf('INSERT INTO public.interview_turns');
+assert.ok(replayIndex >= 0 && staleIndex > replayIndex && usageIndex > staleIndex && insertIndex > usageIndex, 'atomic Interview quota order must be replay/stale -> one quota effect -> one turn effect');
+assert.match(quotaMigration, /FOR UPDATE/, 'adaptive session mutation must retain row serialization');
+assert.ok(!quotaMigration.includes('EXCEPTION WHEN unique_violation'), 'unexpected duplicate insertion must roll the whole transaction back instead of hiding a quota effect');
+assert.match(usageService, /req\.route\?\.path !== '\/sessions\/:sessionId\/answers'/, 'only the adaptive answer route may defer middleware quota authority');
+assert.match(usageService, /authority: 'atomic_adaptive_turn'/, 'adaptive middleware must explicitly delegate quota to the atomic RPC');
+assert.ok(sessionService.indexOf('existingTurn = session.history.find') < sessionService.indexOf("session.status !== 'active'"), 'response-loss replay must be checked before terminal session state rejection');
+assert.match(sessionService, /Daily usage limit reached/, 'atomic quota exhaustion must map back to the API');
+assert.match(sessionService, /err\.status = 429/, 'atomic quota exhaustion must preserve HTTP 429 semantics');
+
 const evidenceSlice = harness.slice(harness.indexOf('const evidence ='));
 const resultSlice = harness.slice(harness.indexOf('results.push('), harness.indexOf('async function boundedPreflight'));
 assert.ok(!/responseData|responseBody|responseText|Authorization|Bearer/.test(evidenceSlice), 'evidence construction must not persist response bodies or credentials');
@@ -220,9 +239,9 @@ assert.equal(operationSet.size, operations.length, 'committed manifest must cont
 for (const required of [
   'runtime.health', 'pwa.manifest', 'pwa.offline', 'auth.identity',
   'resume.parse', 'resume.score', 'resume.suggest',
-  'career-context.rebuild', 'career-context.state', 'career-context.update', 'career-context.delete', 'career-context.stale', 'career-context.create', 'career-context.snapshot', 'career-context.bridge', 'career-context.cross-user',
-  'clearspeak.prompt', 'clearspeak.authority', 'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.cancel', 'clearspeak.history', 'clearspeak.replay', 'clearspeak.delete',
-  'interview.create', 'interview.version', 'interview.answer', 'interview.report', 'interview.stale', 'concurrency.exactly-once', 'interview.interrupted', 'replay.response-loss',
+  'career-context.rebuild', 'career-context.state', 'career-context.update', 'career-context.delete', 'career-context.decision-state', 'career-context.decision-stale', 'career-context.stale', 'career-context.create', 'career-context.snapshot', 'career-context.bridge', 'career-context.cross-user',
+  'clearspeak.prompt', 'clearspeak.authority', 'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.replay', 'clearspeak.cancel-authority', 'clearspeak.cancel', 'clearspeak.cancel-status', 'clearspeak.cancel-submit', 'clearspeak.history', 'clearspeak.delete',
+  'interview.usage-baseline', 'interview.create', 'interview.version', 'interview.answer', 'interview.report', 'interview.stale', 'concurrency.exactly-once', 'interview.usage-after-concurrency', 'interview.interrupted', 'replay.response-loss', 'interview.usage-after-response-loss', 'interview.complete', 'interview.terminal',
   'admin.denied', 'cross-user.denied', 'partial-failure.malformed', 'partial-failure.oversized', 'partial-failure.account-delete',
   'account.delete', 'account.owner-aftermath', 'account.cross-user-aftermath',
 ]) {
@@ -247,28 +266,66 @@ assert.ok(template.scenarios.some((scenario) => scenario.multipart?.fileField ==
 const careerState = template.scenarios.find((scenario) => scenario.operation === 'career-context.state');
 assert.ok(careerState.captures?.some((capture) => capture.name === 'career.itemId'), 'Career Context state must capture a real authoritative item');
 const careerDecision = template.scenarios.find((scenario) => scenario.operation === 'career-context.delete');
-assert.ok(['confirm','reject','revoke','dispute','replace','edit'].includes(careerDecision.body.decision), 'Career Context decision must use real shared vocabulary');
-assert.notEqual(careerDecision.body.decision, 'delete', 'Career Context must not invent a delete decision');
+const careerDecisionState = template.scenarios.find((scenario) => scenario.operation === 'career-context.decision-state');
+const careerDecisionStale = template.scenarios.find((scenario) => scenario.operation === 'career-context.decision-stale');
+assert.deepEqual(careerDecision.expectedStatuses, [200], 'Career Context must prove a successful current-version decision');
+assert.equal(careerDecision.body.decision, 'revoke', 'Career Context successful decision must use real revoke vocabulary');
+assert.ok(careerDecision.assertions.some((a) => a.path === '/item/status' && a.op === 'equals' && a.value === 'revoked'), 'Career Context decision must verify persisted revoked item state');
+assert.ok(careerDecision.assertions.some((a) => a.path === '/item/source/recordId' && a.op === 'equals'), 'Career Context decision must verify item lineage');
+assert.ok(careerDecision.captures?.some((capture) => capture.name === 'career.v2'), 'successful Career Context decision must capture the advanced version');
+assert.ok(careerDecisionState.assertions.some((a) => a.path === '/state/contextVersion' && a.value === '{{capture:career.v2}}'), 'Career Context must re-read the persisted post-decision version');
+assert.deepEqual(careerDecisionStale.expectedStatuses, [409], 'stale Career Context decision must remain a distinct negative');
+assert.equal(careerDecisionStale.body.expectedContextVersion, '{{capture:career.v1}}', 'stale decision must use the prior current version');
 
 const clearPrompt = template.scenarios.find((scenario) => scenario.operation === 'clearspeak.prompt');
-assert.ok(clearPrompt.captures?.length >= 6, 'ClearSpeak prompt must capture variable server-owned selector authority');
+const clearAuthority = template.scenarios.find((scenario) => scenario.operation === 'clearspeak.authority');
 const clearCreate = template.scenarios.find((scenario) => scenario.operation === 'clearspeak.create');
 const clearReplay = template.scenarios.find((scenario) => scenario.operation === 'clearspeak.replay');
+const cancelAuthority = template.scenarios.find((scenario) => scenario.operation === 'clearspeak.cancel-authority');
+const cancel = template.scenarios.find((scenario) => scenario.operation === 'clearspeak.cancel');
+const cancelStatus = template.scenarios.find((scenario) => scenario.operation === 'clearspeak.cancel-status');
+const cancelSubmit = template.scenarios.find((scenario) => scenario.operation === 'clearspeak.cancel-submit');
+assert.ok(clearPrompt.captures?.length >= 6, 'ClearSpeak prompt must capture variable server-owned selector authority');
 assert.deepEqual(clearCreate.expectedStatuses, [201], 'first ClearSpeak commit must be 201');
 assert.deepEqual(clearReplay.expectedStatuses, [200], 'exact ClearSpeak replay must be 200');
 assert.ok(typeof clearCreate.multipart?.fields?.metadata === 'string' && clearCreate.multipart.fields.metadata.includes('{{capture:clearspeak.capability}}'), 'ClearSpeak create must be capability-bound');
 assert.ok(typeof clearReplay.multipart?.fields?.metadata === 'string' && clearReplay.multipart.fields.metadata.includes('{{capture:clearspeak.capability}}'), 'ClearSpeak replay must be capability-bound');
-for (const op of ['clearspeak.submit','clearspeak.result','clearspeak.cancel']) {
-  const scenario = template.scenarios.find((entry) => entry.operation === op);
-  assert.ok(scenario.assertions.some((a) => a.path === '/status' && ['equals','oneOf'].includes(a.op)), `${op} must assert real lifecycle status`);
-}
+assert.notEqual(cancelAuthority.body.attemptId, clearAuthority.body.attemptId, 'cancellation must use a distinct uncommitted authority');
+assert.ok(cancelAuthority.captures?.some((capture) => capture.name === 'clearspeak.cancelCapability'), 'cancellation authority must capture its own capability');
+assert.equal(cancel.body.submissionCapability, '{{capture:clearspeak.cancelCapability}}', 'pending cancellation must use the second process-local capability');
+assert.ok(cancel.assertions.some((a) => a.path === '/status' && a.op === 'equals' && a.value === 'cancelled'), 'cancel must verify cancelled status');
+assert.ok(cancelStatus.assertions.some((a) => a.path === '/status' && a.op === 'equals' && a.value === 'cancelled'), 'post-cancel read must persist cancelled status');
+assert.deepEqual(cancelSubmit.expectedStatuses, [422], 'submit after cancellation must be denied');
+assert.ok(cancelSubmit.assertions.some((a) => a.path === '/error' && a.op === 'equals' && a.value === 'submission_canceled'), 'cancelled authority reuse must prove semantic denial');
+assert.ok(cancelSubmit.multipart.fields.metadata.includes('{{capture:clearspeak.cancelCapability}}'), 'cancelled submit must reuse the cancelled capability');
 assert.ok(!/queued|processing|completed/.test(JSON.stringify(template.scenarios.filter((s) => s.family === 'clearspeak'))), 'ClearSpeak acceptance must not use stale lifecycle vocabulary');
 
 const interviewCreate = template.scenarios.find((scenario) => scenario.operation === 'interview.create');
-assert.equal(interviewCreate.body.context.interviewPlan.questionSet.length, 4, 'provider-free Interview acceptance must keep enough deterministic roots for answer/concurrency/replay');
-assert.deepEqual(template.scenarios.find((s) => s.operation === 'interview.report').expectedStatuses, [409], 'active Interview report must truthfully fail with 409');
+const interviewAnswer = template.scenarios.find((scenario) => scenario.operation === 'interview.answer');
+const interviewComplete = template.scenarios.find((scenario) => scenario.operation === 'interview.complete');
+const interviewTerminal = template.scenarios.find((scenario) => scenario.operation === 'interview.terminal');
+const interviewReport = template.scenarios.find((scenario) => scenario.operation === 'interview.report');
+const usageBaseline = template.scenarios.find((scenario) => scenario.operation === 'interview.usage-baseline');
+const usageAfterConcurrency = template.scenarios.find((scenario) => scenario.operation === 'interview.usage-after-concurrency');
+const usageAfterResponseLoss = template.scenarios.find((scenario) => scenario.operation === 'interview.usage-after-response-loss');
+assert.equal(interviewCreate.body.context.interviewPlan.questionSet.length, 4, 'provider-free Interview acceptance must keep four deterministic roots');
+for (const scenario of [interviewAnswer, concurrency, replay, interviewComplete]) {
+  assert.equal(scenario.body.answerKind, 'skipped', `${scenario.operation} must deterministically advance roots without provider scoring`);
+  assert.ok(!Object.prototype.hasOwnProperty.call(scenario.body, 'answerText'), `${scenario.operation} skipped answer must not carry answer text`);
+}
 assert.equal(replay.body.expectedSessionVersion, 3, 'response-loss replay must bind the deterministic post-concurrency version');
 assert.deepEqual(replay.canonicalPaths, ['/completedTurnId','/sessionVersion'], 'replay must compare canonical exactly-once response fields');
+assert.ok(usageBaseline.assertions.some((a) => a.path === '/usage/interview_question/used' && a.value === 0), 'hosted acceptance must start from a fresh zero Interview quota baseline');
+assert.ok(usageAfterConcurrency.assertions.some((a) => a.path === '/usage/interview_question/used' && a.value === 3), 'parallel duplicate must yield exactly one quota effect');
+assert.ok(usageAfterResponseLoss.assertions.some((a) => a.path === '/usage/interview_question/used' && a.value === 4), 'response-loss retry must yield exactly one quota effect');
+assert.equal(interviewComplete.body.questionId, 'q4', 'fourth root must be explicitly completed');
+assert.equal(interviewComplete.body.expectedSessionVersion, 4, 'fourth root must follow the response-loss third root');
+assert.ok(interviewComplete.assertions.some((a) => a.path === '/isSessionComplete' && a.value === true), 'fourth root must complete the session');
+assert.ok(interviewTerminal.assertions.some((a) => a.path === '/status' && a.value === 'awaiting_report'), 'report must be gated by terminal awaiting_report state');
+assert.deepEqual(interviewReport.expectedStatuses, [200], 'terminal Interview report must succeed');
+assert.ok(interviewReport.assertions.some((a) => a.path === '/evaluationModel' && a.value === 'mockmate_v1_canonical'), 'report must prove deterministic canonical evaluation model');
+assert.ok(interviewReport.assertions.some((a) => a.path === '/readiness/status' && a.value === 'NOT_ASSESSED'), 'provider-free report must truthfully remain NOT_ASSESSED');
+assert.ok(interviewReport.verification?.assertions?.some((a) => a.path === '/status' && a.value === 'completed'), 'report must persist completed session state');
 
 const malformed = template.scenarios.find((scenario) => scenario.operation === 'partial-failure.malformed');
 assert.equal(malformed.body.unsupportedProbeField, 'reject-me', 'malformed seam must be one intentional strict-schema violation');
@@ -293,4 +350,4 @@ const refused = spawnSync(process.execPath, [new URL('./hosted-preview-acceptanc
 assert.notEqual(refused.status, 0, 'empty configuration must be refused before any network activity');
 assert.match(`${refused.stdout}${refused.stderr}`, /HOSTED_PREVIEW_ACCEPTANCE_REFUSED/);
 
-console.log('P0-8 hosted acceptance schema-v4/origin/timeout/cleanup/semantic/replay/concurrency guard passed.');
+console.log('P0-8 hosted acceptance schema-v4/origin/timeout/cleanup/semantic/quota/lifecycle guard passed.');

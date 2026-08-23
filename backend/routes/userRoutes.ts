@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { verifyAuthToken } from '../middleware/authMiddleware';
 import * as userService from '../services/userService';
 import * as sessionService from '../services/sessionService';
+import { getUsageSummary } from '../services/usageService';
 
 const router = Router();
 
@@ -29,6 +30,19 @@ router.post('/profile', async (req: any, res) => {
     } catch (error: any) {
         console.error("Update Profile Error:", error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+// Read the authenticated user's bounded daily usage state. This is intentionally
+// owner-scoped and read-only so acceptance can prove quota effects without admin
+// authority or direct database access.
+router.get('/usage', async (req: any, res) => {
+    try {
+        const userId = req.user.uid;
+        res.json(await getUsageSummary(userId));
+    } catch (error: any) {
+        console.error("Get Usage Error:", error);
+        res.status(500).json({ error: 'Could not load usage summary' });
     }
 });
 

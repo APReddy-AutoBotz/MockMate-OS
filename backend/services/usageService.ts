@@ -48,11 +48,31 @@ export async function consumeUsage(userId: string, feature: UsageFeature): Promi
   return { allowed: Boolean(data.allowed), used: Number(data.used), limit: Number(data.limit) };
 }
 
+function isAtomicAdaptiveAnswerRequest(req: Request, feature: UsageFeature): boolean {
+  if (feature !== 'interview_question') return false;
+  if (req.route?.path !== '/sessions/:sessionId/answers') return false;
+  const body = req.body as any;
+  return Boolean(
+    body &&
+    typeof body.clientSubmissionId === 'string' &&
+    Object.prototype.hasOwnProperty.call(body, 'expectedSessionVersion')
+  );
+}
+
 export function enforceUsageLimit(feature: UsageFeature) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = (req as any).user?.uid;
       if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+      // P0-8: adaptive Interview answers own quota inside atomic_submit_adaptive_turn.
+      // Deferring here prevents middleware retries from charging before the
+      // endpoint's governed clientSubmissionId replay/stale authority is known.
+      if (isAtomicAdaptiveAnswerRequest(req, feature)) {
+        (req as any).usage = { feature, authority: 'atomic_adaptive_turn' };
+        return next();
+      }
+
       const result = await consumeUsage(userId, feature);
       if (!result.allowed) {
         return res.status(429).json({

@@ -69,21 +69,33 @@ const operationContracts = new Map(Object.entries({
   'clearspeak.create': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts$/, 'userA', 'audio'],
   'clearspeak.submit': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/status$/, 'userA', 'none'],
   'clearspeak.result': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/status$/, 'userA', 'none'],
-  'clearspeak.cancel': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/cancel$/, 'userA', 'json'],
-  'clearspeak.history': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts(?:\?.*)?$/, 'userA', 'none'],
   'clearspeak.replay': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts$/, 'userA', 'audio'],
+  'clearspeak.cancel-authority': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempt-authority$/, 'userA', 'json'],
+  'clearspeak.cancel': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/cancel$/, 'userA', 'json'],
+  'clearspeak.cancel-status': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/status$/, 'userA', 'none'],
+  'clearspeak.cancel-submit': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts$/, 'userA', 'audio'],
+  'clearspeak.history': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts(?:\?.*)?$/, 'userA', 'none'],
   'clearspeak.delete': ['DELETE', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+$/, 'userA', 'none'],
+  'interview.usage-baseline': ['GET', /^\/api\/user\/usage$/, 'userA', 'none'],
   'interview.create': ['POST', /^\/api\/interview\/sessions$/, 'userA', 'json'],
   'interview.answer': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
   'interview.report': ['POST', /^\/api\/interview\/sessions\/[^/]+\/report$/, 'userA', 'json'],
   'interview.version': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userA', 'none'],
   'interview.stale': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'concurrency.exactly-once': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'interview.usage-after-concurrency': ['GET', /^\/api\/user\/usage$/, 'userA', 'none'],
   'interview.interrupted': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userA', 'none'],
+  'replay.response-loss': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'interview.usage-after-response-loss': ['GET', /^\/api\/user\/usage$/, 'userA', 'none'],
+  'interview.complete': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'interview.terminal': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userA', 'none'],
   'career-context.rebuild': ['POST', /^\/api\/career-context\/rebuild$/, 'userA', 'none'],
   'career-context.state': ['GET', /^\/api\/career-context$/, 'userA', 'none'],
   'career-context.create': ['POST', /^\/api\/career-context\/snapshots$/, 'userA', 'json'],
   'career-context.update': ['POST', /^\/api\/career-context\/preference$/, 'userA', 'json'],
   'career-context.delete': ['POST', /^\/api\/career-context\/items\/[^/]+\/decision$/, 'userA', 'json'],
+  'career-context.decision-state': ['GET', /^\/api\/career-context$/, 'userA', 'none'],
+  'career-context.decision-stale': ['POST', /^\/api\/career-context\/items\/[^/]+\/decision$/, 'userA', 'json'],
   'career-context.snapshot': ['GET', /^\/api\/career-context\/snapshots\/[^/]+$/, 'userA', 'none'],
   'career-context.bridge': ['POST', /^\/api\/career-context\/bridges$/, 'userA', 'json'],
   'career-context.stale': ['POST', /^\/api\/career-context\/preference$/, 'userA', 'json'],
@@ -93,8 +105,6 @@ const operationContracts = new Map(Object.entries({
   'partial-failure.malformed': ['POST', /^\/api\/resume\/score$/, 'userA', 'json'],
   'partial-failure.oversized': ['POST', /^\/api\/resume\/score$/, 'userA', 'json'],
   'partial-failure.account-delete': ['DELETE', /^\/api\/me\/data$/, 'userA', 'none'],
-  'concurrency.exactly-once': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
-  'replay.response-loss': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
   'account.delete': ['DELETE', /^\/api\/me\/data$/, 'userA', 'none'],
   'account.owner-aftermath': ['GET', /^\/api\/user\/sessions$/, 'userA', 'none'],
   'account.cross-user-aftermath': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userB', 'none'],
@@ -103,11 +113,14 @@ const operationContracts = new Map(Object.entries({
 const requiredOperations = new Set([
   'runtime.health', 'pwa.manifest', 'pwa.offline', 'auth.identity',
   'resume.parse', 'resume.score', 'resume.suggest',
-  'clearspeak.prompt', 'clearspeak.authority', 'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.cancel', 'clearspeak.history', 'clearspeak.replay', 'clearspeak.delete',
-  'interview.create', 'interview.answer', 'interview.report', 'interview.version', 'interview.stale', 'interview.interrupted',
-  'career-context.rebuild', 'career-context.state', 'career-context.create', 'career-context.update', 'career-context.delete', 'career-context.snapshot', 'career-context.bridge', 'career-context.stale', 'career-context.cross-user',
+  'clearspeak.prompt', 'clearspeak.authority', 'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.replay',
+  'clearspeak.cancel-authority', 'clearspeak.cancel', 'clearspeak.cancel-status', 'clearspeak.cancel-submit', 'clearspeak.history', 'clearspeak.delete',
+  'interview.usage-baseline', 'interview.create', 'interview.answer', 'interview.report', 'interview.version', 'interview.stale',
+  'concurrency.exactly-once', 'interview.usage-after-concurrency', 'interview.interrupted', 'replay.response-loss',
+  'interview.usage-after-response-loss', 'interview.complete', 'interview.terminal',
+  'career-context.rebuild', 'career-context.state', 'career-context.create', 'career-context.update', 'career-context.delete',
+  'career-context.decision-state', 'career-context.decision-stale', 'career-context.snapshot', 'career-context.bridge', 'career-context.stale', 'career-context.cross-user',
   'admin.denied', 'cross-user.denied', 'partial-failure.malformed', 'partial-failure.oversized', 'partial-failure.account-delete',
-  'concurrency.exactly-once', 'replay.response-loss',
   'account.delete', 'account.owner-aftermath', 'account.cross-user-aftermath',
 ]);
 
@@ -115,18 +128,18 @@ const operationStatusContracts = new Map(Object.entries({
   'runtime.health': [200], 'pwa.manifest': [200], 'pwa.offline': [200], 'auth.identity': [200],
   'resume.parse': [503], 'resume.score': [200], 'resume.suggest': [503],
   'clearspeak.prompt': [200], 'clearspeak.authority': [201], 'clearspeak.create': [201], 'clearspeak.submit': [200],
-  'clearspeak.result': [200], 'clearspeak.cancel': [200], 'clearspeak.history': [200],
-  'clearspeak.replay': [200], 'clearspeak.delete': [204],
-  'interview.create': [200], 'interview.answer': [200], 'interview.report': [409],
-  'interview.version': [200], 'interview.stale': [409], 'interview.interrupted': [200],
-  'career-context.rebuild': [200], 'career-context.state': [200],
-  'career-context.create': [200], 'career-context.update': [200], 'career-context.delete': [409],
+  'clearspeak.result': [200], 'clearspeak.replay': [200], 'clearspeak.cancel-authority': [201], 'clearspeak.cancel': [200],
+  'clearspeak.cancel-status': [200], 'clearspeak.cancel-submit': [422], 'clearspeak.history': [200], 'clearspeak.delete': [204],
+  'interview.usage-baseline': [200], 'interview.create': [200], 'interview.answer': [200], 'interview.report': [200],
+  'interview.version': [200], 'interview.stale': [409], 'concurrency.exactly-once': [200],
+  'interview.usage-after-concurrency': [200], 'interview.interrupted': [200], 'replay.response-loss': [200],
+  'interview.usage-after-response-loss': [200], 'interview.complete': [200], 'interview.terminal': [200],
+  'career-context.rebuild': [200], 'career-context.state': [200], 'career-context.create': [200], 'career-context.update': [200],
+  'career-context.delete': [200], 'career-context.decision-state': [200], 'career-context.decision-stale': [409],
   'career-context.snapshot': [200], 'career-context.bridge': [200], 'career-context.stale': [409],
   'career-context.cross-user': [404], 'admin.denied': [403], 'cross-user.denied': [404],
-  'partial-failure.malformed': [400], 'partial-failure.oversized': [400],
-  'partial-failure.account-delete': [409], 'concurrency.exactly-once': [200],
-  'replay.response-loss': [200], 'account.delete': [200], 'account.owner-aftermath': [200],
-  'account.cross-user-aftermath': [404],
+  'partial-failure.malformed': [400], 'partial-failure.oversized': [400], 'partial-failure.account-delete': [409],
+  'account.delete': [200], 'account.owner-aftermath': [200], 'account.cross-user-aftermath': [404],
 }));
 
 const repetitionContracts = new Map(Object.entries({
@@ -585,12 +598,36 @@ function validateTerminalAccountOrdering() {
   }
 }
 
+function validateP0EightLifecycleOrdering() {
+  const operations = manifest.scenarios.map((scenario) => scenario.operation);
+  const requireOrdered = (ordered, label) => {
+    const indices = ordered.map((operation) => operations.indexOf(operation));
+    if (indices.some((index) => index < 0) || indices.some((index, offset) => offset > 0 && index <= indices[offset - 1])) {
+      fail(`Hosted manifest does not preserve the governed ${label} lifecycle ordering.`);
+    }
+  };
+  requireOrdered([
+    'clearspeak.prompt', 'clearspeak.authority', 'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.replay',
+    'clearspeak.cancel-authority', 'clearspeak.cancel', 'clearspeak.cancel-status', 'clearspeak.cancel-submit', 'clearspeak.history', 'clearspeak.delete',
+  ], 'ClearSpeak commit/replay and pending-cancellation');
+  requireOrdered([
+    'interview.usage-baseline', 'interview.create', 'interview.version', 'interview.answer', 'interview.stale',
+    'concurrency.exactly-once', 'interview.usage-after-concurrency', 'interview.interrupted', 'replay.response-loss',
+    'interview.usage-after-response-loss', 'interview.complete', 'interview.terminal', 'interview.report', 'cross-user.denied',
+  ], 'Interview root/quota/report');
+  requireOrdered([
+    'career-context.state', 'career-context.update', 'career-context.create', 'career-context.bridge',
+    'career-context.delete', 'career-context.decision-state', 'career-context.decision-stale',
+  ], 'Career Context current/stale decision');
+}
+
 function validateManifestBeforeNetwork() {
   const captureDeclarations = new Map();
   const scenarioIds = new Set();
   const operationCounts = new Map();
 
   validateTerminalAccountOrdering();
+  validateP0EightLifecycleOrdering();
 
   for (const rawScenario of manifest.scenarios) {
     if (!rawScenario || typeof rawScenario.id !== 'string' || !rawScenario.id || rawScenario.id.length > 128 || scenarioIds.has(rawScenario.id)) fail('Scenario manifest contains an invalid or duplicate scenario id.');

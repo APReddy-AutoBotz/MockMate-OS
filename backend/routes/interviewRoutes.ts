@@ -275,6 +275,13 @@ router.post('/sessions/:sessionId/answers', enforceUsageLimit('interview_questio
     if (error.status === 404) {
       return res.status(404).json({ error: error.message });
     }
+    if (error.status === 429) {
+      return res.status(429).json({
+        error: error.message,
+        code: error.code || 'daily_limit_reached',
+        feature: 'interview_question',
+      });
+    }
     res.status(500).json({ error: error.message || 'Could not review this answer' });
   }
 });

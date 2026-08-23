@@ -25,10 +25,14 @@ validateHostedOperationBody({ operation: 'resume.score', body: { resumeData, raw
 validateHostedOperationBody({ operation: 'resume.suggest', body: { resumeData, jdText: 'Role description' } });
 expectRefused({ operation: 'resume.suggest', body: { resumeData, rawText: 'score-only field', jdText: '' } }, 'Resume suggest must use its exact shared schema');
 
-validateHostedOperationBody({ operation: 'career-context.rebuild' });
-validateHostedOperationBody({ operation: 'career-context.state' });
-expectRefused({ operation: 'career-context.rebuild', body: {} }, 'Career Context rebuild setup must not hide request-body authority');
-expectRefused({ operation: 'career-context.state', body: {} }, 'Career Context state setup must remain a bodyless read');
+for (const operation of [
+  'career-context.rebuild', 'career-context.state', 'career-context.decision-state',
+  'interview.usage-baseline', 'interview.usage-after-concurrency', 'interview.usage-after-response-loss', 'interview.terminal',
+  'clearspeak.cancel-status',
+]) {
+  validateHostedOperationBody({ operation });
+  expectRefused({ operation, body: {} }, `${operation} must remain bodyless`);
+}
 
 validateHostedOperationBody({
   operation: 'partial-failure.malformed',
@@ -50,16 +54,17 @@ const answer = {
   questionId: 'question-1',
   expectedSessionVersion: 1,
   clientSubmissionId: '10000000-0000-4000-a000-000000000099',
-  answerKind: 'answered',
-  answerText: 'A bounded synthetic answer.',
+  answerKind: 'skipped',
 };
-for (const operation of ['interview.answer', 'interview.stale', 'concurrency.exactly-once', 'replay.response-loss']) {
+for (const operation of ['interview.answer', 'interview.complete', 'interview.stale', 'concurrency.exactly-once', 'replay.response-loss']) {
   validateHostedOperationBody({ operation, body: answer });
 }
 expectRefused({ operation: 'interview.create', body: { role: 'Developer' } }, 'Interview creation must use the strict shared context wrapper');
 
 validateHostedOperationBody({ operation: 'career-context.update', body: { personalizationEnabled: true, expectedContextVersion: 1 } });
-validateHostedOperationBody({ operation: 'career-context.delete', body: { decision: 'confirm', expectedContextVersion: 1, clientRequestId: 'qa-decision' } });
+for (const operation of ['career-context.delete', 'career-context.decision-stale']) {
+  validateHostedOperationBody({ operation, body: { decision: 'revoke', expectedContextVersion: 1, clientRequestId: 'qa-decision' } });
+}
 const itemId = '10000000-0000-4000-a000-000000000010';
 const snapshotId = '10000000-0000-4000-a000-000000000011';
 validateHostedOperationBody({
@@ -75,7 +80,7 @@ validateHostedOperationBody({
       includedItemIds: [itemId],
       excludedItemIds: [],
       sourceModules: ['manual'],
-      acknowledgedAt: '2026-08-22T00:00:00.000Z',
+      acknowledgedAt: '2026-08-23T00:00:00.000Z',
     },
     expectedContextVersion: 1,
     clientRequestId: 'qa-snapshot',
@@ -104,17 +109,19 @@ const promptSelector = {
 };
 validateHostedOperationBody({ operation: 'clearspeak.prompt', body: { profileId: 'en-GB-general-v1', profileVersion: 1, mode: 'word' } });
 expectRefused({ operation: 'clearspeak.prompt', body: { profileId: 'en-GB-general-v1', mode: 'word', scoringPolicyVersion: 'client-owned' } }, 'prompt callers must not inject server policy');
-validateHostedOperationBody({
-  operation: 'clearspeak.authority',
-  body: { attemptId: '10000000-0000-4000-a000-000000000020', ...promptSelector },
-});
+for (const operation of ['clearspeak.authority', 'clearspeak.cancel-authority']) {
+  validateHostedOperationBody({
+    operation,
+    body: { attemptId: '10000000-0000-4000-a000-000000000020', ...promptSelector },
+  });
+}
 const metadata = {
   attemptId: '10000000-0000-4000-a000-000000000020',
   durationMs: 1000,
   ...promptSelector,
   submissionCapability: 'b'.repeat(64),
 };
-for (const operation of ['clearspeak.create', 'clearspeak.replay']) {
+for (const operation of ['clearspeak.create', 'clearspeak.replay', 'clearspeak.cancel-submit']) {
   validateHostedOperationBody({ operation, multipart: { fields: { metadata: JSON.stringify(metadata) } } });
 }
 validateHostedOperationBody({ operation: 'clearspeak.cancel', body: { submissionCapability: 'b'.repeat(64) } });

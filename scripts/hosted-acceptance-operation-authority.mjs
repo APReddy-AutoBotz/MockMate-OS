@@ -131,13 +131,20 @@ export function validateHostedOperationBody(scenario) {
       schemaPass(operation, InterviewSessionStartRequestSchema, scenario.body);
       return;
     case 'interview.answer':
+    case 'interview.complete':
     case 'interview.stale':
     case 'concurrency.exactly-once':
     case 'replay.response-loss':
       schemaPass(operation, AdaptiveAnswerSubmissionRequestSchema, scenario.body);
       return;
+    case 'interview.usage-baseline':
+    case 'interview.usage-after-concurrency':
+    case 'interview.usage-after-response-loss':
+    case 'interview.terminal':
     case 'career-context.rebuild':
     case 'career-context.state':
+    case 'career-context.decision-state':
+    case 'clearspeak.cancel-status':
       requireNoBody(operation, scenario);
       return;
     case 'career-context.create':
@@ -151,6 +158,7 @@ export function validateHostedOperationBody(scenario) {
       schemaPass(operation, CareerContextPreferenceRequestSchema, scenario.body);
       return;
     case 'career-context.delete':
+    case 'career-context.decision-stale':
       schemaPass(operation, CareerContextItemDecisionRequestSchema, scenario.body);
       return;
     case 'clearspeak.prompt':
@@ -158,10 +166,12 @@ export function validateHostedOperationBody(scenario) {
       if (!profiles.has(scenario.body.profileId) || !modes.has(scenario.body.mode) || (scenario.body.profileVersion !== undefined && scenario.body.profileVersion !== 1)) refuse(operation, 'uses an unsupported server-owned profile or practice mode.');
       return;
     case 'clearspeak.authority':
+    case 'clearspeak.cancel-authority':
       validateSelector(operation, scenario.body, { requireAttempt: true });
       return;
     case 'clearspeak.create':
     case 'clearspeak.replay':
+    case 'clearspeak.cancel-submit':
       validateSelector(operation, parseMultipartMetadata(operation, scenario), { requireAttempt: true, requireDuration: true, requireCapability: true });
       return;
     case 'clearspeak.cancel':

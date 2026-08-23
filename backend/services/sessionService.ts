@@ -287,27 +287,28 @@ export const submitAdaptiveTurn = async (
     err.status = 404;
     throw err;
   }
+
+  const incomingHash = crypto.createHash('md5').update(`${sessionId}:${questionId}:${answerKind}:${normalizeAnswerText(answerText)}`).digest('hex');
+
+  // Replay must be checked before active/pending-state gates. A response can be
+  // lost after the canonical mutation has already moved a final turn into
+  // awaiting_report; the same clientSubmissionId still owns that stored result.
+  const existingTurn = session.history.find((t: any) => t.clientSubmissionId === clientSubmissionId);
+  if (existingTurn) {
+    if (existingTurn.requestHash && existingTurn.requestHash !== incomingHash) {
+      const err: any = new Error('Conflict: client_submission_id reuse with mismatched payload');
+      err.status = 409;
+      throw err;
+    }
+    if (existingTurn.adaptiveResponse) {
+      return AdaptiveAnswerSubmissionResponseSchema.parse(existingTurn.adaptiveResponse);
+    }
+  }
+
   if (session.status !== 'active') {
     const err: any = new Error('Session is not active');
     err.status = 409;
     throw err;
-  }
-
-  const incomingHash = crypto.createHash('md5').update(`${sessionId}:${questionId}:${answerKind}:${normalizeAnswerText(answerText)}`).digest('hex');
-
-  // Idempotency check for local in-memory fallback
-  if (!supabaseAdmin) {
-    const existingTurn = session.history.find((t: any) => t.clientSubmissionId === clientSubmissionId);
-    if (existingTurn) {
-      if (existingTurn.requestHash && existingTurn.requestHash !== incomingHash) {
-        const err: any = new Error('Conflict: client_submission_id reuse with mismatched payload');
-        err.status = 409;
-        throw err;
-      }
-      if (existingTurn.adaptiveResponse) {
-        return existingTurn.adaptiveResponse;
-      }
-    }
   }
 
   if (
@@ -514,7 +515,8 @@ export const submitAdaptiveTurn = async (
     return responsePayload;
   }
 
-  // 8. Invoke atomic_submit_adaptive_turn RPC in Supabase
+  // 8. Invoke atomic_submit_adaptive_turn RPC in Supabase. The P0-8 RPC owns
+  // the interview_question quota increment in the same DB transaction.
   const { data, error } = await supabaseAdmin.rpc('atomic_submit_adaptive_turn', {
     p_session_id: sessionId,
     p_user_id: userId,
@@ -553,6 +555,12 @@ export const submitAdaptiveTurn = async (
     if (error.message.includes('Stale or mismatched')) {
       const err: any = new Error(`Stale or mismatched question submission (expected question: '${session.pendingQuestionId}', got: '${questionId}')`);
       err.status = 409;
+      throw err;
+    }
+    if (error.message.includes('Daily usage limit reached')) {
+      const err: any = new Error("You have used today's free practice. Come back tomorrow or continue with saved work.");
+      err.status = 429;
+      err.code = 'daily_limit_reached';
       throw err;
     }
     const err: any = new Error(`Atomic adaptive submit failed: ${error.message}`);
