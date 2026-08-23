@@ -162,7 +162,8 @@ assertMatch(/evidenceBasis:\s*CLEAR_SPEAK_SCORE_EVIDENCE_BASIS[\s\S]*pronunciati
 assertMatch(/score_evidence_basis='transcript_timing_heuristic'[\s\S]*jsonb_array_length\(v_trend\)>=3/, 'supabase/migrations/20260823101541_p0_8_clearspeak_score_provenance.sql', 'verified three-observation grounded bridge authority');
 assertMatch(/userHasClearSpeakBetaAccess[\s\S]*feature_not_available/, 'backend/clearspeak/routes.ts', 'server-enforced ClearSpeak beta gate');
 assertNoMatch(/NODE_ENV\s*===\s*['"]test['"]/, 'backend/clearspeak/routes.ts', 'environment-based ClearSpeak beta authorization bypass');
-assertMatch(/bindLocalPracticeDataOwner[\s\S]*clearLocalDataAfterConfirmedSignOut/, 'App.tsx', 'owner-bound local data and confirmed sign-out cleanup');
+assertMatch(/bindLocalPracticeDataOwner\(userId\)[\s\S]*readLocalUserProfile\(\)/, 'App.tsx', 'owner binding must precede all restored local profile reads');
+assertMatch(/const handleLogout[\s\S]*await signOutPreservingLocalPracticeData[\s\S]*clearSensitiveReactState\(\)[\s\S]*setAppState\('LANDING'\)/, 'App.tsx', 'confirmed sign-out must preserve owner-bound local data while clearing in-memory state');
 assertMatch(/readActiveInterviewReference[\s\S]*getInterviewSession[\s\S]*setRestoredInterview/, 'App.tsx', 'bounded authoritative interview refresh recovery');
 assertNoMatch(/cdn\.tailwindcss\.com/, 'index.html', 'runtime Tailwind CDN dependency');
 assertMatch(/manifest\.webmanifest/, 'index.html', 'active governed PWA manifest link');
