@@ -14,7 +14,7 @@ const mockFrom = jest.fn(() => {
 jest.mock('../supabaseAdmin', () => ({
   supabaseAdmin: {
     rpc: (...args: any[]) => mockRpc(...args),
-    from: (...args: any[]) => mockFrom(...args),
+    from: () => mockFrom(),
   },
 }));
 
