@@ -15,7 +15,6 @@ const friendlyLimitMessage = "You have used today's free practice. Come back tom
 const memoryUsage = new Map<string, { used: number; limit: number }>();
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RESERVATION_RENEW_MS = 20_000;
-const RESERVATION_MAX_RENEW_MS = 120_000;
 const RESERVATION_WAIT_MS = 25_000;
 const RESERVATION_POLL_BASE_MS = process.env.NODE_ENV === 'test' ? 1 : 125;
 
@@ -168,25 +167,23 @@ function attachReservationLease(res: Response, input: AdaptiveReservationInput, 
     }
   };
 
+  // Keep ownership alive for the entire provider/response lifetime. If this
+  // process crashes or the request is abandoned, renewals stop naturally and
+  // the 90-second DB lease becomes the bounded recovery authority.
   const renewTimer = setInterval(() => { void renew(); }, RESERVATION_RENEW_MS);
   renewTimer.unref?.();
-  const maxTimer = setTimeout(() => {
-    stopped = true;
-    clearInterval(renewTimer);
-  }, RESERVATION_MAX_RENEW_MS);
-  maxTimer.unref?.();
 
   const finish = () => {
     if (stopped) return;
     stopped = true;
     clearInterval(renewTimer);
-    clearTimeout(maxTimer);
     if (res.statusCode >= 400) void releaseAdaptiveProviderWork(input, requestHash);
   };
   res.once('finish', finish);
   res.once('close', () => {
     // Do not release on an early client disconnect: provider work may still be
-    // running. The bounded renewable lease owns crash/disconnect recovery.
+    // running. The renewable lease prevents a retry from becoming a second
+    // provider owner; crash recovery remains bounded by the DB lease.
     if (res.writableEnded) finish();
   });
 }
