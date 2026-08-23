@@ -50,13 +50,14 @@ export async function consumeUsage(userId: string, feature: UsageFeature): Promi
 
 function isAtomicAdaptiveAnswerRequest(req: Request, feature: UsageFeature): boolean {
   if (feature !== 'interview_question') return false;
+  // The atomic quota authority exists only when the DB authority exists. Local
+  // development/test fallbacks keep their existing middleware-owned quota path.
+  if (!supabaseAdmin) return false;
   if (req.route?.path !== '/sessions/:sessionId/answers') return false;
-  const body = req.body as any;
-  return Boolean(
-    body &&
-    typeof body.clientSubmissionId === 'string' &&
-    Object.prototype.hasOwnProperty.call(body, 'expectedSessionVersion')
-  );
+  // Both legacy v1 and adaptive v2 answer payloads ultimately flow through
+  // submitAdaptiveTurn -> atomic_submit_adaptive_turn. Do not inspect body shape
+  // here or a legacy request would be charged once by middleware and again by RPC.
+  return true;
 }
 
 export function enforceUsageLimit(feature: UsageFeature) {
@@ -65,9 +66,9 @@ export function enforceUsageLimit(feature: UsageFeature) {
       const userId = (req as any).user?.uid;
       if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-      // P0-8: adaptive Interview answers own quota inside atomic_submit_adaptive_turn.
-      // Deferring here prevents middleware retries from charging before the
-      // endpoint's governed clientSubmissionId replay/stale authority is known.
+      // P0-8: persisted Interview answers own quota inside atomic_submit_adaptive_turn.
+      // Deferring every DB-backed answer request prevents middleware retries or
+      // legacy request shapes from charging before the governed transaction.
       if (isAtomicAdaptiveAnswerRequest(req, feature)) {
         (req as any).usage = { feature, authority: 'atomic_adaptive_turn' };
         return next();
