@@ -153,4 +153,19 @@ assertMatch(/await rebuildCareerContext\(\)[\s\S]*await fetchContext\(\)/, 'comp
 assertMatch(/s\.status === 'completed'[\s\S]*FinalReportSchema\.safeParse\(s\.report_summary\)/, 'backend/routes/careerContextRoutes.ts', 'Interview rebuild reads only valid completed persisted report summaries');
 assertNoMatch(/s\.final_report/, 'backend/routes/careerContextRoutes.ts', 'Interview rebuild must not read the nonexistent final_report field');
 
+// P0-8 hosted-preview truthfulness, privacy, access, and restoration guards.
+assertNoMatch(/using MOCK scoring|clarity:\s*88[\s\S]*pacing:\s*90[\s\S]*rhythm:\s*85/, 'backend/clearspeak/scoringService.ts', 'fabricated ClearSpeak provider fallback');
+assertMatch(/ClearSpeakScoringUnavailableError[\s\S]*finally[\s\S]*audioBuffer\.fill\(0\)/, 'backend/clearspeak/scoringService.ts', 'ClearSpeak unavailable failure and all-path audio zeroing');
+assertMatch(/isClearSpeakScoringAvailable\(\)[\s\S]*consumeUsage\(userId, 'clearspeak_session'\)/, 'backend/clearspeak/routes.ts', 'ClearSpeak capability rejection before quota consumption');
+assertMatch(/ClearSpeakSessionContentSchema\.safeParse\(submittedContent\)[\s\S]*consumeUsage\(userId, 'clearspeak_session'\)/, 'backend/clearspeak/routes.ts', 'ClearSpeak request validation before quota consumption');
+assertMatch(/evidenceBasis:\s*CLEAR_SPEAK_SCORE_EVIDENCE_BASIS[\s\S]*pronunciationAssessed:\s*false/, 'backend/clearspeak/scoringService.ts', 'truthful ClearSpeak score provenance');
+assertMatch(/score_evidence_basis='transcript_timing_heuristic'[\s\S]*jsonb_array_length\(v_trend\)>=3/, 'supabase/migrations/20260823101541_p0_8_clearspeak_score_provenance.sql', 'verified three-observation grounded bridge authority');
+assertMatch(/userHasClearSpeakBetaAccess[\s\S]*feature_not_available/, 'backend/clearspeak/routes.ts', 'server-enforced ClearSpeak beta gate');
+assertNoMatch(/NODE_ENV\s*===\s*['"]test['"]/, 'backend/clearspeak/routes.ts', 'environment-based ClearSpeak beta authorization bypass');
+assertMatch(/bindLocalPracticeDataOwner[\s\S]*clearLocalDataAfterConfirmedSignOut/, 'App.tsx', 'owner-bound local data and confirmed sign-out cleanup');
+assertMatch(/readActiveInterviewReference[\s\S]*getInterviewSession[\s\S]*setRestoredInterview/, 'App.tsx', 'bounded authoritative interview refresh recovery');
+assertNoMatch(/cdn\.tailwindcss\.com/, 'index.html', 'runtime Tailwind CDN dependency');
+assertMatch(/manifest\.webmanifest/, 'index.html', 'active governed PWA manifest link');
+assertMatch(/PWA precache must include the app-shell index\.html[\s\S]*compiled CSS asset/, 'scripts/test-pwa-build.mjs', 'PWA app-shell build rejection guard');
+
 console.log('[Rejection Checks] PASSED: mandatory architecture and P0-3 authority/atomicity guards passed.');

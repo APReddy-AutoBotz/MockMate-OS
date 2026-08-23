@@ -205,9 +205,15 @@ describe('Shared Canonical Runtime Contracts', () => {
       hardWordBonus: 5,
       feedbackTip: 'Good pacing',
       measuredWpm: 140,
-      retrySuccess: true
+      retrySuccess: true,
+      evidenceBasis: 'transcript_timing_heuristic',
+      pronunciationAssessed: false,
     };
     expect(ClearSpeakSessionScoreSchema.safeParse(score).success).toBe(true);
+    expect(ClearSpeakSessionScoreSchema.safeParse({
+      ...score,
+      evidenceBasis: undefined,
+    }).success).toBe(false);
   });
 
   it('validates TranscribeAudioResponseSchema discriminated union for valid and invalid combinations', () => {

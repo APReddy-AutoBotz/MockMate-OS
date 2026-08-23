@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 
 const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const sharedBuild = spawnSync(npmExecutable, ['run', 'shared:build', '--silent'], { stdio: 'inherit' });
+const sharedBuild = spawnSync(npmExecutable, ['run', 'shared:build', '--silent'], {
+  stdio: 'inherit',
+  shell: process.platform === 'win32',
+});
 assert.equal(sharedBuild.status, 0, 'shared artifacts must build before hosted operation-authority assertions');
 
 const {

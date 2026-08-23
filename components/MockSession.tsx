@@ -8,6 +8,7 @@ import {
   ChallengeEvent,
   InterviewStage,
   QuestionKind,
+  InterviewSessionResume,
 } from 'mockmate-shared';
 import {
   startInterviewSession,
@@ -27,6 +28,8 @@ interface MockSessionProps {
   sessionContext: InterviewSessionContext;
   onReportGenerated: (report: FinalReport) => void;
   onCancel: () => void;
+  restoredSession?: InterviewSessionResume | null;
+  onSessionStarted?: (sessionId: string) => void;
 }
 
 type SessionPhase =
@@ -38,7 +41,13 @@ type SessionPhase =
   | 'confirm_skip'
   | 'generating_report';
 
-const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGenerated, onCancel }) => {
+const MockSession: React.FC<MockSessionProps> = ({
+  sessionContext,
+  onReportGenerated,
+  onCancel,
+  restoredSession,
+  onSessionStarted,
+}) => {
   const [sessionPhase, setSessionPhase] = useState<SessionPhase>('loading_question');
   const [sessionId, setSessionId] = useState<string>('');
   const [openingMessage, setOpeningMessage] = useState<string>('');
@@ -71,11 +80,54 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
   const reasoningMode = sessionContext.controls?.reasoningMode || 'classic_behavioral';
 
   useEffect(() => {
+    const hasUnsavedDraft = Boolean(lastTranscript.trim() || codeValue.trim());
+    if (!hasUnsavedDraft || !['asking', 'reviewing', 'confirm_skip'].includes(sessionPhase)) return;
+    const protectDraft = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', protectDraft);
+    return () => window.removeEventListener('beforeunload', protectDraft);
+  }, [codeValue, lastTranscript, sessionPhase]);
+
+  useEffect(() => {
     const startSession = async () => {
       setSessionPhase('loading_question');
       try {
+        if (restoredSession) {
+          setSessionId(restoredSession.id);
+          setSessionVersion(restoredSession.sessionVersion);
+          setRootQuestionIndex(restoredSession.currentQuestionIndex);
+          setRootQuestionCount(restoredSession.context.interviewPlan.questionSet.length);
+          setTurnIndex(restoredSession.currentTurnIndex);
+          setMaxTurns(restoredSession.adaptivePolicy.maxTurns);
+          setCurrentStage(restoredSession.currentStage);
+          setOpeningMessage('Your active MockMate interview was restored from the server.');
+
+          if (restoredSession.status === 'awaiting_report') {
+            setSessionPhase('generating_report');
+            const report = await generateFinalReport(restoredSession.id);
+            onReportGenerated(report);
+            return;
+          }
+
+          if (restoredSession.status !== 'active' || !restoredSession.pendingQuestion) {
+            throw new Error('The saved interview is no longer resumable.');
+          }
+
+          setCurrentQuestion(restoredSession.pendingQuestion);
+          setCurrentPersonaId(
+            restoredSession.pendingQuestion.personaFocus ||
+            restoredSession.context.selectedPanelIDs?.[0] ||
+            'p1'
+          );
+          setSessionPhase('asking');
+          return;
+        }
+
         const data = await startInterviewSession(sessionContext);
         setSessionId(data.sessionId);
+        onSessionStarted?.(data.sessionId);
         setOpeningMessage(data.openingMessage);
         setCurrentQuestion(data.firstQuestion);
         setRootQuestionIndex(data.questionIndex);
@@ -96,7 +148,7 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
       }
     };
     startSession();
-  }, [sessionContext]);
+  }, [sessionContext, restoredSession]);
 
   const handleAnswerSubmit = async (transcript: string) => {
     if (!transcript || transcript.trim() === '') {

@@ -14,7 +14,7 @@ import AppContainer from './components/AppContainer';
 import SplashScreen from './components/SplashScreen';
 import SimplifiedReport from './components/SimplifiedReport';
 import InterviewOrbit from './components/InterviewOrbit';
-import { FinalReport, InterviewSessionContext as SessionContext, SessionControls, InterviewSetupDraft, ResumeData, createBlankInterviewSetupDraft, createResumeGroundedInterviewDraft, createClearSpeakGroundedInterviewDraft } from "mockmate-shared";
+import { FinalReport, InterviewSessionContext as SessionContext, InterviewSessionResume, SessionControls, InterviewSetupDraft, ResumeData, createBlankInterviewSetupDraft, createResumeGroundedInterviewDraft, createClearSpeakGroundedInterviewDraft } from "mockmate-shared";
 import { createUngroundedResumeInterviewDraft } from './services/interviewSetupService';
 import { Logo } from './components/icons/Logo';
 import LandingPage from './components/LandingPage';
@@ -35,6 +35,9 @@ import { saveSessionToHistory } from './services/storageService';
 import { audioService } from './services/audioService';
 import { auth, signOut } from './services/supabaseClient';
 import { clearLocalPracticeData, deleteMyData } from './services/accountService';
+import { bindLocalPracticeDataOwner, clearLocalDataAfterConfirmedSignOut, deleteAppDataThenAttemptSignOut, readLocalUserProfile } from './services/sessionIsolation';
+import { clearActiveInterviewReference, readActiveInterviewReference, saveActiveInterviewReference } from './services/activeInterviewRecovery';
+import { getInterviewSession } from './services/mockGeminiService';
 
 // Lazy load heavy components
 const LazyGrowthDashboard = React.lazy(() => import('./components/GrowthDashboard'));
@@ -57,9 +60,11 @@ const App: React.FC = () => {
     const [appState, setAppState] = useState<AppState>('SPLASH');
     const [showSplash, setShowSplash] = useState(true);
     const [sessionContext, setSessionContext] = useState<SessionContext | null>(null);
+    const [restoredInterview, setRestoredInterview] = useState<InterviewSessionResume | null>(null);
     const [finalReport, setFinalReport] = useState<FinalReport | null>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [betaEnabled, setBetaEnabled] = useState(false);
+    const [authActionError, setAuthActionError] = useState('');
     const [pendingGroundingLaunch, setPendingGroundingLaunch] = useState<{
         purpose: GroundingPurpose;
         sourceModules: CareerContextModule[];
@@ -75,29 +80,84 @@ const App: React.FC = () => {
 
     useEffect(() => {
         // Use the auth listener to determine starting state
-        const unsubscribe = auth.onAuthStateChanged((user: any) => {
+        let active = true;
+        let authEpoch = 0;
+        const unsubscribe = auth.onAuthStateChanged(async (user: any) => {
+            const epoch = ++authEpoch;
             if (user) {
+                const userId = String(user.id || user.uid || '');
+                // Legacy web storage was not user-scoped. Fail closed on the
+                // first upgraded login and whenever the authenticated owner
+                // changes, then bind all new local data to this identity.
+                if (!userId) {
+                    clearLocalPracticeData();
+                    setBetaEnabled(false);
+                    setAuthActionError('Your signed-in identity could not be verified. Please sign in again.');
+                    setAppState('LANDING');
+                    return;
+                }
+                bindLocalPracticeDataOwner(userId);
+                setAuthActionError('');
+
+                const enabled = await checkBetaAccess();
+                if (!active || epoch !== authEpoch) return;
+                setBetaEnabled(enabled);
                 const requestedAction = new URLSearchParams(window.location.search).get('action');
-                const storedProfile = localStorage.getItem('mockmate_user_profile');
+                const storedProfile = readLocalUserProfile();
                 if (storedProfile) {
-                    setUserProfile(JSON.parse(storedProfile));
+                    setUserProfile(storedProfile);
+                    if (!requestedAction) {
+                        const activeReference = readActiveInterviewReference();
+                        if (activeReference) {
+                            try {
+                                const recovered = await getInterviewSession(activeReference.sessionId);
+                                if (!active || epoch !== authEpoch) return;
+                                setSessionContext(recovered.context);
+                                if (recovered.status === 'completed' && recovered.report) {
+                                    clearActiveInterviewReference();
+                                    setRestoredInterview(null);
+                                    setFinalReport(recovered.report);
+                                    setAppState('REPORT_VIEW');
+                                    return;
+                                }
+                                if (recovered.status === 'active' && !recovered.pendingQuestion) {
+                                    clearActiveInterviewReference();
+                                    setAuthActionError('The saved interview no longer has a question to resume. Start a new interview when you are ready.');
+                                } else if (recovered.status === 'active' || recovered.status === 'awaiting_report') {
+                                    setRestoredInterview(recovered);
+                                    setAppState('SESSION_ACTIVE');
+                                    return;
+                                } else if (recovered.status === 'completed') {
+                                    clearActiveInterviewReference();
+                                    setAuthActionError('The saved interview is complete, but its report could not be restored. Start a new interview or check your practice journal.');
+                                }
+                                clearActiveInterviewReference();
+                            } catch (error: any) {
+                                if (error?.status === 404 || error?.status === 422) clearActiveInterviewReference();
+                                else setAuthActionError('Your active interview could not be restored yet. Check your connection and reload to retry.');
+                            }
+                        }
+                    }
                     if (requestedAction === 'interview') setAppState('ROLE_SELECTION');
-                    else if (requestedAction === 'speaking') setAppState('CLEARSPEAK');
+                    else if (requestedAction === 'speaking' && enabled) setAppState('CLEARSPEAK');
                     else if (requestedAction === 'resume') setAppState('RESUME_BUILDER');
                     else setAppState('HUB');
                 } else {
                     // Logged in but no profile -> Go to onboarding
-                    setUserProfile({ name: user.displayName || user.email.split('@')[0], experienceLevel: 'mid', primaryGoal: 'skill_building' });
+                    setUserProfile({
+                      name: user.displayName || user.user_metadata?.full_name || user.email?.split('@')[0] || 'Candidate',
+                      experienceLevel: 'mid',
+                      primaryGoal: 'skill_building',
+                    });
                     setAppState('ONBOARDING');
                 }
-                // Check ClearSpeak beta access. Fire-and-forget; UI stays hidden until confirmed.
-                checkBetaAccess().then(setBetaEnabled).catch(() => setBetaEnabled(false));
             } else {
+                if (!active || epoch !== authEpoch) return;
                 setAppState('LANDING');
                 setBetaEnabled(false);
             }
         });
-        return () => unsubscribe();
+        return () => { active = false; unsubscribe(); };
     }, []);
 
     const handleSplashComplete = () => {
@@ -136,31 +196,50 @@ const App: React.FC = () => {
     };
 
     const handleLogout = async () => {
+        setAuthActionError('');
         try {
-            await signOut(auth);
-            localStorage.removeItem('mockmate_user_profile');
+            await clearLocalDataAfterConfirmedSignOut(() => signOut(auth));
         } catch (error) {
             console.error("Failed to logout", error);
+            setAuthActionError('Sign out did not finish. You are still signed in; check your connection and retry.');
+            return;
         }
         setUserProfile(null);
         setAppState('LANDING');
         setSessionContext(null);
+        setRestoredInterview(null);
         setFinalReport(null);
+        setClearSpeakGrounding(null);
+        setBetaEnabled(false);
     };
 
-    const handleDeleteData = async () => {
-        await deleteMyData();
-        await signOut(auth);
+    const handleDeleteData = async (): Promise<{ cleanupWarning?: string }> => {
+        const outcome = await deleteAppDataThenAttemptSignOut(
+            () => deleteMyData(),
+            () => signOut(auth),
+        );
         setUserProfile(null);
         setSessionContext(null);
+        setRestoredInterview(null);
         setFinalReport(null);
-        setAppState('LANDING');
+        setClearSpeakGrounding(null);
+        if (outcome.signedOut) {
+            setAppState('LANDING');
+            setBetaEnabled(false);
+            return {};
+        }
+        const cleanupWarning = 'Your MockMate app data was deleted, but sign out did not finish. You are still signed in; retry Sign out.';
+        setAuthActionError(cleanupWarning);
+        setAppState('HUB');
+        return { cleanupWarning };
     };
 
     const [setupDraft, setSetupDraft] = useState<InterviewSetupDraft | null>(null);
 
     const handleRoleSubmit = (intent: string, sessionType: 'structured' | 'conversational') => {
         audioService.playConfirm();
+        clearActiveInterviewReference();
+        setRestoredInterview(null);
         const draft = createBlankInterviewSetupDraft(intent, intent, sessionType);
         setSetupDraft(draft);
         setAppState('CONTEXT_UPLOAD');
@@ -168,12 +247,15 @@ const App: React.FC = () => {
 
     const handleContextReady = (context: SessionContext) => {
         audioService.playStart();
+        setRestoredInterview(null);
         setSessionContext(context);
         setAppState('SESSION_ACTIVE');
     }
 
     const handleReportGenerated = (report: FinalReport) => {
         audioService.playNotify();
+        clearActiveInterviewReference();
+        setRestoredInterview(null);
         if (sessionContext) {
             saveSessionToHistory(report, sessionContext.candidateRole, sessionContext.sessionType);
         }
@@ -220,6 +302,7 @@ const App: React.FC = () => {
     }
 
     const toggleClearSpeak = () => {
+        if (!betaEnabled) return;
         audioService.playConfirm();
         if (appState === 'CLEARSPEAK') {
             setAppState('HUB');
@@ -240,7 +323,7 @@ const App: React.FC = () => {
     const handleHubNavigate = (module: 'RESUME' | 'SPEAK' | 'INTERVIEW') => {
         audioService.playConfirm();
         if (module === 'RESUME') setAppState('RESUME_BUILDER');
-        if (module === 'SPEAK') setAppState('CLEARSPEAK');
+        if (module === 'SPEAK' && betaEnabled) setAppState('CLEARSPEAK');
         if (module === 'INTERVIEW') setAppState('ROLE_SELECTION');
     };
 
@@ -344,6 +427,10 @@ const App: React.FC = () => {
     };
 
     const handleResumeSpeakBridge = (summary: string) => {
+        if (!betaEnabled) {
+            setAppState('HUB');
+            return;
+        }
         triggerGroundedLaunch(
             'resume_to_clearspeak',
             ['resume'],
@@ -417,7 +504,7 @@ const App: React.FC = () => {
             return;
         }
         if (tabId === 'speak') {
-            setAppState('CLEARSPEAK');
+            if (betaEnabled) setAppState('CLEARSPEAK');
             return;
         }
         if (tabId === 'interview') {
@@ -543,6 +630,11 @@ const App: React.FC = () => {
                             <ErrorBoundary>
                                 <LazyMockSession
                                     sessionContext={sessionContext!}
+                                    restoredSession={restoredInterview}
+                                    onSessionStarted={(sessionId) => {
+                                        saveActiveInterviewReference(sessionId);
+                                        setRestoredInterview(null);
+                                    }}
                                     onReportGenerated={handleReportGenerated}
                                     onCancel={handleCancelSession}
                                 />
@@ -573,6 +665,15 @@ const App: React.FC = () => {
                     </motion.div>
                 );
             case 'CLEARSPEAK':
+                if (!betaEnabled) {
+                    return (
+                        <div className="mx-auto flex min-h-[45dvh] max-w-lg flex-col items-center justify-center gap-5 text-center">
+                            <h1 className="text-3xl font-semibold text-white">Speaking coach is not enabled</h1>
+                            <p className="text-brand-tint">This controlled beta is available only to approved tester accounts.</p>
+                            <button type="button" onClick={() => setAppState('HUB')} className="rounded-xl bg-brand-primary px-6 py-3 font-bold text-brand-dark">Back to practice home</button>
+                        </div>
+                    );
+                }
                 return (
                     <motion.div key="clearspeak" {...pageAnimation} className="w-full max-w-2xl px-0 sm:px-4">
                         <ErrorBoundary>
@@ -631,24 +732,26 @@ const App: React.FC = () => {
                         <>
                             {showAppHeader && (
                                 <motion.header {...headerAnimation} className="fixed left-0 top-0 z-40 flex w-full items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] sm:px-8 lg:px-12 lg:pb-0 lg:pt-10 pointer-events-none">
-                                    <div onClick={handleRestart} className="cursor-pointer transition-transform hover:scale-[1.02] pointer-events-auto">
+                                    <button type="button" onClick={handleRestart} aria-label="Go to practice home" className="cursor-pointer transition-transform hover:scale-[1.02] pointer-events-auto">
                                         <Logo className="h-10 w-auto sm:h-12 lg:h-16" />
-                                    </div>
+                                    </button>
                                     <div className="hidden items-center gap-8 pointer-events-auto lg:flex">
                                         {/* Nav links hidden on HUB — the cards themselves are the navigation */}
                                         {appState !== 'HUB' && (
                                             <>
-                                                <button
-                                                    id="nav-speak"
-                                                    onClick={toggleClearSpeak}
-                                                    className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
-                                                        appState === 'CLEARSPEAK'
-                                                            ? 'text-brand-primary'
-                                                            : 'text-white/50 hover:text-white'
-                                                    }`}
-                                                >
-                                                    Speak
-                                                </button>
+                                                {betaEnabled && (
+                                                    <button
+                                                        id="nav-speak"
+                                                        onClick={toggleClearSpeak}
+                                                        className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
+                                                            appState === 'CLEARSPEAK'
+                                                                ? 'text-brand-primary'
+                                                                : 'text-white/70 hover:text-white'
+                                                        }`}
+                                                    >
+                                                        Speak
+                                                    </button>
+                                                )}
                                                 <button
                                                     onClick={toggleResumeBuilder}
                                                     className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
@@ -693,10 +796,15 @@ const App: React.FC = () => {
                                     {renderPageContent()}
                                 </AnimatePresence>
                             </main>
+                            {authActionError && (
+                                <div role="alert" className="fixed left-1/2 top-24 z-[80] w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 rounded-xl border border-amber-300/30 bg-brand-dark px-5 py-4 text-sm text-amber-100 shadow-2xl">
+                                    {authActionError}
+                                </div>
+                            )}
                             {showMobileTabs && (
                                 <nav className="fixed bottom-0 left-0 z-40 w-full border-t border-white/10 bg-brand-dark/95 px-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-2 shadow-[0_-20px_50px_rgba(0,0,0,0.4)] backdrop-blur-2xl lg:hidden" aria-label="Primary">
-                                    <div className="mx-auto grid max-w-md grid-cols-5 gap-1">
-                                        {MOBILE_TABS.map((tab) => {
+                                    <div className={`mx-auto grid max-w-md gap-1 ${betaEnabled ? 'grid-cols-5' : 'grid-cols-4'}`}>
+                                        {MOBILE_TABS.filter(tab => betaEnabled || tab.id !== 'speak').map((tab) => {
                                             const Icon = tab.icon;
                                             const isActive = activeMobileTab === tab.id;
                                             return (
@@ -734,7 +842,7 @@ const App: React.FC = () => {
                                     onClose={() => setPendingGroundingLaunch(null)}
                                 />
                             )}
-                            <SystemStatus />
+                            <SystemStatus avoidMobileTabs={showMobileTabs} />
                         </>
                     )}
                 </div>

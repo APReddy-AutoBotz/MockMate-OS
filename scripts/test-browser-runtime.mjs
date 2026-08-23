@@ -247,7 +247,44 @@ try {
     throw new Error(`Detected direct root call missing /api prefix: ${JSON.stringify(rootLevelDirectCalls)}`);
   }
 
-  console.log('[Browser Runtime Test] 10. Verifying loopback HTTP fails closed in production-like modes...');
+  console.log('[Browser Runtime Test] 10. Verifying the installed app shell restores offline...');
+  await page.evaluate(async () => {
+    if (!('serviceWorker' in navigator)) throw new Error('Service workers are unavailable');
+    await navigator.serviceWorker.ready;
+  });
+  if (!await page.evaluate(() => Boolean(navigator.serviceWorker.controller))) {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
+  }
+
+  const cachedUrls = await page.evaluate(async () => {
+    const names = await caches.keys();
+    const urls = [];
+    for (const name of names) {
+      const cache = await caches.open(name);
+      urls.push(...(await cache.keys()).map(request => new URL(request.url).pathname));
+    }
+    return urls;
+  });
+  if (!cachedUrls.includes('/index.html')) throw new Error('Offline cache is missing /index.html');
+  if (!cachedUrls.includes('/index.css')) throw new Error('Offline cache is missing the local design-system stylesheet');
+  if (!cachedUrls.some(url => /^\/assets\/.*\.js$/.test(url))) throw new Error('Offline cache is missing compiled JavaScript');
+  if (!cachedUrls.some(url => /^\/assets\/.*\.css$/.test(url))) throw new Error('Offline cache is missing compiled CSS');
+
+  await context.setOffline(true);
+  try {
+    await page.goto(`http://127.0.0.1:${staticPort}/offline-probe`, { waitUntil: 'domcontentloaded', timeout: 10000 });
+    await page.waitForSelector('#root > *', { state: 'visible', timeout: 10000 });
+    const bodyBackground = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    if (bodyBackground !== 'rgb(0, 44, 75)') {
+      throw new Error(`Offline app shell did not retain compiled styling: ${bodyBackground}`);
+    }
+  } finally {
+    await context.setOffline(false);
+  }
+  console.log(`   Offline SPA navigation restored with ${cachedUrls.length} cached assets and compiled styling`);
+
+  console.log('[Browser Runtime Test] 11. Verifying loopback HTTP fails closed in production-like modes...');
   for (const productionLikeMode of ['preview', 'production']) {
     const invalidBuildEnv = {
       ...buildEnv,

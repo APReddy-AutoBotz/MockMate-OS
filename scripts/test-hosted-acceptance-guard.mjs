@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import {
   boundedRequest,
   exactHostedOrigin,
@@ -346,7 +347,7 @@ assert.match(workflow, /test:hosted-acceptance-contract/, 'Production Readiness 
 assert.ok(!workflow.includes('npm run acceptance:hosted'), 'ordinary PR CI must never invoke hosted acceptance');
 assert.match(captureGuard, /test-hosted-committed-manifest-preflight\.mjs/, 'P0-8 capture CI gate must execute the exact committed manifest through the real runner');
 
-const refused = spawnSync(process.execPath, [new URL('./hosted-preview-acceptance.mjs', import.meta.url).pathname], { env: {}, encoding: 'utf8' });
+const refused = spawnSync(process.execPath, [fileURLToPath(new URL('./hosted-preview-acceptance.mjs', import.meta.url))], { env: {}, encoding: 'utf8' });
 assert.notEqual(refused.status, 0, 'empty configuration must be refused before any network activity');
 assert.match(`${refused.stdout}${refused.stderr}`, /HOSTED_PREVIEW_ACCEPTANCE_REFUSED/);
 

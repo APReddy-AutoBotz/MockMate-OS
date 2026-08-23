@@ -8,7 +8,7 @@ const prompt = PracticePromptV1Schema.parse({
   mode: 'sentence_reading', profileId: 'en-US-general-v1', profileVersion: 1,
   referenceSetVersion: 'synthetic-reference.v1', displayText: 'Clear speech supports understanding.',
   expectedText: 'Clear speech supports understanding.', maxDurationMs: 30000, contentHash: 'a'.repeat(64),
-  referenceLabel: 'Synthetic CI fixture — not human- or provider-validated pronunciation.',
+  referenceLabel: 'Practice example — not a pronunciation benchmark.',
 });
 
 describe('ClearSpeak accent V1 truth and authority', () => {
@@ -38,7 +38,7 @@ describe('ClearSpeak accent V1 truth and authority', () => {
     for (const mode of ['word', 'phrase', 'sentence_reading', 'free_response'] as const) {
       const generated = PracticePromptV1Schema.parse(promptFor(profile, mode));
       expect(validatePromptSelector({ ...generated, promptContentHash: generated.contentHash, scoringPolicyVersion: profile.scoringPolicyVersion })).toEqual(generated);
-      expect(generated.referenceLabel).toMatch(/Synthetic CI fixture/);
+      expect(generated.referenceLabel).toMatch(/Practice example/);
     }
     expect(accentCatalog().retention).toBe('derived-results-only');
   });

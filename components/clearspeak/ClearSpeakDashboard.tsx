@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { ClearSpeakBridgePayload, ClearSpeakProfile, ClearSpeakProgress } from './types';
-import { getProfile, getProgress } from '../../services/clearSpeakService';
+import { getCapabilities, getProfile, getProgress } from '../../services/clearSpeakService';
+import type { ClearSpeakCapabilities } from '../../services/clearSpeakService';
 import ClearSpeakOnboarding from './ClearSpeakOnboarding';
 import ClearSpeakSession from './ClearSpeakSession';
 import type { CareerContextSnapshot, ModuleBridgeSession } from 'mockmate-shared';
@@ -12,12 +13,12 @@ interface ClearSpeakDashboardProps {
   onGroundingConsumed?: (bridgeId: string) => void;
 }
 
-type DashboardView = 'loading' | 'onboarding' | 'dashboard' | 'session' | 'accent';
+type DashboardView = 'loading' | 'error' | 'onboarding' | 'dashboard' | 'session' | 'accent';
 
-const clarityLabel = (score: number) => {
-  if (score >= 85) return 'Very clear';
-  if (score >= 70) return 'Clear';
-  if (score >= 55) return 'Getting clearer';
+const matchLabel = (score: number) => {
+  if (score >= 85) return 'Strong match';
+  if (score >= 70) return 'Good match';
+  if (score >= 55) return 'Building consistency';
   return 'Keep practicing';
 };
 
@@ -25,6 +26,9 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
   const [view, setView] = useState<DashboardView>('loading');
   const [profile, setProfile] = useState<ClearSpeakProfile | null>(null);
   const [progress, setProgress] = useState<ClearSpeakProgress | null>(null);
+  const [capabilities, setCapabilities] = useState<ClearSpeakCapabilities | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [recentTopics, setRecentTopics] = useState<string[]>([]);
   const [sessionAttemptLength, setSessionAttemptLength] = useState<number>(0);
   const notifiedGroundingBridge = useRef<string | null>(null);
@@ -38,15 +42,18 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
   useEffect(() => {
     (async () => {
       try {
-        const [p, prog] = await Promise.all([getProfile(), getProgress()]);
+        const [p, prog, capability] = await Promise.all([getProfile(), getProgress(), getCapabilities()]);
         setProfile(p);
         setProgress(prog);
+        setCapabilities(capability);
+        setLoadError('');
         setView(p ? 'dashboard' : 'onboarding');
-      } catch {
-        setView('onboarding');
+      } catch (error: any) {
+        setLoadError(error?.message || 'We could not load speaking practice. Check your connection and try again.');
+        setView('error');
       }
     })();
-  }, []);
+  }, [loadAttempt]);
 
   const handleOnboardingComplete = (newProfile: ClearSpeakProfile) => {
     setProfile(newProfile);
@@ -87,7 +94,25 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
     return <ClearSpeakOnboarding onComplete={handleOnboardingComplete} />;
   }
 
-  if (view === 'session') {
+  if (view === 'error') {
+    return (
+      <div className="flex min-h-[55dvh] w-full items-center justify-center">
+        <div className="flex max-w-lg flex-col items-center gap-5 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-8 text-center">
+          <h2 className="text-2xl font-semibold text-white">Speaking practice did not load</h2>
+          <p className="text-sm leading-relaxed text-brand-tint">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => { setView('loading'); setLoadAttempt(value => value + 1); }}
+            className="rounded-xl bg-brand-primary px-6 py-3 font-bold text-brand-dark focus:outline-none focus:ring-2 focus:ring-white"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'session' && capabilities?.standardSessionScoringAvailable) {
     return (
       <ClearSpeakSession
         onInterviewBridge={handleInterviewBridge}
@@ -103,7 +128,8 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
 
   if (view === 'accent') return <AccentPracticeV1 onExit={() => setView('dashboard')} />;
 
-  const avgScore = progress && progress.clarityTrend.length > 0
+  const hasVerifiedScoreProgress = progress?.scoreEvidenceBasis === 'transcript_timing_heuristic';
+  const avgScore = hasVerifiedScoreProgress && progress && progress.clarityTrend.length > 0
     ? Math.round(progress.clarityTrend.reduce((a, b) => a + b, 0) / progress.clarityTrend.length)
     : 0;
 
@@ -117,7 +143,7 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
           Speak with confidence
         </h1>
         <p className="max-w-md text-sm font-normal leading-relaxed text-brand-tint sm:text-base">
-          Short daily practice sessions to help you speak clearly and feel calmer in interviews.
+          Short daily passages with transcript-match, pace, and pause-timing feedback for interview practice.
         </p>
       </header>
 
@@ -136,10 +162,18 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
         <button
           id="cs-start-practice"
           onClick={() => setView('session')}
-          className="relative z-10 w-full max-w-md bg-brand-primary hover:bg-brand-primary/90 text-brand-dark border-none py-5 mt-2 rounded-2xl shadow-xl active:scale-95 transition-all font-bold uppercase tracking-[0.12em] text-[11px]"
+          disabled={!capabilities?.standardSessionScoringAvailable}
+          className="relative z-10 mt-2 w-full max-w-md rounded-2xl border-none bg-brand-primary py-5 text-[11px] font-bold uppercase tracking-[0.12em] text-brand-dark shadow-xl transition-all hover:bg-brand-primary/90 active:scale-95 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-brand-tint disabled:shadow-none"
         >
-          Start today's practice
+          {capabilities?.standardSessionScoringAvailable
+            ? "Start today's scored practice"
+            : 'Scored practice temporarily unavailable'}
         </button>
+        {!capabilities?.standardSessionScoringAvailable && (
+          <p role="status" className="max-w-md text-sm leading-relaxed text-brand-tint">
+            Delivery scoring needs the transcription provider and is unavailable right now. No quota or progress will be changed. You can still use reference-style practice below.
+          </p>
+        )}
         <button onClick={() => setView('accent')} className="w-full max-w-md rounded-xl border border-brand-primary/50 px-6 py-3 font-semibold text-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary">
           Practice UK / US reference styles
         </button>
@@ -152,11 +186,16 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
             Your progress
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <Metric label="Clarity" value={avgScore > 0 ? clarityLabel(avgScore) : '-'} />
+            <Metric label="Transcript match" value={avgScore > 0 ? matchLabel(avgScore) : '-'} />
             <Metric label="Hard words practiced" value={String(progress.hardWordCount)} />
-            <Metric label="How clear you sound" value={avgScore > 0 ? `${avgScore}%` : '-'} />
+            <Metric label="Average text match" value={avgScore > 0 ? `${avgScore}/100` : '-'} />
             <Metric label="Practices done" value={String(progress.totalSessionsCompleted)} />
           </div>
+          {!hasVerifiedScoreProgress && progress.totalSessionsCompleted > 0 && (
+            <p className="mt-5 text-sm leading-relaxed text-brand-tint">
+              Older score trends are hidden because their evidence source was not recorded.
+            </p>
+          )}
         </section>
       )}
     </div>

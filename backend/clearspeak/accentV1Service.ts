@@ -12,7 +12,7 @@ import { supabaseAdmin } from '../supabaseAdmin';
 
 export const ACCENT_V1_MAX_BYTES = 5 * 1024 * 1024;
 export const ACCENT_V1_MIMES = new Set(['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg']);
-const label = 'Synthetic CI fixture — not human- or provider-validated pronunciation.' as const;
+const label = 'Practice example — not a pronunciation benchmark.' as const;
 const fixtures = {
   word: 'collaboration',
   phrase: 'Could we review the next steps?',
@@ -61,8 +61,10 @@ export function accentAdapterDescriptorForScore(score: AccentAttemptScore): Acce
 }
 
 export function projectAccentHistoryAttempt(attempt: any) {
+  const practiceMode = (Object.entries(ids).find(([, promptId]) => promptId === attempt.prompt_id)?.[0] || 'word') as PracticeMode;
   return {
     ...attempt,
+    practiceMode,
     fixture: attempt.fixture,
     evidenceProvenance: attempt.evidence_provenance,
     evidenceStatus: Object.fromEntries(Object.entries(attempt.result?.dimensions || {}).map(

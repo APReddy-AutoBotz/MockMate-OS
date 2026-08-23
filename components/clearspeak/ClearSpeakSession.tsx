@@ -19,7 +19,12 @@ import type {
   ClearSpeakBridgePayload,
 } from './types';
 import type { CareerContextSnapshot, ModuleBridgeSession } from 'mockmate-shared';
-import { generateSession, scoreSession, LowConfidenceError } from '../../services/clearSpeakService';
+import {
+  generateSession,
+  scoreSession,
+  LowConfidenceError,
+  ScoringUnavailableError,
+} from '../../services/clearSpeakService';
 import { csTrack, newSessionId } from '../../services/csAnalytics';
 import { useAudioRecorder } from './useAudioRecorder';
 import PassageRenderer from './PassageRenderer';
@@ -219,6 +224,8 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
         // ANALYTICS: low_confidence_error (route 422)
         void csTrack('low_confidence_error', sessionId, { errorSource: 'route_422' });
         dispatch({ type: 'ERROR', message: err.message });
+      } else if (err instanceof ScoringUnavailableError) {
+        dispatch({ type: 'ERROR', message: `${err.message} Your recording was discarded and no progress or quota was changed.` });
       } else {
         dispatch({ type: 'ERROR', message: err.message || 'Scoring failed. Please try again.' });
       }
@@ -227,7 +234,10 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
 
   // ── Safeguard: Catch async recorder errors after phase transitions ──
   useEffect(() => {
-    if ((state.phase === 'recording' || state.phase === 'retry') && ['error', 'device_lost', 'permission_revoked'].includes(recorder.state)) {
+    if (
+      (state.phase === 'recording' || state.phase === 'retry') &&
+      ['error', 'device_lost', 'permission_revoked', 'permission_denied', 'offline', 'unsupported'].includes(recorder.state)
+    ) {
       dispatch({ type: 'ERROR', message: recorder.errorMessage || 'Recording failed. Please check microphone permissions.' });
     }
   }, [state.phase, recorder.state, recorder.errorMessage]);
@@ -283,6 +293,7 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
       return (
         <GuidedRead
           content={state.content}
+          recorderState={recorder.state}
           onStartRecording={async () => {
             try {
               await recorder.startRecording();
@@ -436,7 +447,7 @@ const playAudio = (text: string) => {
   if ('speechSynthesis' in window) {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
+    utterance.lang = 'en';
     utterance.rate = 0.85; // Slower for clarity
     window.speechSynthesis.speak(utterance);
   }
@@ -478,8 +489,9 @@ const VocabWarmup: React.FC<{ vocab: string[]; onReady: () => void }> = ({ vocab
 
 const GuidedRead: React.FC<{
   content: ClearSpeakSessionContent;
+  recorderState: string;
   onStartRecording: () => void;
-}> = ({ content, onStartRecording }) => (
+}> = ({ content, recorderState, onStartRecording }) => (
   <div className="mx-auto flex w-full max-w-4xl flex-col rounded-[22px] border border-white/10 bg-brand-dark/85 p-5 shadow-[0_0_40px_rgba(0,0,0,0.5)] backdrop-blur-xl animate-in fade-in duration-500 sm:rounded-[2rem] sm:p-8 md:p-12">
     <header className="mb-6 flex flex-col items-start justify-between gap-4 border-b border-white/10 pb-5 sm:mb-8 sm:flex-row sm:items-center sm:pb-6">
       <h2 className="text-2xl sm:text-3xl font-extrabold text-white">Read Aloud</h2>
@@ -511,10 +523,11 @@ const GuidedRead: React.FC<{
     <button  
       id="cs-start-recording" 
       onClick={onStartRecording}
+      disabled={recorderState === 'requesting_permission'}
       className="w-full sm:w-auto self-center px-12 py-5 bg-brand-primary hover:bg-brand-primary/90 text-brand-dark font-extrabold text-lg rounded-full shadow-[0_0_30px_rgba(255,188,3,0.22)] transition-all flex items-center justify-center gap-3 transform hover:scale-105 active:scale-95"
     >
       <div className="w-4 h-4 bg-brand-dark rounded-full"></div>
-      Start speaking
+      {recorderState === 'requesting_permission' ? 'Waiting for microphone permission…' : 'Start speaking'}
     </button>
   </div>
 );
@@ -536,8 +549,8 @@ const RecordingView: React.FC<{
           <span className="text-white/50 font-bold tracking-widest uppercase">Preparing...</span>
         )}
       </div>
-      <div className="text-[10px] font-bold text-white/30 uppercase tracking-[0.2em] animate-pulse">
-        There is no timer. Take your time.
+      <div className="text-[11px] font-bold text-brand-tint uppercase tracking-[0.16em]">
+        Recording stops automatically after 2 minutes
       </div>
     </header>
     
@@ -545,22 +558,15 @@ const RecordingView: React.FC<{
       <PassageRenderer tokens={content.passageData} />
     </div>
     
-    <div className="flex items-center justify-center relative">
-      {/* Audio waves visualizer fake effect */}
-      <div className="absolute inset-0 flex items-center justify-center gap-1 opacity-20 pointer-events-none">
-        {[1,2,3,4,5,6,7,8,9,10].map(i => (
-          <div key={i} className="w-1 bg-brand-primary rounded-full animate-pulse" style={{ height: `${Math.max(10, Math.random() * 40)}px`, animationDelay: `${i * 0.1}s` }}></div>
-        ))}
-      </div>
-      
+    <div className="flex items-center justify-center">
       <button 
         id="cs-stop-recording" 
         onClick={onStop} 
         disabled={recorderState !== 'recording'}
-        className="relative z-10 w-full sm:w-auto self-center px-12 py-5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-extrabold text-lg rounded-full transition-all flex items-center justify-center gap-3 backdrop-blur-md"
+        className="w-full sm:w-auto self-center px-12 py-5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-extrabold text-lg rounded-full transition-all flex items-center justify-center gap-3 backdrop-blur-md"
       >
         <div className="w-4 h-4 bg-white rounded-sm"></div>
-        Done, show my score
+        Done, check my feedback
       </button>
     </div>
   </div>
@@ -575,9 +581,9 @@ const ScoreCard: React.FC<{
   <div className="mx-auto flex w-full max-w-3xl flex-col overflow-hidden rounded-[22px] border border-white/10 bg-brand-dark/90 shadow-[0_0_50px_rgba(0,0,0,0.6)] backdrop-blur-xl animate-in zoom-in-95 duration-500 sm:rounded-[2rem]">
     <div className="p-8 sm:p-12 flex flex-col items-center text-center border-b border-white/5 relative">
       
-      <h2 className="text-xl sm:text-2xl font-bold text-white/70 mb-4 z-10 uppercase tracking-widest">Speaking score</h2>
+      <h2 className="text-xl sm:text-2xl font-bold text-white/70 mb-4 z-10 uppercase tracking-widest">Delivery practice score</h2>
       <div className="text-7xl sm:text-8xl font-black text-white bg-clip-text text-transparent bg-gradient-to-b from-white to-white/60 mb-6 z-10 drop-shadow-2xl">
-        {score.composite}
+        {score.composite}<span className="text-2xl text-brand-tint">/100</span>
       </div>
       {progress && (
         <div className="inline-flex items-center gap-2 px-4 py-2 bg-black/40 rounded-full border border-white/10 z-10">
@@ -590,20 +596,20 @@ const ScoreCard: React.FC<{
     <div className="p-8 sm:p-10 flex flex-col gap-8">
       <div className="grid grid-cols-3 gap-2 sm:gap-4">
         {[
-          {l: 'Clarity', v: score.clarity}, 
-          {l: 'Calmness', v: score.pacing}, 
-          {l: 'Flow', v: score.rhythm}
+          {l: 'Transcript match', v: score.clarity},
+          {l: 'Pace', v: score.pacing},
+          {l: 'Pause timing', v: score.rhythm}
         ].map(p => (
           <div key={p.l} className="flex flex-col items-center p-4 bg-white/5 rounded-xl border border-white/5 group hover:border-brand-primary/20 transition-all">
             <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-2 text-center leading-tight h-6 flex items-center">{p.l}</span>
-            <span className={`text-2xl sm:text-3xl font-bold ${p.v >= 80 ? 'text-brand-primary' : 'text-amber-400'}`}>{p.v}</span>
+            <span className={`text-2xl sm:text-3xl font-bold ${p.v >= 80 ? 'text-brand-primary' : 'text-amber-400'}`}>{p.v}/100</span>
           </div>
         ))}
       </div>
       
       {score.hardWordBonus > 0 && (
         <div className="w-full p-4 bg-brand-primary/10 border border-brand-primary/20 rounded-xl flex items-center justify-center gap-3 text-brand-primary font-bold text-sm">
-          <span>✨</span> +{score.hardWordBonus} Confidence Bonus!
+          <span>✨</span> +{score.hardWordBonus} practice bonus
         </div>
       )}
 
@@ -611,6 +617,10 @@ const ScoreCard: React.FC<{
         <h3 className="text-[10px] font-bold text-brand-primary uppercase tracking-widest mb-2">Coach's advice</h3>
         <p className="text-white/80 leading-relaxed italic">"{score.feedbackTip}"</p>
       </div>
+
+      <p className="text-sm leading-relaxed text-brand-tint">
+        This feedback compares the transcription with the passage and uses word timing for pace and pauses. It does not assess pronunciation, accent, identity, or fluency.
+      </p>
 
       <div className="flex flex-col sm:flex-row gap-4 mt-4">
         {onRetry && (
@@ -698,7 +708,7 @@ const BridgePrompt: React.FC<{
       </div>
       <h2 className="text-3xl sm:text-4xl font-extrabold text-white mb-4">You're Ready to Test This</h2>
       <p className="text-lg text-white/70 max-w-lg">
-        You've been speaking clearly with high pacing marks around <strong className="text-white">"{topicTag}"</strong>. Want to answer a live interview question about it?
+        Your recent transcript-match and pause-timing practice has been consistent around <strong className="text-white">"{topicTag}"</strong>. Want to answer a live interview question about it?
       </p>
     </div>
     

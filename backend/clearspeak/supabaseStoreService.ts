@@ -75,6 +75,7 @@ const defaultProgress = (userId: string): ClearSpeakProgress => ({
   bestPerformingTopic: '',
   hardWordCount: 0,
   totalSessionsCompleted: 0,
+  scoreEvidenceBasis: null,
   updatedAt: new Date().toISOString(),
 });
 
@@ -93,6 +94,9 @@ export async function getProgressFromStore(userId: string): Promise<ClearSpeakPr
           bestPerformingTopic: data.best_performing_topic || '',
           hardWordCount: data.hard_word_count || 0,
           totalSessionsCompleted: data.total_sessions_completed || 0,
+          scoreEvidenceBasis: data.score_evidence_basis === 'transcript_timing_heuristic'
+            ? 'transcript_timing_heuristic'
+            : null,
           updatedAt: data.updated_at,
         } as ClearSpeakProgress)
       : defaultProgress(userId);
@@ -114,6 +118,7 @@ export async function saveProgressToStore(progress: ClearSpeakProgress): Promise
       best_performing_topic: progress.bestPerformingTopic,
       hard_word_count: progress.hardWordCount,
       total_sessions_completed: progress.totalSessionsCompleted,
+      score_evidence_basis: progress.scoreEvidenceBasis,
       updated_at: progress.updatedAt,
     }, { onConflict: 'user_id' });
   } catch {

@@ -88,7 +88,9 @@ describe('Career Context Pure Adapters', () => {
           hardWordBonus: 5,
           feedbackTip: 'Pacing is steady',
           measuredWpm: 135,
-          retrySuccess: true
+          retrySuccess: true,
+          evidenceBasis: 'transcript_timing_heuristic',
+          pronunciationAssessed: false,
         },
         practicedWords: ['roadmap', 'throughput'],
         topicTag: 'strategy'
@@ -110,6 +112,24 @@ describe('Career Context Pure Adapters', () => {
         scale: '100',
         measuredAt: expect.any(String)
       });
+    });
+
+    it('does not promote legacy or unprovenanced delivery scores into Career Context', () => {
+      const items = buildClearSpeakContextItems({
+        sessionRecordId: 'legacy_session',
+        sessionScore: {
+          clarity: 88,
+          pacing: 90,
+          rhythm: 85,
+          composite: 88,
+          hardWordBonus: 1,
+          feedbackTip: 'Legacy score',
+          measuredWpm: 125,
+          retrySuccess: true,
+        } as any,
+      });
+
+      expect(items.some(item => item.kind === 'practice_metric')).toBe(false);
     });
   });
 

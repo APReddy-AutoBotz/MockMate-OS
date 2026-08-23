@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const runnerPath = fileURLToPath(new URL('./hosted-preview-acceptance.mjs', import.meta.url));
@@ -13,7 +13,7 @@ try { fs.unlinkSync(evidencePath); } catch { /* absent is expected */ }
 
 const result = spawnSync(
   process.execPath,
-  ['--import', blockerPath, runnerPath],
+  ['--import', pathToFileURL(blockerPath).href, runnerPath],
   {
     env: {
       ...process.env,

@@ -101,7 +101,7 @@ describe('InterviewReport Frontend UI Component Tests', () => {
 
     render(<InterviewReport report={mockReport} onRestart={() => {}} />);
 
-    const evidenceBtn = screen.getByText('View Source ↵');
+    const evidenceBtn = screen.getByText('View response ↵');
     expect(evidenceBtn).toBeInTheDocument();
     fireEvent.click(evidenceBtn);
 
@@ -137,5 +137,11 @@ describe('InterviewReport Frontend UI Component Tests', () => {
     expect(text).not.toMatch(/hire\/no-hire/i);
     expect(text).not.toMatch(/Candidate response recorded and evaluated/i);
     expect(text).not.toMatch(/Focus on explicit problem framing and trade-off justification/i);
+  });
+
+  it('7. Never promotes one scored dimension into an overall /100 score', () => {
+    render(<InterviewReport report={{ ...mockReport, simplifiedScore: null }} onRestart={() => {}} />);
+    expect(screen.getByText('N/A')).toBeInTheDocument();
+    expect(screen.queryByText('100', { selector: 'span.text-6xl' })).not.toBeInTheDocument();
   });
 });

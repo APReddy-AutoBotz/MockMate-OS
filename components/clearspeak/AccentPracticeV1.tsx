@@ -87,6 +87,7 @@ const History = z.object({
       'user_recording_evaluated_unscored',
     ]),
     evidenceStatus: z.record(z.string(), z.enum(['sufficient', 'limited', 'insufficient', 'unsupported'])),
+    practiceMode: z.enum(['word', 'phrase', 'sentence_reading', 'free_response']),
     duration_ms: z.number(),
     mime_type: z.string(),
     created_at: z.string(),
@@ -140,10 +141,13 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
   const authorityRequest = useRef<Record<string, unknown> | null>(null);
   const practiceGeneration = useRef(0);
   const [submitting, setSubmitting] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
+  const [promptRefresh, setPromptRefresh] = useState(0);
   const [history, setHistory] = useState<HistoryAttempt[]>([]);
   const [historyError, setHistoryError] = useState('');
   const [historyLoading, setHistoryLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const historyGeneration = useRef(0);
 
   const clearAttemptIdentity = (id?: string | null, generation?: number | null) => {
@@ -277,7 +281,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
       practiceGeneration.current++;
       void cancelSubmission(false, false);
     };
-  }, [profileId, mode]);
+  }, [profileId, mode, promptRefresh]);
 
   useEffect(() => () => {
     promptController.current?.abort();
@@ -373,11 +377,16 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
 
   const deleteAttempt = async (id: string) => {
     if (deletingId) return;
+    if (confirmDeleteId !== id) {
+      setConfirmDeleteId(id);
+      return;
+    }
     setDeletingId(id);
     setHistoryError('');
     try {
       await apiClient.deleteVoid(`clearspeak/v1/accent/attempts/${encodeURIComponent(id)}`);
       setHistory(current => current.filter(item => item.attempt_id !== id));
+      setConfirmDeleteId(null);
     } catch {
       setHistoryError('Delete failed. The attempt remains in your history.');
     } finally {
@@ -419,26 +428,74 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
     return cancelSubmission();
   };
 
+  const settleCurrentAttempt = async (): Promise<boolean> => {
+    if (transitioning) return false;
+    setTransitioning(true);
+    try {
+      const outcome = await cancelPractice();
+      if (outcome === 'unknown') return false;
+      if (outcome === 'pending') {
+        setError('Cancellation is still pending. Check attempt status before starting another recording.');
+        return false;
+      }
+      return true;
+    } finally {
+      setTransitioning(false);
+    }
+  };
+
+  const chooseTarget = async (nextProfileId: string, nextMode: typeof mode) => {
+    if (nextProfileId === profileId && nextMode === mode) return;
+    if (!await settleCurrentAttempt()) return;
+    setProfileId(nextProfileId);
+    setMode(nextMode);
+  };
+
+  const beginRecording = async () => {
+    if (!prompt || !await settleCurrentAttempt()) return;
+    practiceGeneration.current++;
+    try {
+      await recorder.startRecording({ maxDurationMs: prompt.maxDurationMs, maxBytes: 5 * 1024 * 1024 });
+    } catch {
+      // The recorder exposes a user-facing, state-specific error message.
+    }
+  };
+
   const dimensions = score
     ? Object.entries(score.dimensions) as Array<[string, DisplayDimension]>
     : [];
+  const scoredDimensions = dimensions.filter(([, dimension]) => dimension.score !== null);
+  const modeLabel = (value: HistoryAttempt['practiceMode']) => modes.find(([id]) => id === value)?.[1] || 'Practice';
+
+  const practiceAgain = async (item: HistoryAttempt) => {
+    if (!await settleCurrentAttempt()) return;
+    setProfileId(item.result.profileId);
+    setMode(item.practiceMode);
+    setPromptRefresh(value => value + 1);
+    setConfirmDeleteId(null);
+    window.scrollTo({
+      top: 0,
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  };
 
   return (
-    <main className="mx-auto w-full max-w-3xl overflow-x-hidden p-4 text-white sm:p-8" aria-live="polite">
+    <section className="mx-auto w-full max-w-3xl overflow-x-hidden p-4 text-white sm:p-8" aria-live="polite">
       <button
-        onClick={() => { void cancelPractice().then(() => onExit()); }}
+        onClick={() => { void settleCurrentAttempt().then(settled => { if (settled) onExit(); }); }}
+        disabled={transitioning}
         className="mb-5 text-sm text-brand-tint focus:ring-2"
       >
         ← ClearSpeak home
       </button>
-      <h1 className="text-3xl font-semibold">Accent practice V1</h1>
+      <h1 className="text-3xl font-semibold">Reference-style speaking practice</h1>
       <p className="mt-2 text-sm text-brand-tint">
         Choose a communication-style target. This never measures identity, correctness, or employability.
       </p>
       <div className="mt-5 rounded-2xl border border-amber-300/30 bg-amber-300/10 p-4 text-sm">
         {realSpeechScoringAvailable
-          ? 'Practice prompt wording is synthetic. An authorized scorer may return evidence-based per-dimension feedback; raw audio remains ephemeral and is never retained.'
-          : 'Practice prompt wording is synthetic. No real-speech scorer is currently authorized, so your recording receives no pronunciation or target-style score; audio stays only in memory until it is discarded.'}
+          ? 'These are practice examples, not pronunciation benchmarks. Feedback appears only when your recording supports it, and raw audio is never retained.'
+          : 'Feedback scoring is unavailable right now. You can still record and listen back, but no pronunciation or target-style score will be created. Audio stays in memory only until you discard it.'}
       </div>
 
       <fieldset className="mt-6">
@@ -448,7 +505,8 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
             <button
               key={profile.profileId}
               aria-pressed={profileId === profile.profileId}
-              onClick={() => setProfileId(profile.profileId)}
+              onClick={() => { void chooseTarget(profile.profileId, mode); }}
+              disabled={transitioning}
               className={`rounded-xl border p-3 text-left focus:ring-2 ${profileId === profile.profileId ? 'border-brand-primary bg-brand-primary/20' : 'border-white/20'}`}
             >
               <b>{profile.displayName}</b>
@@ -465,7 +523,8 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
             <button
               key={id}
               aria-pressed={mode === id}
-              onClick={() => setMode(id)}
+              onClick={() => { void chooseTarget(profileId, id); }}
+              disabled={transitioning}
               className="rounded-full border border-white/20 px-4 py-2 focus:ring-2"
             >
               {label}
@@ -483,9 +542,9 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
           {['idle', 'canceled', 'result', 'permission_denied', 'permission_revoked', 'device_lost', 'offline', 'unsupported', 'error'].includes(recorder.state) && (
             <button
               onClick={() => {
-                practiceGeneration.current++;
-                void recorder.startRecording({ maxDurationMs: prompt.maxDurationMs, maxBytes: 5 * 1024 * 1024 }).catch(() => undefined);
+                void beginRecording();
               }}
+              disabled={transitioning}
               className="mt-4 rounded-xl bg-brand-primary px-5 py-3 font-bold focus:ring-2"
             >
               {['idle', 'canceled', 'result'].includes(recorder.state) ? 'I consent — start microphone' : 'Retry microphone'}
@@ -508,8 +567,8 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
                 >
                   {submitting ? 'Checking evidence…' : 'Check recording'}
                 </button>
-                <button onClick={() => { void cancelPractice(); }} className="rounded-xl border px-5 py-3">
-                  Discard and re-record
+                <button onClick={() => { void settleCurrentAttempt(); }} disabled={transitioning} className="rounded-xl border px-5 py-3 disabled:opacity-60">
+                  {transitioning ? 'Confirming discard…' : 'Discard recording'}
                 </button>
                 {attemptId.current && error && (
                   <button onClick={() => { void recoverSubmission(); }} className="rounded-xl border px-5 py-3">
@@ -529,16 +588,22 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
         <section className="mt-6" aria-labelledby="accent-result-heading">
           <h2 id="accent-result-heading" className="text-2xl font-semibold">{accentResultHeading(score)}</h2>
           <p className="mt-2 text-sm text-brand-tint">{accentResultIntro(score)}</p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {dimensions.map(([name, dimension]) => (
+          {scoredDimensions.length > 0 ? (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {scoredDimensions.map(([name, dimension]) => (
               <article key={name} className="rounded-xl border border-white/10 p-4">
                 <h3 className="capitalize">{name === 'targetStyle' ? 'Selected target style' : name}</h3>
                 <strong className="text-2xl">{accentDimensionScoreLabel(dimension)}</strong>
-                <p className="text-xs">Evidence: {dimension.evidenceStatus} · confidence {Math.round(dimension.confidence * 100)}%</p>
                 <p className="mt-2 text-sm">{dimension.summary}</p>
               </article>
             ))}
           </div>
+          ) : (
+            <div className="mt-4 rounded-xl border border-white/10 p-5">
+              <h3 className="font-semibold">No reliable score for this recording</h3>
+              <p className="mt-2 text-sm text-brand-tint">Listen back if useful, then try a quieter setting or a longer response. We do not estimate missing scores.</p>
+            </div>
+          )}
           {score.coaching.length > 0 && (
             <>
               <h3 className="mt-5 font-semibold">Next actions</h3>
@@ -563,7 +628,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
           <div>
             <h2 id="accent-history-heading" className="text-2xl font-semibold">Attempt history</h2>
             <p className="text-sm text-brand-tint">
-              {history.length} saved derived {history.length === 1 ? 'attempt' : 'attempts'} · raw audio is never retained.
+              {history.length} saved {history.length === 1 ? 'attempt' : 'attempts'} · raw audio is never retained.
             </p>
           </div>
           <button onClick={() => { void loadHistory(); }} disabled={historyLoading} className="rounded-xl border px-4 py-2 disabled:opacity-60">
@@ -577,21 +642,36 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           {history.map(item => (
             <article key={item.attempt_id} className="min-w-0 rounded-xl border border-white/10 p-4">
-              <h3 className="font-semibold">{item.result.profileId.includes('GB') ? 'UK' : 'US'} · {new Date(item.created_at).toLocaleDateString()}</h3>
+              <h3 className="font-semibold">{item.result.profileId.includes('GB') ? 'UK' : 'US'} · {modeLabel(item.practiceMode)} · {new Date(item.created_at).toLocaleDateString()}</h3>
               <p className="mt-1 text-xs">{accentHistoryProvenanceLabel(item.evidenceProvenance)} · {Math.ceil(item.duration_ms / 1000)}s</p>
-              <p className="mt-2 text-sm">Evidence: {accentHistoryEvidenceLabel(item.evidenceStatus)}</p>
+              <p className="mt-2 text-sm">{accentHistoryEvidenceLabel(item.evidenceStatus)}</p>
+              {item.result.coaching[0]?.action && (
+                <p className="mt-2 text-sm text-brand-tint">Next: {item.result.coaching[0].action}</p>
+              )}
+              <button
+                type="button"
+                onClick={() => { void practiceAgain(item); }}
+                disabled={transitioning}
+                className="mt-3 rounded-lg bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-dark"
+              >
+                Practice again
+              </button>
               <button
                 onClick={() => { void deleteAttempt(item.attempt_id); }}
                 disabled={deletingId !== null}
                 aria-label="Delete this accent practice attempt"
-                className="mt-3 rounded-lg border border-red-300/40 px-3 py-2 text-sm disabled:opacity-60"
+                className="ml-2 mt-3 rounded-lg border border-red-300/40 px-3 py-2 text-sm disabled:opacity-60"
               >
-                {deletingId === item.attempt_id ? 'Deleting…' : 'Delete attempt'}
+                {deletingId === item.attempt_id
+                  ? 'Deleting…'
+                  : confirmDeleteId === item.attempt_id
+                    ? 'Confirm delete'
+                    : 'Delete attempt'}
               </button>
             </article>
           ))}
         </div>
       </section>
-    </main>
+    </section>
   );
 }

@@ -120,7 +120,12 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
   // 4. Legacy Speech Delivery Score (practice_metric - NEVER enters
   // clearspeak_to_interview projection). This remains for legacy browser source
   // compatibility only; P0-5 Accent evidence below never creates a composite.
-  if (sessionScore && sessionRecordId) {
+  if (
+    sessionScore &&
+    sessionRecordId &&
+    sessionScore.evidenceBasis === 'transcript_timing_heuristic' &&
+    sessionScore.pronunciationAssessed === false
+  ) {
     items.push({
       kind: 'practice_metric',
       canonicalKey: 'clearspeak.delivery_composite_score',
@@ -140,7 +145,7 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
         sourceHash: computeHash(String(sessionScore.composite)),
         capturedAt: new Date().toISOString(),
       },
-      exactExcerpt: `Pacing: ${sessionScore.pacing}, Clarity: ${sessionScore.clarity}`,
+      exactExcerpt: `Pace: ${sessionScore.pacing}, transcript match: ${sessionScore.clarity}, pause timing: ${sessionScore.rhythm}`,
       provenance: 'system_observed',
       status: 'active',
       sensitivity: 'standard',

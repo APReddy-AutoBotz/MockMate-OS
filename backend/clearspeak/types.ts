@@ -71,12 +71,11 @@ export interface ClearSpeakSessionContent {
 // ─── Scoring ──────────────────────────────────────────────────────────────────
 
 /**
- * 3-Pillar scoring model with weights.
- * Clarity: 50%, Pacing: 25%, Rhythm: 25%
+ * Transcript/timing practice heuristic with three weighted inputs.
  * See implementation_plan.md §11
  */
 export interface ClearSpeakSessionScore {
-  /** Phonetic closeness via Levenshtein tolerance. Weight: 50% */
+  /** Normalised transcript-text match via Levenshtein distance. Weight: 50% */
   clarity: number;    // 0-100
   /** Adherence to level-specific WPM bands. Weight: 25% */
   pacing: number;     // 0-100
@@ -95,6 +94,10 @@ export interface ClearSpeakSessionScore {
   measuredWpm: number;
   /** Whether the retry sentence was attempted and successfully delivered */
   retrySuccess: boolean;
+  /** Provenance required before score-derived progress or bridges are trusted. */
+  evidenceBasis: 'transcript_timing_heuristic';
+  /** Explicit truthfulness boundary: this pipeline does not assess pronunciation. */
+  pronunciationAssessed: false;
 }
 
 // ─── Session Record ────────────────────────────────────────────────────────────
@@ -146,6 +149,7 @@ export interface ClearSpeakProgress {
   bestPerformingTopic: string;
   hardWordCount: number;
   totalSessionsCompleted: number;
+  scoreEvidenceBasis: 'transcript_timing_heuristic' | null;
   updatedAt: string;
 }
 

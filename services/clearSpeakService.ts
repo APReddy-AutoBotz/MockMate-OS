@@ -22,6 +22,12 @@ import {
 const ProfileWrapperSchema = z.object({ profile: ClearSpeakProfileSchema }).strict();
 const ContentWrapperSchema = z.object({ content: ClearSpeakSessionContentSchema }).strict();
 const ProgressWrapperSchema = z.object({ progress: ClearSpeakProgressSchema }).strict();
+const ClearSpeakCapabilitiesSchema = z.object({
+  standardSessionScoringAvailable: z.boolean(),
+  scoreEvidenceBasis: z.literal('transcript_timing_heuristic').nullable(),
+  pronunciationAssessmentAvailable: z.literal(false),
+}).strict();
+export type ClearSpeakCapabilities = z.infer<typeof ClearSpeakCapabilitiesSchema>;
 
 export const ScoreResponseSchema = z.object({
   score: ClearSpeakSessionScoreSchema,
@@ -76,6 +82,13 @@ export class LowConfidenceError extends Error {
   }
 }
 
+export class ScoringUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ScoringUnavailableError';
+  }
+}
+
 export async function scoreSession(payload: ScorePayload): Promise<ScoreResponse> {
   const { audioBlob, content, retryAttempted, grounding, clientSessionId } = payload;
   const form = new FormData();
@@ -96,8 +109,17 @@ export async function scoreSession(payload: ScorePayload): Promise<ScoreResponse
         err.message ?? "We couldn't clearly hear your recording. Please check your microphone and try again."
       );
     }
+    if (err.status === 503 && err.code === 'SERVICE_UNAVAILABLE') {
+      throw new ScoringUnavailableError(
+        err.message ?? 'Scored delivery practice is temporarily unavailable.'
+      );
+    }
     throw err;
   }
+}
+
+export async function getCapabilities(): Promise<ClearSpeakCapabilities> {
+  return apiClient.get('clearspeak/capabilities', ClearSpeakCapabilitiesSchema);
 }
 
 export async function getProgress(): Promise<ClearSpeakProgress> {

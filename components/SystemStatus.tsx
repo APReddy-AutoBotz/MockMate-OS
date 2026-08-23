@@ -8,7 +8,7 @@ type BeforeInstallPromptEvent = Event & {
 
 const DISMISS_KEY = 'mockmate_install_prompt_dismissed';
 
-const SystemStatus: React.FC = () => {
+const SystemStatus: React.FC<{ avoidMobileTabs?: boolean }> = ({ avoidMobileTabs = false }) => {
   const [isOnline, setIsOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [installDismissed, setInstallDismissed] = useState(() => localStorage.getItem(DISMISS_KEY) === 'true');
@@ -45,7 +45,7 @@ const SystemStatus: React.FC = () => {
   };
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 z-[70] flex flex-col items-center gap-3 pointer-events-none sm:left-auto sm:right-6 sm:max-w-sm">
+    <div className={`fixed left-4 right-4 z-[70] flex flex-col items-center gap-3 pointer-events-none sm:left-auto sm:right-6 sm:max-w-sm lg:bottom-4 ${avoidMobileTabs ? 'bottom-[calc(env(safe-area-inset-bottom)+5.5rem)]' : 'bottom-4'}`}>
       {!isOnline && (
         <div className="pointer-events-auto flex w-full items-start gap-3 rounded-2xl border border-brand-primary/30 bg-brand-dark/95 p-4 text-brand-tint shadow-2xl backdrop-blur-xl">
           <WifiOff className="mt-0.5 h-5 w-5 shrink-0 text-brand-primary" />

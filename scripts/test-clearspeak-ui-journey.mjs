@@ -68,7 +68,7 @@ function promptFor(profile, mode) {
     ...(mode === 'free_response' ? {} : { expectedText: displayText }),
     maxDurationMs,
     contentHash: crypto.createHash('sha256').update(canonical).digest('hex'),
-    referenceLabel: 'Synthetic CI fixture — not human- or provider-validated pronunciation.',
+    referenceLabel: 'Practice example — not a pronunciation benchmark.',
   };
 }
 
@@ -81,7 +81,8 @@ const profile = {
 const progress = {
   userId: 'ui-clearspeak-user', streak: 4, lastPracticeDate: '2026-08-21',
   clarityTrend: [68, 74, 79], topicBestScores: { interviews: 79 }, bestPerformingTopic: 'interviews',
-  hardWordCount: 7, totalSessionsCompleted: 6, updatedAt: '2026-08-21T00:00:00.000Z',
+  hardWordCount: 7, totalSessionsCompleted: 6, scoreEvidenceBasis: 'transcript_timing_heuristic',
+  updatedAt: '2026-08-21T00:00:00.000Z',
 };
 
 const promptRequests = [];
@@ -91,6 +92,11 @@ app.use(express.json());
 app.get('/api/clearspeak/profile', (_req, res) => res.json({ profile }));
 app.get('/api/clearspeak/progress', (_req, res) => res.json({ progress }));
 app.get('/api/clearspeak/beta/access', (_req, res) => res.json({ enabled: true }));
+app.get('/api/clearspeak/capabilities', (_req, res) => res.json({
+  standardSessionScoringAvailable: false,
+  scoreEvidenceBasis: null,
+  pronunciationAssessmentAvailable: false,
+}));
 app.get('/api/clearspeak/v1/accent/catalog', (_req, res) => res.json({
   contractVersion: 'accent-profile-catalog.v1', profiles,
   practiceModes: ['word', 'phrase', 'sentence_reading', 'free_response'], fixture: true,
@@ -123,14 +129,6 @@ const viteDevServer = await createServer({
 await viteDevServer.listen();
 const webBase = `http://127.0.0.1:${viteDevServer.config.server.port}`;
 
-async function addProfile(context) {
-  await context.addInitScript(() => {
-    localStorage.setItem('mockmate_user_profile', JSON.stringify({
-      name: 'UI Test Candidate', targetRole: 'Business Analyst', experienceLevel: 'mid', primaryGoal: 'skill_building',
-    }));
-  });
-}
-
 async function enterHub(page) {
   await page.goto(webBase, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(2500);
@@ -138,14 +136,19 @@ async function enterHub(page) {
     const quick = page.getByRole('button', { name: /quick access/i }).first();
     if (await quick.isVisible({ timeout: 500 }).catch(() => false)) {
       await quick.click({ force: true });
-      break;
+      await page.waitForTimeout(350);
+      continue;
     }
     const signIn = page.getByRole('button', { name: /sign in|start free/i }).first();
     if (await signIn.isVisible({ timeout: 500 }).catch(() => false)) await signIn.click({ force: true });
+    const targetRole = page.getByPlaceholder(/sales manager, nurse, engineer/i);
+    if (await targetRole.isVisible({ timeout: 500 }).catch(() => false)) {
+      await targetRole.fill('Business Analyst');
+      await page.getByRole('button', { name: /start practicing/i }).click();
+      break;
+    }
     await page.waitForTimeout(350);
   }
-  const quick = page.getByRole('button', { name: /quick access/i }).first();
-  if (await quick.isVisible({ timeout: 1500 }).catch(() => false)) await quick.click({ force: true });
   await page.getByRole('heading', { name: /welcome back/i }).waitFor({ state: 'visible', timeout: 15000 });
 }
 
@@ -154,7 +157,6 @@ try {
   console.log('[ClearSpeak UI Journey] Launching Chromium with fake microphone...');
   browser = await chromium.launch({ headless: true, args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
   const context = await browser.newContext({ permissions: ['microphone'] });
-  await addProfile(context);
   const page = await context.newPage();
   page.on('pageerror', error => console.error('[ClearSpeak Browser PageError]', error));
 
@@ -168,8 +170,8 @@ try {
   await page.getByText('7', { exact: true }).waitFor({ state: 'visible' });
 
   await page.getByRole('button', { name: /practice uk \/ us reference styles/i }).click();
-  await page.getByRole('heading', { name: /accent practice v1/i }).waitFor({ state: 'visible', timeout: 10000 });
-  await page.getByText(/no real-speech scorer is currently authorized/i).waitFor({ state: 'visible' });
+  await page.getByRole('heading', { name: /reference-style speaking practice/i }).waitFor({ state: 'visible', timeout: 10000 });
+  await page.getByText(/feedback scoring is unavailable right now/i).waitFor({ state: 'visible' });
   await page.getByText(/raw audio is never retained/i).waitFor({ state: 'visible' });
 
   const uk = page.getByRole('button', { name: /general uk english/i });
@@ -203,7 +205,7 @@ try {
   await stop.click();
   await page.locator('audio[aria-label="Preview your recording"]').waitFor({ state: 'visible', timeout: 10000 });
   await page.getByRole('button', { name: /check recording/i }).waitFor({ state: 'visible' });
-  await page.getByRole('button', { name: /discard and re-record/i }).click();
+  await page.getByRole('button', { name: /discard recording/i }).click();
   await page.getByRole('button', { name: /i consent — start microphone/i }).waitFor({ state: 'visible', timeout: 5000 });
 
   console.log('[ClearSpeak UI Journey] Exercising microphone permission-denied recovery...');
@@ -219,7 +221,6 @@ try {
 
   console.log('[ClearSpeak UI Journey] Checking representative mobile navigation...');
   const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['microphone'] });
-  await addProfile(mobile);
   const mobilePage = await mobile.newPage();
   await enterHub(mobilePage);
   await mobilePage.getByRole('navigation', { name: 'Primary' }).waitFor({ state: 'visible', timeout: 10000 });

@@ -1307,6 +1307,22 @@ export const InterviewSessionStartResponseSchema = z.object({
 }).strict();
 export type InterviewSessionStartResponse = z.infer<typeof InterviewSessionStartResponseSchema>;
 
+export const InterviewSessionResumeSchema = z.object({
+  id: z.string().min(1),
+  context: InterviewSessionContextSchema,
+  status: z.enum(['active', 'awaiting_report', 'completed']),
+  report: FinalReportSchema.optional(),
+  sessionVersion: z.number().int().min(1),
+  currentQuestionIndex: z.number().int().min(0),
+  currentTurnIndex: z.number().int().min(0),
+  currentStage: InterviewStageSchema,
+  pendingQuestion: QuestionBlueprintSchema.nullable(),
+  adaptivePolicy: z.object({
+    maxTurns: z.number().int().positive(),
+  }).passthrough(),
+}).passthrough();
+export type InterviewSessionResume = z.infer<typeof InterviewSessionResumeSchema>;
+
 export const AnswerSubmissionRequestSchema = z.object({
   questionId: z.string(),
   expectedQuestionIndex: z.number(),
@@ -1618,7 +1634,8 @@ export const ClearSpeakSessionScoreSchema = z.object({
   feedbackTip: z.string(),
   measuredWpm: z.number(),
   retrySuccess: z.boolean(),
-  mockData: z.boolean().optional(),
+  evidenceBasis: z.literal('transcript_timing_heuristic'),
+  pronunciationAssessed: z.literal(false),
 }).strict();
 export type ClearSpeakSessionScore = z.infer<typeof ClearSpeakSessionScoreSchema>;
 
@@ -1631,6 +1648,7 @@ export const ClearSpeakProgressSchema = z.object({
   bestPerformingTopic: z.string(),
   hardWordCount: z.number(),
   totalSessionsCompleted: z.number(),
+  scoreEvidenceBasis: z.literal('transcript_timing_heuristic').nullable(),
   updatedAt: z.string(),
 }).strict();
 export type ClearSpeakProgress = z.infer<typeof ClearSpeakProgressSchema>;
@@ -1671,7 +1689,7 @@ export const PracticePromptV1Schema = z.object({
   expectedText: z.string().min(1).max(1200).optional(),
   maxDurationMs: z.number().int().min(1000).max(120000),
   contentHash: z.string().regex(/^[a-f0-9]{64}$/),
-  referenceLabel: z.literal('Synthetic CI fixture — not human- or provider-validated pronunciation.'),
+  referenceLabel: z.literal('Practice example — not a pronunciation benchmark.'),
 }).strict().superRefine((value, ctx) => {
   if (value.mode !== 'free_response' && !value.expectedText) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['expectedText'], message: 'Expected text is required for read-aloud modes' });

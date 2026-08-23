@@ -124,8 +124,9 @@ const ChallengeRecoveryTimelineCard: React.FC<{ records: ChallengeRecoveryRecord
 
 /* ─── Main Canonical Dimension Scorecard ────────────────────────────────── */
 const Scorecard: React.FC<{ report: FinalReport }> = ({ report }) => {
-  const rawScore = report.simplifiedScore
-    ?? report.quantitativeAnalysis?.dimension_scores?.find(d => d.score_status === 'scored' && d.normalized_score !== null)?.normalized_score;
+  // An overall score is valid only when the report contract explicitly emits
+  // one. A single dimension must never be promoted to an overall /100 result.
+  const rawScore = report.simplifiedScore;
     
   const hasValidScore = rawScore !== undefined && rawScore !== null;
   const overallScore = rawScore ?? 0;
@@ -201,7 +202,7 @@ const Scorecard: React.FC<{ report: FinalReport }> = ({ report }) => {
 
                 {dim.evidenceReferences && dim.evidenceReferences.length > 0 && (
                   <div className="space-y-2 pt-2 border-t border-white/[0.04]">
-                    <span className="text-[9px] font-bold text-brand-primary uppercase tracking-widest block">Evidence References</span>
+                    <span className="text-[9px] font-bold text-brand-primary uppercase tracking-widest block">Supporting moments</span>
                     <div className="space-y-1.5">
                       {dim.evidenceReferences.map((ref, refIdx) => (
                         <button
@@ -211,9 +212,9 @@ const Scorecard: React.FC<{ report: FinalReport }> = ({ report }) => {
                         >
                           <div className="flex items-center justify-between text-[9px] font-bold text-white/40 uppercase mb-1">
                             <span className="group-hover/ref:text-brand-primary transition-colors">
-                              Turn ID: {ref.turnId.slice(0, 8)}... ({ref.stage || 'framing'})
+                              Review {String(ref.stage || 'framing').replace(/_/g, ' ')} evidence
                             </span>
-                            <span className="text-brand-primary">View Source ↵</span>
+                            <span className="text-brand-primary">View response ↵</span>
                           </div>
                           <p className="text-xs text-white/70 italic line-clamp-2">
                             "{ref.excerpt}"
@@ -253,7 +254,7 @@ const QuestionCard: React.FC<{ q: QuestionPerformance; index: number }> = ({ q, 
         <span className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.14em]">Question {index + 1}</span>
         {q.turnId && (
           <span className="text-[9px] font-bold text-white/30 tracking-widest">
-            ID: {q.turnId}
+            Saved response
           </span>
         )}
       </div>
@@ -351,7 +352,7 @@ export const InterviewReport: React.FC<InterviewReportProps> = ({ report, onRest
           <div className="flex items-center justify-between border-b border-white/10 pb-4">
             <div>
               <span className="text-[9px] font-bold text-brand-primary uppercase tracking-[0.2em] flex items-center gap-1.5">
-                <Shield className="w-3.5 h-3.5" /> User-Owned Grounding Audit
+                <Shield className="w-3.5 h-3.5" /> Context you chose to use
               </span>
               <h3 className="text-lg md:text-xl font-semibold text-white mt-1">Context used for this practice</h3>
             </div>
@@ -362,19 +363,19 @@ export const InterviewReport: React.FC<InterviewReportProps> = ({ report, onRest
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-white/70">
             <div className="bg-black/20 p-3.5 rounded-xl border border-white/5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-white/40 block mb-1">Source Modules</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-white/40 block mb-1">Sources</span>
               <span className="font-mono text-white/90 font-medium">{report.contextAudit.sourceModules.join(', ')}</span>
             </div>
             <div className="bg-black/20 p-3.5 rounded-xl border border-white/5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-white/40 block mb-1">Grounded Practice Questions</span>
-              <span className="font-mono text-white/90 font-medium">{report.contextAudit.groundedQuestions.length} Questions Grounded</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-white/40 block mb-1">Prepared questions</span>
+              <span className="font-mono text-white/90 font-medium">{report.contextAudit.groundedQuestions.length} questions used this context</span>
             </div>
           </div>
 
           {report.contextAudit.groundedQuestions.length > 0 && (
             <div className="space-y-3 pt-2">
               <span className="text-[10px] font-bold uppercase tracking-widest text-white/40 block">
-                Verified Facts Grounded into Question Blueprints
+                Saved facts used to prepare these questions
               </span>
               <div className="space-y-2.5">
                 {report.contextAudit.groundedQuestions.map((gq, idx) => (

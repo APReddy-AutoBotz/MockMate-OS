@@ -19,7 +19,12 @@ import { verifyAuthToken } from '../middleware/authMiddleware';
 import { consumeUsage } from '../services/usageService';
 import { supabaseAdmin } from '../supabaseAdmin';
 import { generateSession } from './generateService';
-import { scoreSession } from './scoringService';
+import {
+  CLEAR_SPEAK_SCORING_UNAVAILABLE_MESSAGE,
+  ClearSpeakScoringUnavailableError,
+  isClearSpeakScoringAvailable,
+  scoreSession,
+} from './scoringService';
 import {
   recordSessionResult,
   evaluateBridgeTrigger,
@@ -30,7 +35,7 @@ import {
   saveProfileToStore,
   getProfileFromStore,
 } from './supabaseStoreService';
-import type { ClearSpeakProfile } from 'mockmate-shared';
+import { ClearSpeakSessionContentSchema, type ClearSpeakProfile } from 'mockmate-shared';
 import { getModuleBridgeById } from '../services/moduleBridgeService';
 import { getSnapshotById } from '../services/groundingSnapshotService';
 import crypto from 'crypto';
@@ -180,6 +185,42 @@ function handleMulterError(
 // All ClearSpeak routes require auth
 router.use(verifyAuthToken);
 
+async function userHasClearSpeakBetaAccess(userId: string | undefined): Promise<boolean> {
+  if (!userId || !supabaseAdmin) return false;
+  const { data, error } = await supabaseAdmin
+    .from('profiles')
+    .select('clearspeak_beta_enabled')
+    .eq('user_id', userId)
+    .maybeSingle();
+  return !error && data?.clearspeak_beta_enabled === true;
+}
+
+// All product routes are allowlist-only in controlled previews. The access
+// probe itself must remain reachable so the UI can hide the module. There is no
+// environment-based bypass: authorization remains fail-closed in every runtime.
+router.use(async (req: Request, res: Response, next: NextFunction) => {
+  if (req.path === '/beta/access') return next();
+  try {
+    const enabled = await userHasClearSpeakBetaAccess((req as any).user?.uid);
+    if (!enabled) return res.status(403).json({ error: 'feature_not_available' });
+    return next();
+  } catch {
+    return res.status(403).json({ error: 'feature_not_available' });
+  }
+});
+
+// The client checks this before offering standard scored practice. Availability
+// is server-authoritative so missing provider configuration cannot fall through
+// to quota consumption, persistence, or a fabricated score.
+router.get('/capabilities', (_req: Request, res: Response) => {
+  const standardSessionScoringAvailable = isClearSpeakScoringAvailable();
+  return res.json({
+    standardSessionScoringAvailable,
+    scoreEvidenceBasis: standardSessionScoringAvailable ? 'transcript_timing_heuristic' : null,
+    pronunciationAssessmentAvailable: false,
+  });
+});
+
 // Accent Practice V1 is deliberately separate from legacy /score. Its policy,
 // references and deterministic adapter are selected exclusively by the server.
 router.get('/v1/accent/catalog', (_req, res) => res.json(accentCatalog()));
@@ -302,7 +343,7 @@ router.post('/profile', async (req: Request, res: Response) => {
     return res.status(201).json({ profile });
   } catch (err: any) {
     console.error('[ClearSpeak] POST /profile error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to save profile' });
+    return res.status(500).json({ error: 'Failed to save profile' });
   }
 });
 
@@ -321,7 +362,7 @@ router.get('/profile', async (req: Request, res: Response) => {
     return res.json({ profile });
   } catch (err: any) {
     console.error('[ClearSpeak] GET /profile error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to load profile' });
+    return res.status(500).json({ error: 'Failed to load profile' });
   }
 });
 
@@ -382,7 +423,7 @@ router.post('/generate', async (req: Request, res: Response) => {
     return res.json({ content });
   } catch (err: any) {
     console.error('[ClearSpeak] POST /generate error:', err);
-    return res.status(500).json({ error: err.message || 'Generation failed' });
+    return res.status(500).json({ error: 'Generation failed' });
   }
 });
 
@@ -407,26 +448,38 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
       return res.status(400).json({ error: 'content field is required' });
     }
 
+    if (!isClearSpeakScoringAvailable()) {
+      return res.status(503).json({
+        error: CLEAR_SPEAK_SCORING_UNAVAILABLE_MESSAGE,
+        code: 'SERVICE_UNAVAILABLE',
+      });
+    }
+
+    // Parse and validate all client-controlled fields before consuming quota.
+    let submittedContent: unknown;
+    try {
+      submittedContent = JSON.parse(req.body.content);
+    } catch {
+      return res.status(400).json({ error: 'content must be valid JSON' });
+    }
+    const contentResult = ClearSpeakSessionContentSchema.safeParse(submittedContent);
+    if (!contentResult.success) {
+      return res.status(422).json({ error: 'content does not match the ClearSpeak session contract' });
+    }
+    let content = contentResult.data;
+
     const bridgeSessionId = req.body.bridgeSessionId as string | undefined;
     const snapshotId = req.body.snapshotId as string | undefined;
     if ((bridgeSessionId && !snapshotId) || (!bridgeSessionId && snapshotId)) {
       return res.status(422).json({ error: 'Grounded ClearSpeak scoring requires both snapshotId and bridgeSessionId' });
     }
 
-    if (!bridgeSessionId) {
-      const usage = await consumeUsage(userId, 'clearspeak_session');
-      if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached' });
-    }
-
     const profile = await getProfileFromStore(userId);
     if (!profile) return res.status(400).json({ error: 'Profile not found. Complete onboarding.' });
 
-    // Parse JSON fields from multipart body
-    let content: any;
-    try {
-      content = JSON.parse(req.body.content);
-    } catch {
-      return res.status(400).json({ error: 'content must be valid JSON' });
+    if (!bridgeSessionId) {
+      const usage = await consumeUsage(userId, 'clearspeak_session');
+      if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached' });
     }
 
     let reservedArtifact: any = null;
@@ -454,7 +507,7 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
     const retryAttempted = req.body.retryAttempted === 'true' || req.body.retryAttempted === true;
 
     // Audio buffer lives in req.file.buffer (in-memory only)
-    let audioBuffer: Buffer = req.file.buffer;
+    const audioBuffer: Buffer = req.file.buffer;
 
     const ledger = await getOrCreateLedger(userId);
 
@@ -476,10 +529,6 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
       throw error;
     }
 
-    // Explicitly clear buffer reference — privacy policy (raw audio never persisted)
-    audioBuffer = Buffer.alloc(0);
-    (req.file as any).buffer = null;
-
     // Route-level low-confidence guard.
     // If both clarity AND composite are near zero, transcription almost certainly
     // failed (inaudible audio, mic disconnect, etc.). Return a 422 with a
@@ -491,8 +540,8 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
           .eq('reservation_token', reservedArtifact.reservationToken);
       }
       return res.status(422).json({
-        error: 'low_confidence_transcription',
-        message: "We couldn't clearly hear your recording. Please check your microphone and try again.",
+        error: "We couldn't clearly hear your recording. Please check your microphone and try again.",
+        code: 'low_confidence_transcription',
         score,
       });
     }
@@ -511,7 +560,14 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
         p_topic_tag: content.topicTag,
         p_practiced_words: Array.isArray(content.keyVocab) ? content.keyVocab : [],
       });
-      if (error || !data) return res.status(error?.message?.includes('already') ? 409 : 503).json({ error: error?.message || 'Grounded ClearSpeak session could not be created' });
+      if (error || !data) {
+        const alreadyConsumed = error?.message?.includes('already') === true;
+        return res.status(alreadyConsumed ? 409 : 503).json({
+          error: alreadyConsumed
+            ? 'Grounded ClearSpeak authority is missing, mismatched, or already consumed'
+            : 'Grounded ClearSpeak session could not be created',
+        });
+      }
       persistedSessionId = (data as any).sessionId;
       groundingReplayed = Boolean((data as any).replayed);
       canonicalGroundedTrigger = (data as any).response?.bridgeTrigger;
@@ -542,7 +598,16 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
     return res.json({ score, progress: updatedProgress, bridgeTrigger, sessionId: persistedSessionId, groundingReplayed });
   } catch (err: any) {
     console.error('[ClearSpeak] POST /score error:', err);
-    return res.status(500).json({ error: err.message || 'Scoring failed' });
+    if (err instanceof ClearSpeakScoringUnavailableError) {
+      return res.status(err.status).json({
+        error: err.message,
+        code: err.code,
+      });
+    }
+    return res.status(500).json({ error: 'Scoring failed' });
+  } finally {
+    wipeUploadedAudio(req);
+    if (req.file) (req.file as any).buffer = null;
   }
 }, handleMulterError);
 
@@ -557,7 +622,7 @@ router.get('/progress', async (req: Request, res: Response) => {
     return res.json({ progress });
   } catch (err: any) {
     console.error('[ClearSpeak] GET /progress error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to load progress' });
+    return res.status(500).json({ error: 'Failed to load progress' });
   }
 });
 
@@ -696,18 +761,7 @@ router.post('/beta/feedback', betaFeedbackLimiter, async (req: Request, res: Res
 router.get('/beta/access', betaAccessLimiter, async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.uid;
-    if (!userId) return res.json({ enabled: false });
-
-    if (!supabaseAdmin) return res.json({ enabled: false });
-
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .select('clearspeak_beta_enabled')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (error || !data) return res.json({ enabled: false });
-    return res.json({ enabled: data.clearspeak_beta_enabled === true });
+    return res.json({ enabled: await userHasClearSpeakBetaAccess(userId) });
   } catch (err: any) {
     console.error('[ClearSpeak] GET /beta/access error:', err);
     // Fail-closed — beta hidden on any error

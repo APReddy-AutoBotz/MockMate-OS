@@ -23,7 +23,9 @@ describe('ClearSpeak accent profile surface', () => {
     expect(source).toContain('I consent — start microphone');
     expect(source).toContain('realSpeechScoringAvailable');
     expect(source).toContain('raw audio is never retained');
-    expect(source).toContain('No real-speech scorer is currently authorized');
+    expect(source).toContain('Feedback scoring is unavailable right now');
+    expect(source).toContain('Practice again');
+    expect(source).toContain('Confirm delete');
     expect(source).toContain("item.result.profileId.includes('GB') ? 'UK' : 'US'");
   });
 

@@ -158,7 +158,7 @@ export const CareerContextPanel: React.FC<CareerContextPanelProps> = ({ onBack }
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-bold uppercase tracking-wider text-white/60">
-            Stored Context Items ({items.length})
+            Saved career context ({items.length})
           </h2>
         </div>
 
@@ -182,10 +182,15 @@ export const CareerContextPanel: React.FC<CareerContextPanelProps> = ({ onBack }
                       item.provenance === 'inferred_pending' ? 'bg-amber-500/20 text-amber-300' :
                       'bg-white/10 text-white/60'
                     }`}>
-                      {item.provenance}
+                      {{
+                        user_confirmed: 'Confirmed by you',
+                        user_edited: 'Edited by you',
+                        system_observed: 'From completed practice',
+                        inferred_pending: 'Needs confirmation',
+                      }[item.provenance] || 'Saved context'}
                     </span>
                     <span className="text-[9px] uppercase px-2 py-0.5 rounded font-mono bg-white/5 text-white/40">
-                      {item.source.module}
+                      {{ resume: 'Resume', clearspeak: 'Speaking practice', interview: 'Interview' }[item.source.module] || item.source.module}
                     </span>
                   </div>
                   <div className="text-xs text-white/70">
@@ -193,7 +198,7 @@ export const CareerContextPanel: React.FC<CareerContextPanelProps> = ({ onBack }
                   </div>
                   {item.exactExcerpt && (
                     <div className="text-[10px] text-white/40 font-mono italic">
-                      Source Excerpt: "{item.exactExcerpt}"
+                      Saved excerpt: "{item.exactExcerpt}"
                     </div>
                   )}
                 </div>

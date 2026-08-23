@@ -35,6 +35,19 @@ export async function recordSessionResult(
   const progress = await getProgressFromStore(userId);
   const today = todayISO();
 
+  if (score.evidenceBasis !== 'transcript_timing_heuristic' || score.pronunciationAssessed !== false) {
+    throw new Error('ClearSpeak score evidence is not eligible for progress');
+  }
+
+  // Existing score-derived fields predate explicit provenance. Reset them once
+  // instead of silently mixing legacy or synthetic values into verified trends.
+  if (progress.scoreEvidenceBasis !== score.evidenceBasis) {
+    progress.clarityTrend = [];
+    progress.topicBestScores = {};
+    progress.bestPerformingTopic = '';
+  }
+  progress.scoreEvidenceBasis = score.evidenceBasis;
+
   // Streak logic
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
@@ -49,7 +62,7 @@ export async function recordSessionResult(
   }
   progress.lastPracticeDate = today;
 
-  // Clarity trend: rolling last 10
+  // Transcript-match trend: rolling last 10 (legacy field name retained in DB).
   progress.clarityTrend = [...progress.clarityTrend, score.clarity].slice(-10);
 
   // Best topic score
@@ -130,15 +143,23 @@ export async function evaluateBridgeTrigger(
 ): Promise<BridgeTriggerState> {
   const progress = await getProgressFromStore(userId);
 
-  const streakMet = progress.streak >= 3;
+  const verifiedEvidence =
+    currentScore.evidenceBasis === 'transcript_timing_heuristic' &&
+    currentScore.pronunciationAssessed === false &&
+    progress.scoreEvidenceBasis === 'transcript_timing_heuristic';
 
-  // Rolling average of last 3 clarity scores (current session included)
-  const recentClarity = [...progress.clarityTrend, currentScore.clarity].slice(-3);
-  const rollingAvg = recentClarity.reduce((sum, s) => sum + s, 0) / recentClarity.length;
-  const rollingAvgMet = rollingAvg > 80;
+  const streakMet = verifiedEvidence && progress.streak >= 3;
+
+  // recordSessionResult has already appended the current result. Require three
+  // verified observations and do not append the current score a second time.
+  const recentClarity = progress.clarityTrend.slice(-3);
+  const rollingAvg = recentClarity.length === 3
+    ? recentClarity.reduce((sum, s) => sum + s, 0) / recentClarity.length
+    : 0;
+  const rollingAvgMet = verifiedEvidence && recentClarity.length === 3 && rollingAvg > 80;
 
   const currentSessionStable =
-    currentScore.rhythm > 80 || currentScore.retrySuccess;
+    verifiedEvidence && (currentScore.rhythm > 80 || currentScore.retrySuccess);
 
   const shouldSurface =
     streakMet && rollingAvgMet && currentSessionStable && bridgeReadyFlag;

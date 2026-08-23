@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { CareerContextItem, GroundingPurpose, GroundingConflict } from 'mockmate-shared';
 import { Shield, Check, X, ChevronRight, FileText, Mic, Target, AlertTriangle } from 'lucide-react';
 
@@ -23,6 +23,38 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
   const [selectedIds, setSelectedIds] = useState<string[]>(eligibleItems.map(i => i.id));
   const [scope, setScope] = useState<'one_time' | 'future_sessions'>('one_time');
   const [conflictSelections, setConflictSelections] = useState<Record<string, string>>({});
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )];
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, [onClose]);
 
   const toggleItem = (id: string) => {
     setSelectedIds(prev =>
@@ -41,20 +73,28 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-      <div className="w-full max-w-2xl bg-neutral-900 border border-white/10 rounded-2xl p-6 md:p-8 space-y-6 shadow-2xl overflow-y-auto max-h-[90vh]">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="grounding-dialog-title"
+        aria-describedby="grounding-dialog-description"
+        tabIndex={-1}
+        className="w-full max-w-2xl bg-neutral-900 border border-white/10 rounded-2xl p-6 md:p-8 space-y-6 shadow-2xl overflow-y-auto max-h-[90vh] focus:outline-none"
+      >
         <div className="flex items-start justify-between border-b border-white/10 pb-4">
           <div>
             <span className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.14em] flex items-center gap-1.5">
               <Shield className="w-3.5 h-3.5" /> User-Owned Career Context
             </span>
-            <h2 className="text-xl md:text-2xl font-semibold text-white mt-1">
+            <h2 id="grounding-dialog-title" className="text-xl md:text-2xl font-semibold text-white mt-1">
               {getPurposeLabel(purpose)}
             </h2>
-            <p className="text-xs text-white/60 mt-1">
+            <p id="grounding-dialog-description" className="text-xs text-brand-tint mt-1">
               Select which verified facts to ground this practice session. Unselected items will be excluded.
             </p>
           </div>
-          <button onClick={onClose} className="text-white/40 hover:text-white p-1 transition-colors">
+          <button type="button" aria-label="Close context selection" onClick={onClose} className="text-brand-tint hover:text-white p-1 transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -85,9 +125,9 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
 
         {/* Fact Items Selection List */}
         <div className="space-y-3">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-white/40">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-brand-tint">
             Available Evidence ({selectedIds.length} of {eligibleItems.length} selected)
-          </label>
+          </p>
 
           {eligibleItems.length === 0 ? (
             <div className="p-4 bg-white/5 rounded-xl text-center text-xs text-white/40">
@@ -98,10 +138,12 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
               {eligibleItems.map(item => {
                 const isSelected = selectedIds.includes(item.id);
                 return (
-                  <div
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
                     key={item.id}
                     onClick={() => toggleItem(item.id)}
-                    className={`flex items-center justify-between p-3.5 rounded-xl border cursor-pointer transition-all ${
+                    className={`flex w-full items-center justify-between p-3.5 rounded-xl border cursor-pointer text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
                       isSelected
                         ? 'bg-brand-primary/10 border-brand-primary/40 text-white'
                         : 'bg-white/[0.02] border-white/5 text-white/50 hover:bg-white/[0.04]'
@@ -115,15 +157,15 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
                       </div>
                       <div>
                         <span className="text-xs font-medium block text-white/90">{item.label}</span>
-                        <span className="text-[10px] text-white/40 font-mono truncate max-w-md block">
+                        <span className="text-[10px] text-brand-tint font-mono truncate max-w-md block">
                           {typeof item.value === 'object' && 'text' in item.value ? item.value.text : JSON.stringify(item.value)}
                         </span>
                       </div>
                     </div>
-                    <span className="text-[9px] uppercase font-mono px-2 py-0.5 rounded bg-white/5 text-white/40">
+                    <span className="text-[9px] uppercase font-mono px-2 py-0.5 rounded bg-white/5 text-brand-tint">
                       {item.source.module}
                     </span>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -132,10 +174,11 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
 
         {/* Consent Scope Selection */}
         <div className="border-t border-white/10 pt-4 space-y-2">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-white/40">Consent Scope</label>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-brand-tint">Consent Scope</p>
           <div className="grid grid-cols-2 gap-3">
             <button
               onClick={() => setScope('one_time')}
+              aria-pressed={scope === 'one_time'}
               className={`p-3 rounded-xl border text-left transition-all ${
                 scope === 'one_time' ? 'bg-white/10 border-brand-primary text-white' : 'bg-white/5 border-transparent text-white/40'
               }`}
@@ -145,6 +188,7 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
             </button>
             <button
               onClick={() => setScope('future_sessions')}
+              aria-pressed={scope === 'future_sessions'}
               className={`p-3 rounded-xl border text-left transition-all ${
                 scope === 'future_sessions' ? 'bg-white/10 border-brand-primary text-white' : 'bg-white/5 border-transparent text-white/40'
               }`}
