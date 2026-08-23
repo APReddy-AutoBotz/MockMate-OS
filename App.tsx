@@ -30,12 +30,12 @@ import { fetchCareerContext, createGroundingSnapshot, createModuleBridge } from 
 import { CareerContextItem, GroundingPurpose, CareerContextModule, CareerContextSnapshot, ModuleBridgeSession, GroundingConflict } from 'mockmate-shared';
 import SystemStatus from './components/SystemStatus';
 import type { ClearSpeakBridgePayload } from './components/clearspeak/types';
-import { checkBetaAccess } from './services/clearSpeakService';
+import { checkBetaAccess, getCapabilities } from './services/clearSpeakService';
 import { saveSessionToHistory } from './services/storageService';
 import { audioService } from './services/audioService';
 import { auth, signOut } from './services/supabaseClient';
 import { clearLocalPracticeData, deleteMyData } from './services/accountService';
-import { bindLocalPracticeDataOwner, clearLocalDataAfterConfirmedSignOut, deleteAppDataThenAttemptSignOut, readLocalUserProfile } from './services/sessionIsolation';
+import { bindLocalPracticeDataOwner, deleteAppDataThenAttemptSignOut, readLocalUserProfile, signOutPreservingLocalPracticeData } from './services/sessionIsolation';
 import { clearActiveInterviewReference, readActiveInterviewReference, saveActiveInterviewReference } from './services/activeInterviewRecovery';
 import { getInterviewSession } from './services/mockGeminiService';
 
@@ -65,6 +65,7 @@ const App: React.FC = () => {
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [setupDraft, setSetupDraft] = useState<InterviewSetupDraft | null>(null);
     const [betaEnabled, setBetaEnabled] = useState(false);
+    const [clearSpeakStandardSessionAvailable, setClearSpeakStandardSessionAvailable] = useState(false);
     const [clearSpeakCommitInFlight, setClearSpeakCommitInFlight] = useState(false);
     const [authActionError, setAuthActionError] = useState('');
     const [pendingGroundingLaunch, setPendingGroundingLaunch] = useState<{
@@ -100,6 +101,7 @@ const App: React.FC = () => {
         setClearSpeakGrounding(null);
         setClearSpeakCommitInFlight(false);
         setBetaEnabled(false);
+        setClearSpeakStandardSessionAvailable(false);
     }, []);
 
     const authContextIsCurrent = useCallback((ownerId: string, epoch: number) => (
@@ -138,8 +140,18 @@ const App: React.FC = () => {
                 }
 
                 const enabled = await checkBetaAccess();
+                let standardSessionAvailable = false;
+                if (enabled) {
+                    try {
+                        standardSessionAvailable = (await getCapabilities()).standardSessionScoringAvailable;
+                    } catch {
+                        // A grounded Resume -> ClearSpeak handoff must fail closed
+                        // unless the server explicitly advertises scored delivery.
+                    }
+                }
                 if (!active || !authContextIsCurrent(userId, epoch)) return;
                 setBetaEnabled(enabled);
+                setClearSpeakStandardSessionAvailable(standardSessionAvailable);
                 const requestedAction = new URLSearchParams(window.location.search).get('action');
                 const storedProfile = ownerBinding === 'storage_unavailable' ? null : readLocalUserProfile();
                 if (storedProfile) {
@@ -262,9 +274,8 @@ const App: React.FC = () => {
     const handleLogout = async () => {
         if (!canLeaveClearSpeak()) return;
         setAuthActionError('');
-        let cleanup: { localDataCleared: boolean };
         try {
-            cleanup = await clearLocalDataAfterConfirmedSignOut(() => signOut(auth));
+            await signOutPreservingLocalPracticeData(() => signOut(auth));
         } catch (error) {
             console.error("Failed to logout", error);
             setAuthActionError('Sign out did not finish. You are still signed in; check your connection and retry.');
@@ -274,9 +285,6 @@ const App: React.FC = () => {
         authenticatedOwnerRef.current = null;
         clearSensitiveReactState();
         setAppState('LANDING');
-        if (!cleanup.localDataCleared) {
-            setAuthActionError('You are signed out, but browser storage could not clear local MockMate data. Clear this site’s storage before another person signs in.');
-        }
     };
 
     const handleDeleteData = async (): Promise<{ cleanupWarning?: string }> => {
@@ -563,9 +571,9 @@ const App: React.FC = () => {
         );
     };
 
-    const handleResumeSpeakBridge = (summary: string) => {
-        if (!betaEnabled) {
-            setAppState('HUB');
+    const handleResumeSpeakBridge = (_summary: string) => {
+        if (!betaEnabled || !clearSpeakStandardSessionAvailable) {
+            setAuthActionError('Grounded speaking practice is not available in this preview. Your resume was not shared and no practice bridge was created.');
             return;
         }
         triggerGroundedLaunch(
@@ -839,6 +847,7 @@ const App: React.FC = () => {
                             <ResumeBuilderFlow
                                 onSpeakBridge={handleResumeSpeakBridge}
                                 onInterviewBridge={handleResumeInterviewBridge}
+                                speakingPracticeAvailable={betaEnabled && clearSpeakStandardSessionAvailable}
                             />
                         </ErrorBoundary>
                     </motion.div>

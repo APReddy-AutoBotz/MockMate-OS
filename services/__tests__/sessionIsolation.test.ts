@@ -1,9 +1,9 @@
 import {
   bindLocalPracticeDataOwner,
-  clearLocalDataAfterConfirmedSignOut,
   deleteAppDataThenAttemptSignOut,
   LOCAL_PRACTICE_OWNER_KEY,
   readLocalUserProfile,
+  signOutPreservingLocalPracticeData,
 } from '../sessionIsolation';
 
 describe('web session local-data isolation', () => {
@@ -42,7 +42,7 @@ describe('web session local-data isolation', () => {
     bindLocalPracticeDataOwner('user-a');
     localStorage.setItem('mockmate_session_history', 'user-a-report');
 
-    await expect(clearLocalDataAfterConfirmedSignOut(async () => {
+    await expect(signOutPreservingLocalPracticeData(async () => {
       throw new Error('offline');
     })).rejects.toThrow('offline');
 
@@ -59,11 +59,16 @@ describe('web session local-data isolation', () => {
     expect(readLocalUserProfile()).toEqual({ name: 'Asha', targetRole: 'QA' });
   });
 
-  it('clears all MockMate local data only after sign-out succeeds', async () => {
+  it('preserves owner-bound data after sign-out so the same user can restore it', async () => {
     bindLocalPracticeDataOwner('user-a');
     localStorage.setItem('mockmate_session_history', 'user-a-report');
-    await expect(clearLocalDataAfterConfirmedSignOut(async () => undefined)).resolves.toEqual({ localDataCleared: true });
-    expect(localStorage.getItem(LOCAL_PRACTICE_OWNER_KEY)).toBeNull();
+    await expect(signOutPreservingLocalPracticeData(async () => undefined)).resolves.toBeUndefined();
+    expect(localStorage.getItem(LOCAL_PRACTICE_OWNER_KEY)).toBe('user-a');
+    expect(localStorage.getItem('mockmate_session_history')).toBe('user-a-report');
+    expect(bindLocalPracticeDataOwner('user-a')).toBe('preserved');
+    expect(localStorage.getItem('mockmate_session_history')).toBe('user-a-report');
+
+    expect(bindLocalPracticeDataOwner('user-b')).toBe('cleared');
     expect(localStorage.getItem('mockmate_session_history')).toBeNull();
   });
 
@@ -98,7 +103,7 @@ describe('web session local-data isolation', () => {
     expect(() => bindLocalPracticeDataOwner('user-a')).not.toThrow();
     expect(bindLocalPracticeDataOwner('user-a')).toBe('storage_unavailable');
     expect(readLocalUserProfile()).toBeNull();
-    await expect(clearLocalDataAfterConfirmedSignOut(async () => undefined))
-      .resolves.toEqual({ localDataCleared: false });
+    await expect(signOutPreservingLocalPracticeData(async () => undefined))
+      .resolves.toBeUndefined();
   });
 });

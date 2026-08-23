@@ -596,6 +596,25 @@ function validateTerminalAccountOrdering() {
   if (operations.length < requiredTail.length || JSON.stringify(operations.slice(-requiredTail.length)) !== JSON.stringify(requiredTail)) {
     fail('Hosted manifest must keep the non-destructive account-deletion failure seam and real account deletion/aftermath as the terminal sequence.');
   }
+
+  const ownerAftermath = manifest.scenarios.find((scenario) => scenario.operation === 'account.owner-aftermath');
+  const provesEmptyInterviewHistory = ownerAftermath?.assertions?.some((assertion) =>
+    assertion.source === 'json' && assertion.op === 'equals' && assertion.path === '' &&
+    Array.isArray(assertion.value) && assertion.value.length === 0
+  );
+  const snapshotVerification = ownerAftermath?.verification;
+  const provesCareerSnapshotDeletion =
+    snapshotVerification?.method === 'GET' &&
+    snapshotVerification?.path === '/api/career-context/snapshots/{{capture:career.snapshotId}}' &&
+    snapshotVerification?.auth === 'userA' &&
+    JSON.stringify(snapshotVerification?.expectedStatuses) === '[404]' &&
+    snapshotVerification?.body === undefined && snapshotVerification?.multipart === undefined &&
+    snapshotVerification?.assertions?.some((assertion) =>
+      assertion.source === 'json' && assertion.op === 'exists' && assertion.path === '/error' && assertion.value === true
+    );
+  if (!provesEmptyInterviewHistory || !provesCareerSnapshotDeletion) {
+    fail('Account deletion aftermath must prove empty owner Interview history and missing owner Career Context snapshot state.');
+  }
 }
 
 function validateP0EightLifecycleOrdering() {

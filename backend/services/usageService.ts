@@ -151,10 +151,15 @@ async function releaseAdaptiveProviderWork(input: AdaptiveReservationInput, requ
   }
 }
 
-function attachReservationLease(res: Response, input: AdaptiveReservationInput, requestHash: string): void {
-  if (!supabaseAdmin) return;
+function attachReservationLease(
+  res: Response,
+  input: AdaptiveReservationInput,
+  requestHash: string,
+): () => Promise<void> {
+  if (!supabaseAdmin) return async () => undefined;
   let stopped = false;
   let renewing = false;
+  let finishPromise: Promise<void> | null = null;
 
   const renew = async () => {
     if (stopped || renewing || !supabaseAdmin) return;
@@ -181,18 +186,27 @@ function attachReservationLease(res: Response, input: AdaptiveReservationInput, 
   renewTimer.unref?.();
 
   const finish = () => {
-    if (stopped) return;
+    if (finishPromise) return finishPromise;
     stopped = true;
     clearInterval(renewTimer);
-    if (res.statusCode >= 400) void releaseAdaptiveProviderWork(input, requestHash);
+    finishPromise = res.statusCode >= 400
+      ? releaseAdaptiveProviderWork(input, requestHash)
+      : Promise.resolve();
+    return finishPromise;
   };
-  res.once('finish', finish);
+  res.once('finish', () => { void finish(); });
   res.once('close', () => {
     // Do not release on an early client disconnect: provider work may still be
     // running. The renewable lease prevents a retry from becoming a second
     // provider owner; crash recovery remains bounded by the DB lease.
-    if (res.writableEnded) finish();
+    if (res.writableEnded) void finish();
   });
+  return finish;
+}
+
+export async function completeReservedProviderWork(req: Request): Promise<void> {
+  const finish = (req as any).usage?.finishProviderWork;
+  if (typeof finish === 'function') await finish();
 }
 
 async function waitForAdaptiveProviderOwner(input: AdaptiveReservationInput, first: AdaptiveReservationResult): Promise<AdaptiveReservationResult> {
@@ -265,12 +279,13 @@ export function enforceUsageLimit(feature: UsageFeature) {
           });
         }
 
+        const finishProviderWork = attachReservationLease(res, input, reservation.requestHash);
         (req as any).usage = {
           feature,
           authority: 'atomic_adaptive_turn',
           reservationRequestHash: reservation.requestHash,
+          finishProviderWork,
         };
-        attachReservationLease(res, input, reservation.requestHash);
         return next();
       }
 

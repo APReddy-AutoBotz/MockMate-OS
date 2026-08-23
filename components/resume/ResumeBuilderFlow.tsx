@@ -14,9 +14,10 @@ type ResumeFlowStage = 'SETUP' | 'DIAGNOSTICS' | 'EDITOR' | 'EXPORT';
 interface ResumeBuilderFlowProps {
     onInterviewBridge: (jdText: string, resumeData: ResumeData) => void;
     onSpeakBridge: (summary: string) => void;
+    speakingPracticeAvailable: boolean;
 }
 
-export const ResumeBuilderFlow: React.FC<ResumeBuilderFlowProps> = ({ onInterviewBridge, onSpeakBridge }) => {
+export const ResumeBuilderFlow: React.FC<ResumeBuilderFlowProps> = ({ onInterviewBridge, onSpeakBridge, speakingPracticeAvailable }) => {
     const [stage, setStage] = useState<ResumeFlowStage>('SETUP');
     const [resumeData, setResumeData] = useState<ResumeData | null>(null);
     const [jdText, setJdText] = useState<string>('');
@@ -136,6 +137,7 @@ export const ResumeBuilderFlow: React.FC<ResumeBuilderFlowProps> = ({ onIntervie
                             onProceed={handleEditorProceed}
                             onBack={() => setStage('DIAGNOSTICS')}
                             onSpeakBridge={onSpeakBridge}
+                            speakingPracticeAvailable={speakingPracticeAvailable}
                         />
                     </motion.div>
                 )}

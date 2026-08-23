@@ -58,12 +58,16 @@ export function bindLocalPracticeDataOwner(userId: string): LocalPracticeOwnerBi
   return outcome;
 }
 
-/** Never present a logged-out UI or clear the current owner's data first. */
-export async function clearLocalDataAfterConfirmedSignOut(
+/**
+ * Sign out without destroying owner-bound practice data. React state is cleared
+ * by the caller, while the owner marker lets the same user restore local
+ * profile, journal, and recovery state on their next login. A different user
+ * is still wiped by bindLocalPracticeDataOwner before any local data is read.
+ */
+export async function signOutPreservingLocalPracticeData(
   signOutAction: () => Promise<unknown>,
-): Promise<{ localDataCleared: boolean }> {
+): Promise<void> {
   await signOutAction();
-  return { localDataCleared: clearLocalPracticeData() };
 }
 
 /** Keep irreversible server-deletion truth separate from best-effort sign-out. */

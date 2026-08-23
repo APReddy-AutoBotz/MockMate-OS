@@ -22,7 +22,7 @@ jest.mock('../config/runtimeConfig', () => ({
   runtimeMode: () => 'preview',
 }));
 
-import { enforceUsageLimit } from '../services/usageService';
+import { completeReservedProviderWork, enforceUsageLimit } from '../services/usageService';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const SESSION_ID = '22222222-2222-4222-8222-222222222222';
@@ -140,6 +140,51 @@ describe('P0-8 Interview provider/quota reservation authority', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect((res.status as jest.Mock)).toHaveBeenCalledWith(409);
+  });
+
+  it('stops renewal and releases failed provider work after an early disconnect', async () => {
+    jest.useFakeTimers();
+    try {
+      mockRpc
+        .mockResolvedValueOnce({
+          data: { state: 'reserved', requestHash: 'd'.repeat(32) },
+          error: null,
+        })
+        .mockResolvedValue({ data: { renewed: true }, error: null });
+
+      const req = adaptiveRequest() as any;
+      const response = responseHarness();
+      (response.res as any).writableEnded = false;
+      const next: NextFunction = jest.fn();
+
+      await enforceUsageLimit('interview_question')(req, response.res, next);
+      expect(next).toHaveBeenCalledTimes(1);
+
+      response.fire('close');
+      await jest.advanceTimersByTimeAsync(20_001);
+      expect(mockRpc.mock.calls.filter(([name]) => name === 'renew_adaptive_turn_evaluation_tx')).toHaveLength(1);
+
+      (response.res as any).statusCode = 500;
+      await completeReservedProviderWork(req);
+      const renewalsAfterCompletion = mockRpc.mock.calls.filter(([name]) => name === 'renew_adaptive_turn_evaluation_tx').length;
+
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(mockRpc.mock.calls.filter(([name]) => name === 'renew_adaptive_turn_evaluation_tx')).toHaveLength(renewalsAfterCompletion);
+      expect(mockRpc.mock.calls.filter(([name]) => name === 'release_adaptive_turn_evaluation_tx')).toHaveLength(1);
+
+      await completeReservedProviderWork(req);
+      expect(mockRpc.mock.calls.filter(([name]) => name === 'release_adaptive_turn_evaluation_tx')).toHaveLength(1);
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  it('finalizes the reservation from the answer route even when response events cannot fire', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const routeSource = fs.readFileSync(path.resolve(__dirname, '../routes/interviewRoutes.ts'), 'utf8');
+    expect(routeSource).toMatch(/finally\s*{[\s\S]*await completeReservedProviderWork\(req\);[\s\S]*}/);
   });
 
   it('reserves legacy-v1 provider work using the current session version and canonical legacy marker', async () => {

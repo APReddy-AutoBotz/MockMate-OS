@@ -337,6 +337,15 @@ assert.equal(template.scenarios.at(-4).operation, 'partial-failure.account-delet
 assert.equal(template.scenarios.at(-3).operation, 'account.delete', 'genuine deletion must precede aftermath probes');
 assert.equal(template.scenarios.at(-2).operation, 'account.owner-aftermath', 'owner aftermath must follow deletion');
 assert.equal(template.scenarios.at(-1).operation, 'account.cross-user-aftermath', 'cross-user aftermath must follow deletion');
+const ownerAftermath = template.scenarios.at(-2);
+assert.deepEqual(ownerAftermath.assertions, [
+  { source: 'json', op: 'equals', path: '', value: [] },
+], 'owner aftermath must require an empty Interview history, not merely an array response');
+assert.equal(ownerAftermath.verification?.method, 'GET', 'owner aftermath must verify a second persisted module');
+assert.equal(ownerAftermath.verification?.path, '/api/career-context/snapshots/{{capture:career.snapshotId}}', 'owner aftermath must probe the created Career Context snapshot');
+assert.equal(ownerAftermath.verification?.auth, 'userA', 'snapshot deletion aftermath must remain owner-scoped');
+assert.deepEqual(ownerAftermath.verification?.expectedStatuses, [404], 'deleted owner snapshot must be missing');
+assert.ok(ownerAftermath.verification?.assertions?.some((assertion) => assertion.path === '/error' && assertion.op === 'exists' && assertion.value === true), 'missing snapshot aftermath must be semantically asserted');
 
 assert.equal(packageJson.scripts['acceptance:hosted'], 'node scripts/hosted-preview-acceptance.mjs');
 assert.equal(packageJson.scripts['test:hosted-acceptance-contract'], 'node scripts/test-hosted-acceptance-guard.mjs && npm run test:hosted-operation-authority');
