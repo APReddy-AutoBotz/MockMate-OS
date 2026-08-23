@@ -146,7 +146,7 @@ const Scorecard: React.FC<{ report: FinalReport }> = ({ report }) => {
               {hasValidScore ? overallScore : 'N/A'}
             </span>
             <div className="flex flex-col items-start gap-2">
-              {hasValidScore && <span className="text-xl text-white/10 font-bold">/ 100</span>}
+              {hasValidScore && <span className="text-xl text-white/70 font-bold">/ 100</span>}
               <span className="bg-brand-primary text-brand-dark px-3 py-1 rounded-lg font-black text-[9px] tracking-[0.2em] uppercase">{tier}</span>
             </div>
           </div>

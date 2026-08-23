@@ -38,4 +38,19 @@ describe('bounded active-interview recovery reference', () => {
     expect(readActiveInterviewReference()).toBeNull();
     clearActiveInterviewReference();
   });
+
+  it('treats denied browser storage as nonfatal and reports failed writes', () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: () => { throw new Error('storage denied'); },
+        setItem: () => { throw new Error('storage denied'); },
+        removeItem: () => { throw new Error('storage denied'); },
+      },
+    });
+
+    expect(saveActiveInterviewReference('session-123')).toBe(false);
+    expect(readActiveInterviewReference()).toBeNull();
+    expect(clearActiveInterviewReference()).toBe(false);
+  });
 });

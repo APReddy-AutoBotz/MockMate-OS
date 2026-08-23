@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CareerContextItem, GroundingPurpose, GroundingConflict } from 'mockmate-shared';
-import { Shield, Check, X, ChevronRight, FileText, Mic, Target, AlertTriangle } from 'lucide-react';
+import { Shield, Check, X, ChevronRight, AlertTriangle } from 'lucide-react';
 
 interface GroundingPreviewModalProps {
   purpose: GroundingPurpose;
   items: CareerContextItem[];
   conflicts: GroundingConflict[];
-  onConfirm: (selectedItemIds: string[], scope: 'one_time' | 'future_sessions', conflictSelections: Record<string, string>) => void;
+  onConfirm: (selectedItemIds: string[], scope: 'one_time', conflictSelections: Record<string, string>) => void | Promise<void>;
   onSkip: () => void;
   onClose: () => void;
 }
@@ -21,16 +21,19 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
 }) => {
   const eligibleItems = items.filter(i => i.status === 'active' && i.sensitivity !== 'personal_contact');
   const [selectedIds, setSelectedIds] = useState<string[]>(eligibleItems.map(i => i.id));
-  const [scope, setScope] = useState<'one_time' | 'future_sessions'>('one_time');
   const [conflictSelections, setConflictSelections] = useState<Record<string, string>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const submissionLockRef = useRef(false);
 
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
+    closeButtonRef.current?.focus();
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
+        if (submissionLockRef.current) return;
         onClose();
         return;
       }
@@ -41,10 +44,12 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
       if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      const activeElement = document.activeElement;
+      const focusIsInside = dialogRef.current.contains(activeElement);
+      if (event.shiftKey && (activeElement === first || !focusIsInside)) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
+      } else if (!event.shiftKey && (activeElement === last || !focusIsInside)) {
         event.preventDefault();
         first.focus();
       }
@@ -57,9 +62,33 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
   }, [onClose]);
 
   const toggleItem = (id: string) => {
+    if (submissionLockRef.current) return;
     setSelectedIds(prev =>
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     );
+  };
+
+  const handleConfirm = async () => {
+    if (submissionLockRef.current) return;
+    submissionLockRef.current = true;
+    setIsSubmitting(true);
+    try {
+      const confirmation = onConfirm(selectedIds, 'one_time', conflictSelections);
+      if (confirmation && typeof confirmation.then === 'function') await confirmation;
+    } finally {
+      submissionLockRef.current = false;
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSkip = () => {
+    if (submissionLockRef.current) return;
+    onSkip();
+  };
+
+  const handleClose = () => {
+    if (submissionLockRef.current) return;
+    onClose();
   };
 
   const getPurposeLabel = (p: GroundingPurpose) => {
@@ -79,6 +108,7 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
         aria-modal="true"
         aria-labelledby="grounding-dialog-title"
         aria-describedby="grounding-dialog-description"
+        aria-busy={isSubmitting}
         tabIndex={-1}
         className="w-full max-w-2xl bg-neutral-900 border border-white/10 rounded-2xl p-6 md:p-8 space-y-6 shadow-2xl overflow-y-auto max-h-[90vh] focus:outline-none"
       >
@@ -94,7 +124,7 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
               Select which verified facts to ground this practice session. Unselected items will be excluded.
             </p>
           </div>
-          <button type="button" aria-label="Close context selection" onClick={onClose} className="text-brand-tint hover:text-white p-1 transition-colors">
+          <button ref={closeButtonRef} type="button" aria-label="Close context selection" onClick={handleClose} disabled={isSubmitting} className="text-brand-tint hover:text-white p-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -113,7 +143,7 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
                 <legend className="text-xs font-semibold text-amber-100">{conflict.canonicalKey}</legend>
                 {conflict.competingItemIds.map((id, index) => (
                   <label key={id} className="flex items-center gap-2 text-xs text-white/80">
-                    <input type="radio" name={`conflict-${conflict.canonicalKey}`} checked={conflictSelections[conflict.canonicalKey] === id}
+                    <input type="radio" name={`conflict-${conflict.canonicalKey}`} checked={conflictSelections[conflict.canonicalKey] === id} disabled={isSubmitting}
                       onChange={() => { setConflictSelections(prev => ({ ...prev, [conflict.canonicalKey]: id })); setSelectedIds(prev => [...prev.filter(x => !conflict.competingItemIds.includes(x)), id]); }} />
                     {conflict.descriptions[index] || id}
                   </label>
@@ -143,6 +173,7 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
                     aria-pressed={isSelected}
                     key={item.id}
                     onClick={() => toggleItem(item.id)}
+                    disabled={isSubmitting}
                     className={`flex w-full items-center justify-between p-3.5 rounded-xl border cursor-pointer text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
                       isSelected
                         ? 'bg-brand-primary/10 border-brand-primary/40 text-white'
@@ -172,47 +203,34 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
           )}
         </div>
 
-        {/* Consent Scope Selection */}
+        {/* This flow creates a single immutable launch snapshot. */}
         <div className="border-t border-white/10 pt-4 space-y-2">
           <p className="text-[10px] font-bold uppercase tracking-widest text-brand-tint">Consent Scope</p>
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              onClick={() => setScope('one_time')}
-              aria-pressed={scope === 'one_time'}
-              className={`p-3 rounded-xl border text-left transition-all ${
-                scope === 'one_time' ? 'bg-white/10 border-brand-primary text-white' : 'bg-white/5 border-transparent text-white/40'
-              }`}
-            >
-              <div className="text-xs font-semibold">One-time Session</div>
-              <div className="text-[10px] text-white/40 mt-0.5">Use selected facts for this session only</div>
-            </button>
-            <button
-              onClick={() => setScope('future_sessions')}
-              aria-pressed={scope === 'future_sessions'}
-              className={`p-3 rounded-xl border text-left transition-all ${
-                scope === 'future_sessions' ? 'bg-white/10 border-brand-primary text-white' : 'bg-white/5 border-transparent text-white/40'
-              }`}
-            >
-              <div className="text-xs font-semibold">Future Sessions</div>
-              <div className="text-[10px] text-white/40 mt-0.5">Remember this selection for future practice</div>
-            </button>
+          <div className="rounded-xl border border-brand-primary/40 bg-white/10 p-3 text-left text-white">
+            <div className="text-xs font-semibold">One-time session</div>
+            <div className="mt-0.5 text-[10px] text-brand-tint">Use the selected facts for this launch only.</div>
           </div>
         </div>
+
+        <p role="status" aria-live="polite" className="min-h-4 text-center text-xs text-brand-tint">
+          {isSubmitting ? 'Creating your one-time grounded session. Other actions are temporarily locked.' : ''}
+        </p>
 
         {/* Action Buttons */}
         <div className="flex items-center justify-between border-t border-white/10 pt-4">
           <button
-            onClick={onSkip}
-            className="px-4 py-2.5 rounded-xl border border-white/10 text-white/60 hover:text-white text-xs font-medium transition-colors"
+            onClick={handleSkip}
+            disabled={isSubmitting}
+            className="px-4 py-2.5 rounded-xl border border-white/10 text-white/60 hover:text-white text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
           >
             Continue Without Grounding
           </button>
           <button
-            onClick={() => onConfirm(selectedIds, scope, conflictSelections)}
-            disabled={selectedIds.length === 0 || conflicts.some(c => c.requiresUserChoice && !conflictSelections[c.canonicalKey])}
+            onClick={() => { void handleConfirm(); }}
+            disabled={isSubmitting || selectedIds.length === 0 || conflicts.some(c => c.requiresUserChoice && !conflictSelections[c.canonicalKey])}
             className="px-6 py-2.5 rounded-xl bg-brand-primary text-brand-dark hover:bg-brand-primary/90 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors disabled:opacity-40"
           >
-            Continue With Selected Context <ChevronRight className="w-4 h-4" />
+            {isSubmitting ? 'Creating grounded session…' : 'Continue With Selected Context'} {!isSubmitting && <ChevronRight className="w-4 h-4" />}
           </button>
         </div>
       </div>

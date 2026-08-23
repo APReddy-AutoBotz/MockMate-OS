@@ -18,6 +18,35 @@ const colors = {
 const PAGE_WIDTH = 595.28;
 const PAGE_HEIGHT = 841.89;
 const MARGIN = 50;
+export const PDF_REPORT_HEADER = 'CONFIDENTIAL • MockMate Practice Report';
+
+export type PdfDimensionTone = 'strong' | 'developing' | 'risk' | 'unscored';
+
+export interface PdfDimensionRow {
+    dimension: string;
+    scoreLabel: string;
+    tone: PdfDimensionTone;
+    reason: string;
+}
+
+export const buildPdfDimensionRows = (report: FinalReport): PdfDimensionRow[] => (
+    (report.quantitativeAnalysis?.dimension_scores || []).map(item => {
+        if (item.score_status !== 'scored' || typeof item.normalized_score !== 'number') {
+            return {
+                dimension: item.dimensionName || item.dimension,
+                scoreLabel: item.score_status === 'not_tested' ? 'Not tested' : 'Insufficient evidence',
+                tone: 'unscored' as const,
+                reason: item.reason,
+            };
+        }
+        return {
+            dimension: item.dimensionName || item.dimension,
+            scoreLabel: `${item.normalized_score}%`,
+            tone: item.normalized_score > 80 ? 'strong' as const : item.normalized_score > 60 ? 'developing' as const : 'risk' as const,
+            reason: item.reason,
+        };
+    })
+);
 
 class PDFBuilder {
     pdfDoc: PDFDocument;
@@ -90,7 +119,7 @@ class PDFBuilder {
     }
 
     drawSmallHeader() {
-        this.page.drawText('CONFIDENTIAL • MockMate AI Assessment', {
+        this.page.drawText(PDF_REPORT_HEADER, {
             x: MARGIN, y: PAGE_HEIGHT - 30, font: this.helvetica, size: 8, color: colors.textSecondary, opacity: 0.4
         });
     }
@@ -139,18 +168,25 @@ class PDFBuilder {
     }
 
     async drawQuantitativeSection(report: FinalReport) {
-        if (!report.quantitativeAnalysis?.dimension_scores) return;
+        const rows = buildPdfDimensionRows(report);
+        if (rows.length === 0) return;
         this.y -= 40;
         await this.checkNewPage(100);
-        this.drawText('COMPETENCY RADAR (QUANTITATIVE)', MARGIN, this.y, this.helveticaBold, 10, colors.infoBlue);
+        this.drawText('COMPETENCY EVIDENCE', MARGIN, this.y, this.helveticaBold, 10, colors.infoBlue);
         this.y -= 25;
 
-        for (const item of report.quantitativeAnalysis.dimension_scores) {
-            const scoreColor = item.normalized_score > 80 ? colors.actionTeal : item.normalized_score > 60 ? colors.accentAmber : colors.alertCoral;
-            this.drawText(`${item.normalized_score}%`, MARGIN, this.y, this.helveticaBold, 10, scoreColor);
-            this.drawText(item.dimension, MARGIN + 40, this.y, this.helveticaBold, 10, colors.textPrimary);
+        for (const row of rows) {
+            const scoreColor = row.tone === 'strong'
+                ? colors.actionTeal
+                : row.tone === 'developing'
+                    ? colors.accentAmber
+                    : row.tone === 'risk'
+                        ? colors.alertCoral
+                        : colors.textSecondary;
+            this.drawText(row.scoreLabel, MARGIN, this.y, this.helveticaBold, 10, scoreColor);
+            this.drawText(row.dimension, MARGIN + 105, this.y, this.helveticaBold, 10, colors.textPrimary);
             this.y -= 12;
-            this.y = this.drawText(item.reason, MARGIN + 40, this.y, this.helvetica, 9, colors.textSecondary, PAGE_WIDTH - MARGIN * 2 - 40);
+            this.y = this.drawText(row.reason, MARGIN + 105, this.y, this.helvetica, 9, colors.textSecondary, PAGE_WIDTH - MARGIN * 2 - 105);
             this.y -= 15;
             await this.checkNewPage(50);
         }

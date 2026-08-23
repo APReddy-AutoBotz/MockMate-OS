@@ -9,6 +9,7 @@ import AccentPracticeV1 from './AccentPracticeV1';
 
 interface ClearSpeakDashboardProps {
   onInterviewBridge: (payload: ClearSpeakBridgePayload) => void;
+  onScoreCommitStateChange?: (inFlight: boolean) => void;
   grounding?: { snapshot: CareerContextSnapshot; bridge: ModuleBridgeSession };
   onGroundingConsumed?: (bridgeId: string) => void;
 }
@@ -22,7 +23,7 @@ const matchLabel = (score: number) => {
   return 'Keep practicing';
 };
 
-const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBridge, grounding, onGroundingConsumed }) => {
+const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBridge, onScoreCommitStateChange, grounding, onGroundingConsumed }) => {
   const [view, setView] = useState<DashboardView>('loading');
   const [profile, setProfile] = useState<ClearSpeakProfile | null>(null);
   const [progress, setProgress] = useState<ClearSpeakProgress | null>(null);
@@ -116,6 +117,7 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
     return (
       <ClearSpeakSession
         onInterviewBridge={handleInterviewBridge}
+        onScoreCommitStateChange={onScoreCommitStateChange}
         onComplete={handleSessionComplete}
         onCanonicalGroundedScore={notifyGroundingConsumed}
         recentTopics={recentTopics}
@@ -171,7 +173,7 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
         </button>
         {!capabilities?.standardSessionScoringAvailable && (
           <p role="status" className="max-w-md text-sm leading-relaxed text-brand-tint">
-            Delivery scoring needs the transcription provider and is unavailable right now. No quota or progress will be changed. You can still use reference-style practice below.
+            Scored delivery practice is unavailable in this controlled preview. No quota or progress will be changed. You can still use reference-style practice below.
           </p>
         )}
         <button onClick={() => setView('accent')} className="w-full max-w-md rounded-xl border border-brand-primary/50 px-6 py-3 font-semibold text-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary">

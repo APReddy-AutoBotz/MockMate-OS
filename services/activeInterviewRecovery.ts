@@ -10,12 +10,17 @@ const ActiveInterviewReferenceSchema = z.object({
   savedAt: z.number().int().positive(),
 }).strict();
 
-export function saveActiveInterviewReference(sessionId: string): void {
-  localStorage.setItem(ACTIVE_INTERVIEW_KEY, JSON.stringify({
-    version: 1,
-    sessionId,
-    savedAt: Date.now(),
-  }));
+export function saveActiveInterviewReference(sessionId: string): boolean {
+  try {
+    localStorage.setItem(ACTIVE_INTERVIEW_KEY, JSON.stringify({
+      version: 1,
+      sessionId,
+      savedAt: Date.now(),
+    }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function readActiveInterviewReference(): { sessionId: string } | null {
@@ -33,6 +38,11 @@ export function readActiveInterviewReference(): { sessionId: string } | null {
   }
 }
 
-export function clearActiveInterviewReference(): void {
-  localStorage.removeItem(ACTIVE_INTERVIEW_KEY);
+export function clearActiveInterviewReference(): boolean {
+  try {
+    localStorage.removeItem(ACTIVE_INTERVIEW_KEY);
+    return true;
+  } catch {
+    return false;
+  }
 }

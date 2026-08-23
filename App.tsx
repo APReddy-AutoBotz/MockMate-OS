@@ -1,6 +1,6 @@
 import { UserProfile } from "./types/ui";
 
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useCallback, useState, useEffect, useRef, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { BookOpen, FileText, Home, Mic, Users } from 'lucide-react';
 
@@ -63,7 +63,9 @@ const App: React.FC = () => {
     const [restoredInterview, setRestoredInterview] = useState<InterviewSessionResume | null>(null);
     const [finalReport, setFinalReport] = useState<FinalReport | null>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+    const [setupDraft, setSetupDraft] = useState<InterviewSetupDraft | null>(null);
     const [betaEnabled, setBetaEnabled] = useState(false);
+    const [clearSpeakCommitInFlight, setClearSpeakCommitInFlight] = useState(false);
     const [authActionError, setAuthActionError] = useState('');
     const [pendingGroundingLaunch, setPendingGroundingLaunch] = useState<{
         purpose: GroundingPurpose;
@@ -73,37 +75,73 @@ const App: React.FC = () => {
         conflicts: GroundingConflict[];
         snapshotClientRequestId: string;
         bridgeClientRequestId: string;
+        ownerId: string;
+        authEpoch: number;
+        launchToken: number;
+        isSubmitting: boolean;
         onSuccess: (snapshot: CareerContextSnapshot, bridge?: ModuleBridgeSession) => void;
         onSkip: () => void;
     } | null>(null);
     const [clearSpeakGrounding, setClearSpeakGrounding] = useState<{ snapshot: CareerContextSnapshot; bridge: ModuleBridgeSession } | null>(null);
+    const authenticatedOwnerRef = useRef<string | null>(null);
+    const authEpochRef = useRef(0);
+    const groundingLaunchTokenRef = useRef(0);
+    const groundingSubmissionRef = useRef<number | null>(null);
+
+    const clearSensitiveReactState = useCallback(() => {
+        groundingLaunchTokenRef.current += 1;
+        groundingSubmissionRef.current = null;
+        setUserProfile(null);
+        setSessionContext(null);
+        setRestoredInterview(null);
+        setFinalReport(null);
+        setSetupDraft(null);
+        setPendingGroundingLaunch(null);
+        setClearSpeakGrounding(null);
+        setClearSpeakCommitInFlight(false);
+        setBetaEnabled(false);
+    }, []);
+
+    const authContextIsCurrent = useCallback((ownerId: string, epoch: number) => (
+        authenticatedOwnerRef.current === ownerId && authEpochRef.current === epoch
+    ), []);
 
     useEffect(() => {
         // Use the auth listener to determine starting state
         let active = true;
-        let authEpoch = 0;
         const unsubscribe = auth.onAuthStateChanged(async (user: any) => {
-            const epoch = ++authEpoch;
+            const epoch = ++authEpochRef.current;
             if (user) {
                 const userId = String(user.id || user.uid || '');
                 // Legacy web storage was not user-scoped. Fail closed on the
                 // first upgraded login and whenever the authenticated owner
                 // changes, then bind all new local data to this identity.
                 if (!userId) {
-                    clearLocalPracticeData();
-                    setBetaEnabled(false);
+                    authenticatedOwnerRef.current = null;
+                    clearSensitiveReactState();
+                    const localDataCleared = clearLocalPracticeData();
                     setAuthActionError('Your signed-in identity could not be verified. Please sign in again.');
+                    if (!localDataCleared) {
+                        setAuthActionError('Your signed-in identity could not be verified, and browser storage is unavailable. Please sign in again.');
+                    }
                     setAppState('LANDING');
                     return;
                 }
-                bindLocalPracticeDataOwner(userId);
-                setAuthActionError('');
+                const previousOwner = authenticatedOwnerRef.current;
+                const ownerBinding = bindLocalPracticeDataOwner(userId);
+                if (previousOwner !== userId || ownerBinding !== 'preserved') clearSensitiveReactState();
+                authenticatedOwnerRef.current = userId;
+                if (ownerBinding === 'storage_unavailable') {
+                    setAuthActionError('Browser storage is unavailable. You can continue, but local profile, recovery, and journal updates will not be saved.');
+                } else {
+                    setAuthActionError('');
+                }
 
                 const enabled = await checkBetaAccess();
-                if (!active || epoch !== authEpoch) return;
+                if (!active || !authContextIsCurrent(userId, epoch)) return;
                 setBetaEnabled(enabled);
                 const requestedAction = new URLSearchParams(window.location.search).get('action');
-                const storedProfile = readLocalUserProfile();
+                const storedProfile = ownerBinding === 'storage_unavailable' ? null : readLocalUserProfile();
                 if (storedProfile) {
                     setUserProfile(storedProfile);
                     if (!requestedAction) {
@@ -111,11 +149,19 @@ const App: React.FC = () => {
                         if (activeReference) {
                             try {
                                 const recovered = await getInterviewSession(activeReference.sessionId);
-                                if (!active || epoch !== authEpoch) return;
+                                if (!active || !authContextIsCurrent(userId, epoch)) return;
                                 setSessionContext(recovered.context);
                                 if (recovered.status === 'completed' && recovered.report) {
                                     clearActiveInterviewReference();
                                     setRestoredInterview(null);
+                                    if (!saveSessionToHistory(
+                                        recovered.report,
+                                        recovered.context.candidateRole,
+                                        recovered.context.sessionType,
+                                        recovered.id,
+                                    )) {
+                                        setAuthActionError('Your completed interview was restored, but browser storage could not update the local journal.');
+                                    }
                                     setFinalReport(recovered.report);
                                     setAppState('REPORT_VIEW');
                                     return;
@@ -152,13 +198,30 @@ const App: React.FC = () => {
                     setAppState('ONBOARDING');
                 }
             } else {
-                if (!active || epoch !== authEpoch) return;
+                if (!active || epoch !== authEpochRef.current) return;
+                authenticatedOwnerRef.current = null;
+                clearSensitiveReactState();
                 setAppState('LANDING');
-                setBetaEnabled(false);
             }
         });
         return () => { active = false; unsubscribe(); };
-    }, []);
+    }, [authContextIsCurrent, clearSensitiveReactState]);
+
+    useEffect(() => {
+        if (!clearSpeakCommitInFlight) return;
+        const protectScoreCommit = (event: BeforeUnloadEvent) => {
+            event.preventDefault();
+            event.returnValue = '';
+        };
+        window.addEventListener('beforeunload', protectScoreCommit);
+        return () => window.removeEventListener('beforeunload', protectScoreCommit);
+    }, [clearSpeakCommitInFlight]);
+
+    const canLeaveClearSpeak = useCallback(() => {
+        if (appState !== 'CLEARSPEAK' || !clearSpeakCommitInFlight) return true;
+        setAuthActionError('Your recording is still being scored. Wait for the result before leaving speaking practice.');
+        return false;
+    }, [appState, clearSpeakCommitInFlight]);
 
     const handleSplashComplete = () => {
         setShowSplash(false);
@@ -182,35 +245,38 @@ const App: React.FC = () => {
 
     const handleOnboardingComplete = (profile: UserProfile, targetRole: string) => {
         audioService.playConfirm();
+        const enrichedProfile: UserProfile = {
+            ...profile,
+            targetRole: targetRole || undefined
+        };
         try {
-            const enrichedProfile: UserProfile = {
-                ...profile,
-                targetRole: targetRole || undefined
-            };
             localStorage.setItem('mockmate_user_profile', JSON.stringify(enrichedProfile));
-            setUserProfile(enrichedProfile);
-            setAppState('HUB');
         } catch (error) {
             console.error("Failed to save user profile", error);
+            setAuthActionError('Your profile is available for this session, but browser storage could not save it locally.');
         }
+        setUserProfile(enrichedProfile);
+        setAppState('HUB');
     };
 
     const handleLogout = async () => {
+        if (!canLeaveClearSpeak()) return;
         setAuthActionError('');
+        let cleanup: { localDataCleared: boolean };
         try {
-            await clearLocalDataAfterConfirmedSignOut(() => signOut(auth));
+            cleanup = await clearLocalDataAfterConfirmedSignOut(() => signOut(auth));
         } catch (error) {
             console.error("Failed to logout", error);
             setAuthActionError('Sign out did not finish. You are still signed in; check your connection and retry.');
             return;
         }
-        setUserProfile(null);
+        authEpochRef.current += 1;
+        authenticatedOwnerRef.current = null;
+        clearSensitiveReactState();
         setAppState('LANDING');
-        setSessionContext(null);
-        setRestoredInterview(null);
-        setFinalReport(null);
-        setClearSpeakGrounding(null);
-        setBetaEnabled(false);
+        if (!cleanup.localDataCleared) {
+            setAuthActionError('You are signed out, but browser storage could not clear local MockMate data. Clear this site’s storage before another person signs in.');
+        }
     };
 
     const handleDeleteData = async (): Promise<{ cleanupWarning?: string }> => {
@@ -218,23 +284,25 @@ const App: React.FC = () => {
             () => deleteMyData(),
             () => signOut(auth),
         );
-        setUserProfile(null);
-        setSessionContext(null);
-        setRestoredInterview(null);
-        setFinalReport(null);
-        setClearSpeakGrounding(null);
+        authEpochRef.current += 1;
+        clearSensitiveReactState();
         if (outcome.signedOut) {
+            authenticatedOwnerRef.current = null;
             setAppState('LANDING');
-            setBetaEnabled(false);
+            if (!outcome.localDataCleared) {
+                const cleanupWarning = 'Your app data was deleted and you are signed out, but browser storage could not be cleared. Clear this site’s storage before another person signs in.';
+                setAuthActionError(cleanupWarning);
+                return { cleanupWarning };
+            }
             return {};
         }
-        const cleanupWarning = 'Your MockMate app data was deleted, but sign out did not finish. You are still signed in; retry Sign out.';
+        const cleanupWarning = outcome.localDataCleared
+            ? 'Your MockMate app data was deleted, but sign out did not finish. You are still signed in; retry Sign out.'
+            : 'Your MockMate app data was deleted, but sign out and browser cleanup did not finish. You are still signed in; retry Sign out, then clear this site’s storage.';
         setAuthActionError(cleanupWarning);
         setAppState('HUB');
         return { cleanupWarning };
     };
-
-    const [setupDraft, setSetupDraft] = useState<InterviewSetupDraft | null>(null);
 
     const handleRoleSubmit = (intent: string, sessionType: 'structured' | 'conversational') => {
         audioService.playConfirm();
@@ -252,18 +320,21 @@ const App: React.FC = () => {
         setAppState('SESSION_ACTIVE');
     }
 
-    const handleReportGenerated = (report: FinalReport) => {
+    const handleReportGenerated = (report: FinalReport, serverSessionId?: string) => {
         audioService.playNotify();
         clearActiveInterviewReference();
         setRestoredInterview(null);
         if (sessionContext) {
-            saveSessionToHistory(report, sessionContext.candidateRole, sessionContext.sessionType);
+            if (!saveSessionToHistory(report, sessionContext.candidateRole, sessionContext.sessionType, serverSessionId)) {
+                setAuthActionError('Your report is ready, but browser storage could not update the local journal.');
+            }
         }
         setFinalReport(report);
         setAppState('REPORT_VIEW');
     };
 
     const handleRestart = () => {
+        if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
         setAppState('HUB');
         setSetupDraft(null);
@@ -293,6 +364,7 @@ const App: React.FC = () => {
     };
 
     const toggleHistory = () => {
+        if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
         if (appState === 'HISTORY_VIEW') {
             setAppState('HUB');
@@ -303,6 +375,7 @@ const App: React.FC = () => {
 
     const toggleClearSpeak = () => {
         if (!betaEnabled) return;
+        if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
         if (appState === 'CLEARSPEAK') {
             setAppState('HUB');
@@ -312,6 +385,7 @@ const App: React.FC = () => {
     };
 
     const toggleResumeBuilder = () => {
+        if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
         if (appState === 'RESUME_BUILDER') {
             setAppState('HUB');
@@ -334,8 +408,13 @@ const App: React.FC = () => {
         onSuccess: (snapshot: CareerContextSnapshot, bridge?: ModuleBridgeSession) => void,
         onSkip: () => void
     ) => {
+        const ownerId = authenticatedOwnerRef.current;
+        const authEpoch = authEpochRef.current;
+        if (!ownerId) return;
+        const launchToken = ++groundingLaunchTokenRef.current;
         try {
             const contextData = await fetchCareerContext();
+            if (!authContextIsCurrent(ownerId, authEpoch) || groundingLaunchTokenRef.current !== launchToken) return;
             const activeItems = (contextData.activeItems || []).filter(i => i.status === 'active' && i.sensitivity !== 'personal_contact' && sourceModules.includes(i.source.module));
             if (activeItems.length === 0) {
                 onSkip();
@@ -352,6 +431,10 @@ const App: React.FC = () => {
                 // lost HTTP response recovers the canonical snapshot/bridge.
                 snapshotClientRequestId: `req_snap_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
                 bridgeClientRequestId: `req_br_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+                ownerId,
+                authEpoch,
+                launchToken,
+                isSubmitting: false,
                 onSuccess,
                 onSkip,
             });
@@ -360,9 +443,20 @@ const App: React.FC = () => {
         }
     };
 
-    const handleModalConfirm = async (selectedItemIds: string[], scope: 'one_time' | 'future_sessions', conflictSelections: Record<string, string>) => {
-        if (!pendingGroundingLaunch) return;
-        const { purpose, sourceModules, targetModule, items, snapshotClientRequestId, bridgeClientRequestId, onSuccess } = pendingGroundingLaunch;
+    const handleModalConfirm = async (selectedItemIds: string[], scope: 'one_time', conflictSelections: Record<string, string>) => {
+        const launch = pendingGroundingLaunch;
+        if (
+            !launch
+            || launch.isSubmitting
+            || groundingSubmissionRef.current !== null
+            || !authContextIsCurrent(launch.ownerId, launch.authEpoch)
+            || groundingLaunchTokenRef.current !== launch.launchToken
+        ) return;
+        groundingSubmissionRef.current = launch.launchToken;
+        setPendingGroundingLaunch(current => current?.launchToken === launch.launchToken
+            ? { ...current, isSubmitting: true }
+            : current);
+        const { purpose, sourceModules, targetModule, items, snapshotClientRequestId, bridgeClientRequestId, onSuccess } = launch;
         const excludedItemIds = items.filter(i => !selectedItemIds.includes(i.id)).map(i => i.id);
 
         try {
@@ -381,6 +475,11 @@ const App: React.FC = () => {
                 },
                 clientRequestId: snapshotClientRequestId,
             });
+            if (
+                !authContextIsCurrent(launch.ownerId, launch.authEpoch)
+                || groundingLaunchTokenRef.current !== launch.launchToken
+                || groundingSubmissionRef.current !== launch.launchToken
+            ) return;
 
             const bridgeRes = await createModuleBridge({
                 sourceModule: sourceModules[0],
@@ -389,14 +488,52 @@ const App: React.FC = () => {
                 snapshotId: snapshotRes.snapshot.id,
                 clientRequestId: bridgeClientRequestId,
             });
+            if (
+                !authContextIsCurrent(launch.ownerId, launch.authEpoch)
+                || groundingLaunchTokenRef.current !== launch.launchToken
+                || groundingSubmissionRef.current !== launch.launchToken
+            ) return;
 
+            groundingLaunchTokenRef.current += 1;
+            groundingSubmissionRef.current = null;
             setPendingGroundingLaunch(null);
             onSuccess(snapshotRes.snapshot, bridgeRes.bridge);
         } catch (err: any) {
             console.error('[Grounding Launch] Failed to create grounding snapshot/bridge:', err);
             // An explicit grounded launch is fail-closed. Keep the consent modal
             // open so retry/cancel remains the user's decision; never downgrade it.
+            if (
+                authContextIsCurrent(launch.ownerId, launch.authEpoch)
+                && groundingLaunchTokenRef.current === launch.launchToken
+            ) {
+                setAuthActionError('Grounded practice could not be prepared. Retry or close the context selection.');
+            }
+        } finally {
+            if (groundingSubmissionRef.current === launch.launchToken) groundingSubmissionRef.current = null;
+            setPendingGroundingLaunch(current => current?.launchToken === launch.launchToken
+                ? { ...current, isSubmitting: false }
+                : current);
         }
+    };
+
+    const closeGroundingLaunch = () => {
+        const launch = pendingGroundingLaunch;
+        if (!launch || launch.isSubmitting || groundingSubmissionRef.current === launch.launchToken) return;
+        groundingLaunchTokenRef.current += 1;
+        setPendingGroundingLaunch(null);
+    };
+
+    const skipGroundingLaunch = () => {
+        const launch = pendingGroundingLaunch;
+        if (
+            !launch
+            || launch.isSubmitting
+            || groundingSubmissionRef.current === launch.launchToken
+            || !authContextIsCurrent(launch.ownerId, launch.authEpoch)
+        ) return;
+        groundingLaunchTokenRef.current += 1;
+        setPendingGroundingLaunch(null);
+        launch.onSkip();
     };
 
     const handleInterviewBridge = (payload: ClearSpeakBridgePayload) => {
@@ -494,6 +631,7 @@ const App: React.FC = () => {
     };
 
     const handleMobileTabClick = (tabId: MobileTabId) => {
+        if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
         if (tabId === 'home') {
             handleRestart();
@@ -632,7 +770,9 @@ const App: React.FC = () => {
                                     sessionContext={sessionContext!}
                                     restoredSession={restoredInterview}
                                     onSessionStarted={(sessionId) => {
-                                        saveActiveInterviewReference(sessionId);
+                                        if (!saveActiveInterviewReference(sessionId)) {
+                                            setAuthActionError('This interview is active, but browser storage could not save a recovery reference. Keep this tab open.');
+                                        }
                                         setRestoredInterview(null);
                                     }}
                                     onReportGenerated={handleReportGenerated}
@@ -679,6 +819,7 @@ const App: React.FC = () => {
                         <ErrorBoundary>
                             <ClearSpeakDashboard
                                 onInterviewBridge={handleInterviewBridge}
+                                onScoreCommitStateChange={setClearSpeakCommitInFlight}
                                 grounding={clearSpeakGrounding || undefined}
                                 onGroundingConsumed={(bridgeId) => {
                                     // A Resume -> ClearSpeak authorization is single use. Clear it
@@ -828,18 +969,17 @@ const App: React.FC = () => {
                                     </div>
                                 </nav>
                             )}
-                            {pendingGroundingLaunch && (
+                            {pendingGroundingLaunch
+                                && pendingGroundingLaunch.ownerId === authenticatedOwnerRef.current
+                                && pendingGroundingLaunch.authEpoch === authEpochRef.current
+                                && (
                                 <GroundingPreviewModal
                                     purpose={pendingGroundingLaunch.purpose}
                                     items={pendingGroundingLaunch.items}
                                     conflicts={pendingGroundingLaunch.conflicts}
                                     onConfirm={handleModalConfirm}
-                                    onSkip={() => {
-                                        const skipFn = pendingGroundingLaunch.onSkip;
-                                        setPendingGroundingLaunch(null);
-                                        skipFn();
-                                    }}
-                                    onClose={() => setPendingGroundingLaunch(null)}
+                                    onSkip={skipGroundingLaunch}
+                                    onClose={closeGroundingLaunch}
                                 />
                             )}
                             <SystemStatus avoidMobileTabs={showMobileTabs} />

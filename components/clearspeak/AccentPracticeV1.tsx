@@ -480,7 +480,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
   };
 
   return (
-    <section className="mx-auto w-full max-w-3xl overflow-x-hidden p-4 text-white sm:p-8" aria-live="polite">
+    <section className="mx-auto w-full max-w-3xl overflow-x-hidden p-4 text-white sm:p-8">
       <button
         onClick={() => { void settleCurrentAttempt().then(settled => { if (settled) onExit(); }); }}
         disabled={transitioning}
@@ -636,6 +636,9 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
           </button>
         </div>
         {historyError && <p role="alert" className="mt-3 text-red-300">{historyError}</p>}
+        <p role="status" aria-live="polite" className="sr-only">
+          {confirmDeleteId ? 'Delete confirmation armed. Activate Confirm delete to permanently remove this attempt.' : ''}
+        </p>
         {!historyLoading && !history.length && !historyError && (
           <p className="mt-3 rounded-xl border border-white/10 p-4">No saved attempts yet. Complete a recording to start your progression history.</p>
         )}
@@ -659,7 +662,9 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
               <button
                 onClick={() => { void deleteAttempt(item.attempt_id); }}
                 disabled={deletingId !== null}
-                aria-label="Delete this accent practice attempt"
+                aria-label={confirmDeleteId === item.attempt_id
+                  ? 'Confirm deleting this accent practice attempt'
+                  : 'Delete this accent practice attempt'}
                 className="ml-2 mt-3 rounded-lg border border-red-300/40 px-3 py-2 text-sm disabled:opacity-60"
               >
                 {deletingId === item.attempt_id

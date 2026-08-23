@@ -9,6 +9,7 @@ if (!connectionString) {
 
 const client = new Client({ connectionString });
 const userId = '90000000-0000-4000-8000-000000000001';
+const otherUserId = '90000000-0000-4000-8000-000000000002';
 const itemId = '95000000-0000-4000-8000-000000000001';
 const hash = '9'.repeat(64);
 
@@ -98,11 +99,48 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
 
+async function expectAuthenticatedDenied(label, statement, params = []) {
+  const savepoint = `deny_${label.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`;
+  await client.query(`savepoint ${savepoint}`);
+  let denied = false;
+  try {
+    await client.query(`select set_config('request.jwt.claim.sub',$1,true)`, [userId]);
+    await client.query('set local role authenticated');
+    await client.query(statement, params);
+  } catch (error) {
+    denied = error.code === '42501';
+  } finally {
+    await client.query(`rollback to savepoint ${savepoint}`);
+  }
+  assert(denied, `${label} was not denied to the authenticated role`);
+}
+
+async function authenticatedSelect(statement, params = []) {
+  await client.query('savepoint authenticated_select');
+  try {
+    await client.query(`select set_config('request.jwt.claim.sub',$1,true)`, [userId]);
+    await client.query('set local role authenticated');
+    return await client.query(statement, params);
+  } finally {
+    await client.query('rollback to savepoint authenticated_select');
+  }
+}
+
 try {
   await client.connect();
   await client.query('begin');
   await client.query(
     `insert into auth.users (id,email) values ($1::uuid,'score-provenance@example.test')`,
+    [userId],
+  );
+  await client.query(
+    `insert into auth.users (id,email) values ($1::uuid,'score-provenance-other@example.test')`,
+    [otherUserId],
+  );
+  await client.query(
+    `insert into public.profiles (user_id,clearspeak_beta_enabled)
+     values ($1::uuid,false)
+     on conflict (user_id) do update set clearspeak_beta_enabled=false`,
     [userId],
   );
   await client.query(
@@ -116,11 +154,70 @@ try {
     select
       has_function_privilege('service_role','public.finalize_clearspeak_grounded_score_tx(uuid,uuid,uuid,uuid,text,jsonb,text[],jsonb,uuid)','EXECUTE') service_execute,
       has_function_privilege('authenticated','public.finalize_clearspeak_grounded_score_tx(uuid,uuid,uuid,uuid,text,jsonb,text[],jsonb,uuid)','EXECUTE') authenticated_execute,
-      has_function_privilege('anon','public.finalize_clearspeak_grounded_score_tx(uuid,uuid,uuid,uuid,text,jsonb,text[],jsonb,uuid)','EXECUTE') anon_execute
+      has_function_privilege('anon','public.finalize_clearspeak_grounded_score_tx(uuid,uuid,uuid,uuid,text,jsonb,text[],jsonb,uuid)','EXECUTE') anon_execute,
+      has_table_privilege('authenticated','public.profiles','SELECT') authenticated_profiles_select,
+      has_table_privilege('authenticated','public.profiles','INSERT') authenticated_profiles_insert,
+      has_table_privilege('authenticated','public.profiles','UPDATE') authenticated_profiles_update,
+      has_table_privilege('authenticated','public.clearspeak_sessions','INSERT') authenticated_sessions_insert,
+      has_table_privilege('authenticated','public.clearspeak_progress','UPDATE') authenticated_progress_update,
+      has_table_privilege('anon','public.profiles','UPDATE') anon_profiles_update,
+      has_table_privilege('anon','public.clearspeak_sessions','INSERT') anon_sessions_insert,
+      has_table_privilege('anon','public.clearspeak_progress','UPDATE') anon_progress_update,
+      has_table_privilege('service_role','public.profiles','UPDATE') service_profiles_update,
+      has_table_privilege('service_role','public.clearspeak_sessions','INSERT') service_sessions_insert,
+      has_table_privilege('service_role','public.clearspeak_progress','UPDATE') service_progress_update
   `);
   assert(acl.rows[0]?.service_execute && !acl.rows[0]?.authenticated_execute && !acl.rows[0]?.anon_execute,
     'Grounded score finalization RPC is not service-role-only');
   console.log('  ✓ grounded score finalization RPC is service-role-only');
+  assert(acl.rows[0]?.authenticated_profiles_select
+      && !acl.rows[0]?.authenticated_profiles_insert
+      && !acl.rows[0]?.authenticated_profiles_update
+      && !acl.rows[0]?.authenticated_sessions_insert
+      && !acl.rows[0]?.authenticated_progress_update
+      && !acl.rows[0]?.anon_profiles_update
+      && !acl.rows[0]?.anon_sessions_insert
+      && !acl.rows[0]?.anon_progress_update
+      && acl.rows[0]?.service_profiles_update
+      && acl.rows[0]?.service_sessions_insert
+      && acl.rows[0]?.service_progress_update,
+    'ClearSpeak beta/score/progress table grants do not enforce server-only writes');
+  console.log('  ✓ beta entitlement, score, and progress writes are service-role-only');
+
+  const ownProfile = await authenticatedSelect(
+    `select user_id from public.profiles where user_id=$1::uuid`,
+    [userId],
+  );
+  assert(ownProfile.rowCount === 1, 'Authenticated owner could not retain required profile read access');
+
+  await expectAuthenticatedDenied(
+    'beta self enable',
+    `update public.profiles set clearspeak_beta_enabled=true where user_id=$1::uuid`,
+    [userId],
+  );
+  await expectAuthenticatedDenied(
+    'profile insert',
+    `insert into public.profiles(user_id,clearspeak_beta_enabled) values($1::uuid,true)`,
+    [otherUserId],
+  );
+
+  await client.query('set local role service_role');
+  await client.query(
+    `update public.profiles set clearspeak_beta_enabled=true where user_id=$1::uuid`,
+    [userId],
+  );
+  await client.query('reset role');
+  const serviceEnabled = await client.query(
+    `select clearspeak_beta_enabled from public.profiles where user_id=$1::uuid`,
+    [userId],
+  );
+  assert(serviceEnabled.rows[0]?.clearspeak_beta_enabled === true,
+    'Service role could not manage the ClearSpeak beta entitlement');
+  await client.query(
+    `update public.profiles set clearspeak_beta_enabled=false where user_id=$1::uuid`,
+    [userId],
+  );
+  console.log('  ✓ authenticated self-enable/insert denied while service-role entitlement update succeeds');
 
   await client.query(
     `insert into public.clearspeak_progress
@@ -128,6 +225,42 @@ try {
      values ($1::uuid,2,current_date-1,'[99,99]'::jsonb,'{"legacy":99}'::jsonb,'legacy',2,null)`,
     [userId],
   );
+
+  await expectAuthenticatedDenied(
+    'score insert',
+    `insert into public.clearspeak_sessions(user_id,topic_tag,score)
+     values($1::uuid,'forged',$2::jsonb)`,
+    [userId, JSON.stringify(score(90))],
+  );
+  await expectAuthenticatedDenied(
+    'progress update',
+    `update public.clearspeak_progress set clarity_trend='[100]'::jsonb where user_id=$1::uuid`,
+    [userId],
+  );
+  console.log('  ✓ authenticated users cannot forge score sessions or score-derived progress');
+
+  for (const [label, invalidScore] of [
+    ['out-of-range', score(101)],
+    ['extra-field', { ...score(80), attackerAuthority: true }],
+    ['wrong-type', { ...score(80), measuredWpm: 'fast' }],
+  ]) {
+    const invalidScoreSavepoint = `invalid_score_${label.replace(/[^a-z0-9]/gi, '_')}`;
+    await client.query(`savepoint ${invalidScoreSavepoint}`);
+    let constraintRejected = false;
+    try {
+      await client.query(
+        `insert into public.clearspeak_sessions(user_id,topic_tag,score)
+         values($1::uuid,$2,$3::jsonb)`,
+        [userId, `invalid_${label}`, JSON.stringify(invalidScore)],
+      );
+    } catch (error) {
+      constraintRejected = error.code === '23514';
+    } finally {
+      await client.query(`rollback to savepoint ${invalidScoreSavepoint}`);
+    }
+    assert(constraintRejected, `${label} persisted score bypassed the verified score constraint`);
+  }
+  console.log('  ✓ new persisted scores reject out-of-range, extra, and wrong-type fields');
 
   const first = await createGroundedFixture(1);
   await client.query('savepoint unprovenanced_score');

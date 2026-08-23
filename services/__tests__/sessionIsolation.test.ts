@@ -62,7 +62,7 @@ describe('web session local-data isolation', () => {
   it('clears all MockMate local data only after sign-out succeeds', async () => {
     bindLocalPracticeDataOwner('user-a');
     localStorage.setItem('mockmate_session_history', 'user-a-report');
-    await clearLocalDataAfterConfirmedSignOut(async () => undefined);
+    await expect(clearLocalDataAfterConfirmedSignOut(async () => undefined)).resolves.toEqual({ localDataCleared: true });
     expect(localStorage.getItem(LOCAL_PRACTICE_OWNER_KEY)).toBeNull();
     expect(localStorage.getItem('mockmate_session_history')).toBeNull();
   });
@@ -71,7 +71,7 @@ describe('web session local-data isolation', () => {
     await expect(deleteAppDataThenAttemptSignOut(
       async () => ({ success: true }),
       async () => { throw new Error('session cleanup failed'); },
-    )).resolves.toEqual({ deleted: true, signedOut: false });
+    )).resolves.toEqual({ deleted: true, signedOut: false, localDataCleared: true });
   });
 
   it('rejects when server deletion itself is not confirmed', async () => {
@@ -81,5 +81,24 @@ describe('web session local-data isolation', () => {
       signOutAction,
     )).rejects.toThrow(/could not confirm/i);
     expect(signOutAction).not.toHaveBeenCalled();
+  });
+
+  it('degrades safely when browser storage is unavailable', async () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: () => { throw new Error('storage denied'); },
+        setItem: () => { throw new Error('storage denied'); },
+        removeItem: () => { throw new Error('storage denied'); },
+        key: () => { throw new Error('storage denied'); },
+        get length() { throw new Error('storage denied'); },
+      },
+    });
+
+    expect(() => bindLocalPracticeDataOwner('user-a')).not.toThrow();
+    expect(bindLocalPracticeDataOwner('user-a')).toBe('storage_unavailable');
+    expect(readLocalUserProfile()).toBeNull();
+    await expect(clearLocalDataAfterConfirmedSignOut(async () => undefined))
+      .resolves.toEqual({ localDataCleared: false });
   });
 });

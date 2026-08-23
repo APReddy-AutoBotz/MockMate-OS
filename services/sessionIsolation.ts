@@ -3,12 +3,13 @@ import type { UserProfile } from '../types/ui';
 
 export const LOCAL_PRACTICE_OWNER_KEY = 'mockmate_local_owner_uid';
 const LOCAL_USER_PROFILE_KEY = 'mockmate_user_profile';
+export type LocalPracticeOwnerBinding = 'preserved' | 'cleared' | 'storage_unavailable';
 
 /** Parse browser-owned profile state without allowing malformed JSON to stall auth startup. */
 export function readLocalUserProfile(): UserProfile | null {
-  const raw = localStorage.getItem(LOCAL_USER_PROFILE_KEY);
-  if (!raw) return null;
   try {
+    const raw = localStorage.getItem(LOCAL_USER_PROFILE_KEY);
+    if (!raw) return null;
     const candidate = JSON.parse(raw) as Record<string, unknown>;
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new Error('invalid profile');
     const stringFields = ['name', 'targetRole', 'companyName', 'companyUrl', 'experienceLevel', 'primaryGoal'] as const;
@@ -26,7 +27,11 @@ export function readLocalUserProfile(): UserProfile | null {
     if (!sanitized.name?.trim()) throw new Error('profile name is required');
     return sanitized;
   } catch {
-    localStorage.removeItem(LOCAL_USER_PROFILE_KEY);
+    try {
+      localStorage.removeItem(LOCAL_USER_PROFILE_KEY);
+    } catch {
+      // Storage may be unavailable (privacy mode, quota, or browser policy).
+    }
     return null;
   }
 }
@@ -35,34 +40,44 @@ export function readLocalUserProfile(): UserProfile | null {
  * Bind browser-local practice data to the authenticated owner. Legacy data has
  * no owner marker and is cleared on first upgraded login rather than guessed.
  */
-export function bindLocalPracticeDataOwner(userId: string): 'preserved' | 'cleared' {
+export function bindLocalPracticeDataOwner(userId: string): LocalPracticeOwnerBinding {
   if (!userId) throw new Error('Authenticated user id is required for local data ownership');
-  const currentOwner = localStorage.getItem(LOCAL_PRACTICE_OWNER_KEY);
+  let currentOwner: string | null;
+  try {
+    currentOwner = localStorage.getItem(LOCAL_PRACTICE_OWNER_KEY);
+  } catch {
+    return 'storage_unavailable';
+  }
   const outcome = currentOwner === userId ? 'preserved' : 'cleared';
-  if (outcome === 'cleared') clearLocalPracticeData();
-  localStorage.setItem(LOCAL_PRACTICE_OWNER_KEY, userId);
+  if (outcome === 'cleared' && !clearLocalPracticeData()) return 'storage_unavailable';
+  try {
+    localStorage.setItem(LOCAL_PRACTICE_OWNER_KEY, userId);
+  } catch {
+    return 'storage_unavailable';
+  }
   return outcome;
 }
 
 /** Never present a logged-out UI or clear the current owner's data first. */
 export async function clearLocalDataAfterConfirmedSignOut(
   signOutAction: () => Promise<unknown>,
-): Promise<void> {
+): Promise<{ localDataCleared: boolean }> {
   await signOutAction();
-  clearLocalPracticeData();
+  return { localDataCleared: clearLocalPracticeData() };
 }
 
 /** Keep irreversible server-deletion truth separate from best-effort sign-out. */
 export async function deleteAppDataThenAttemptSignOut(
   deleteAction: () => Promise<{ success: boolean }>,
   signOutAction: () => Promise<unknown>,
-): Promise<{ deleted: true; signedOut: boolean }> {
+): Promise<{ deleted: true; signedOut: boolean; localDataCleared: boolean }> {
   const deletion = await deleteAction();
   if (!deletion.success) throw new Error('MockMate could not confirm app data deletion.');
+  const localDataCleared = clearLocalPracticeData();
   try {
     await signOutAction();
-    return { deleted: true, signedOut: true };
+    return { deleted: true, signedOut: true, localDataCleared };
   } catch {
-    return { deleted: true, signedOut: false };
+    return { deleted: true, signedOut: false, localDataCleared };
   }
 }

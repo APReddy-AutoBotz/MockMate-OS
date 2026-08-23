@@ -167,7 +167,7 @@ const SessionControlsEditor: React.FC<SessionControlsEditorProps> = ({ controls,
                                 className={`relative flex flex-col items-center gap-2 pt-4 pb-3 rounded-xl border transition-all duration-250 overflow-hidden ${
                                     active
                                         ? 'border-brand-primary/60 bg-brand-primary/8 text-brand-primary'
-                                        : 'border-white/[0.07] bg-white/[0.02] text-white/25 hover:border-white/15 hover:text-white/50'
+                                        : 'border-white/[0.12] bg-white/[0.03] text-white/70 hover:border-white/25 hover:text-white'
                                 }`}
                             >
                                 {/* Active top accent bar */}
@@ -196,7 +196,7 @@ const SessionControlsEditor: React.FC<SessionControlsEditorProps> = ({ controls,
                         <p className={`text-xs font-bold uppercase tracking-[0.3em] transition-colors ${opt.checked ? 'text-white' : 'text-white/40'}`}>
                             {opt.label}
                         </p>
-                        <p className="text-[10px] text-white/25 mt-0.5 leading-relaxed font-normal">{opt.desc}</p>
+                        <p className="text-[10px] text-white/70 mt-0.5 leading-relaxed font-normal">{opt.desc}</p>
                     </div>
                     <Toggle on={opt.checked} onToggle={opt.onToggle} />
                 </div>

@@ -11,6 +11,7 @@ import {
   AnswerSubmissionResponseSchema,
   ATSDiagnosticsResultSchema,
   ClearSpeakProfileSchema,
+  ClearSpeakGenerateRequestSchema,
   ClearSpeakSessionContentSchema,
   ClearSpeakSessionScoreSchema,
   TranscribeAudioResponseSchema,
@@ -196,6 +197,27 @@ describe('Shared Canonical Runtime Contracts', () => {
       generationArtifactId: '11111111-1111-4111-8111-111111111111',
       generationArtifactHash: 'a'.repeat(64),
     }).success).toBe(true);
+    expect(ClearSpeakSessionContentSchema.safeParse({
+      ...content,
+      passageData: Array.from({ length: 51 }, () => ({
+        text: 'x'.repeat(240),
+        isStressed: false,
+        pauseType: 'none',
+      })),
+    }).success).toBe(false);
+    expect(ClearSpeakSessionContentSchema.safeParse({
+      ...content,
+      keyVocab: Array.from({ length: 33 }, (_, index) => `word-${index}`),
+    }).success).toBe(false);
+
+    expect(ClearSpeakGenerateRequestSchema.safeParse({
+      recentTopics: ['system_design'],
+      sessionAttemptLength: 5,
+    }).success).toBe(true);
+    expect(ClearSpeakGenerateRequestSchema.safeParse({
+      recentTopics: Array.from({ length: 21 }, (_, index) => `topic-${index}`),
+    }).success).toBe(false);
+    expect(ClearSpeakGenerateRequestSchema.safeParse({ attackerAuthority: true }).success).toBe(false);
 
     const score = {
       clarity: 80,
@@ -214,6 +236,15 @@ describe('Shared Canonical Runtime Contracts', () => {
       ...score,
       evidenceBasis: undefined,
     }).success).toBe(false);
+    for (const invalidScore of [
+      { ...score, clarity: 101 },
+      { ...score, pacing: Number.NaN },
+      { ...score, hardWordBonus: 6 },
+      { ...score, measuredWpm: -1 },
+      { ...score, feedbackTip: 'x'.repeat(1_001) },
+    ]) {
+      expect(ClearSpeakSessionScoreSchema.safeParse(invalidScore).success).toBe(false);
+    }
   });
 
   it('validates TranscribeAudioResponseSchema discriminated union for valid and invalid combinations', () => {

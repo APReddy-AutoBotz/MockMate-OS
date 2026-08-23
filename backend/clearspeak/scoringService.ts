@@ -16,11 +16,13 @@
 
 import OpenAI from 'openai';
 import { Readable } from 'stream';
-import type {
-  ClearSpeakSessionContent,
-  ClearSpeakSessionScore,
-  HardWordEntry,
+import {
+  ClearSpeakSessionScoreSchema,
+  type ClearSpeakSessionContent,
+  type ClearSpeakSessionScore,
+  type HardWordEntry,
 } from 'mockmate-shared';
+import { runtimeMode } from '../config/runtimeConfig';
 import { WPM_BANDS } from './contentSchema';
 
 export const CLEAR_SPEAK_SCORE_EVIDENCE_BASIS = 'transcript_timing_heuristic' as const;
@@ -43,6 +45,24 @@ export function isClearSpeakScoringAvailable(
   return Boolean(env.GROQ_API_KEY?.trim());
 }
 
+/**
+ * User-facing scored practice stays fail-closed until generation and scoring
+ * can reserve quota atomically before provider work. The isolated test runtime
+ * may still exercise the adapter; development, preview and production cannot.
+ */
+export function isGovernedClearSpeakScoringAvailable(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  try {
+    return runtimeMode(env) === 'test' && isClearSpeakScoringAvailable(env);
+  } catch {
+    return false;
+  }
+}
+
+const MAX_TRANSCRIPT_TEXT_CHARS = 12_000;
+const MAX_TRANSCRIPT_WORDS = 4_096;
+
 // ─── Transcript Shape ─────────────────────────────────────────────────────────
 
 interface TranscriptWord {
@@ -54,6 +74,41 @@ interface TranscriptWord {
 interface TranscriptResult {
   text: string;
   words: TranscriptWord[];
+}
+
+export function validateTranscriptEvidence(input: unknown): TranscriptResult {
+  if (!input || typeof input !== 'object') {
+    throw new ClearSpeakScoringUnavailableError('Speech timing evidence was unavailable. Please try the recording again.');
+  }
+  const candidate = input as { text?: unknown; words?: unknown };
+  if (typeof candidate.text !== 'string' || candidate.text.trim().length === 0 ||
+      candidate.text.length > MAX_TRANSCRIPT_TEXT_CHARS || !Array.isArray(candidate.words) ||
+      candidate.words.length < 2 || candidate.words.length > MAX_TRANSCRIPT_WORDS) {
+    throw new ClearSpeakScoringUnavailableError('Speech timing evidence was unavailable. Please try the recording again.');
+  }
+
+  const words: TranscriptWord[] = [];
+  let previousStart = -1;
+  let previousEnd = -1;
+  for (const rawWord of candidate.words) {
+    if (!rawWord || typeof rawWord !== 'object') {
+      throw new ClearSpeakScoringUnavailableError('Speech timing evidence was unavailable. Please try the recording again.');
+    }
+    const { word, start, end } = rawWord as { word?: unknown; start?: unknown; end?: unknown };
+    if (typeof word !== 'string' || word.trim().length === 0 || word.length > 240 ||
+        typeof start !== 'number' || typeof end !== 'number' ||
+        !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start ||
+        start < previousStart || end < previousEnd) {
+      throw new ClearSpeakScoringUnavailableError('Speech timing evidence was unavailable. Please try the recording again.');
+    }
+    words.push({ word, start, end });
+    previousStart = start;
+    previousEnd = end;
+  }
+  if (words[words.length - 1].end <= words[0].start) {
+    throw new ClearSpeakScoringUnavailableError('Speech timing evidence was unavailable. Please try the recording again.');
+  }
+  return { text: candidate.text, words };
 }
 
 // ─── Transcribe Audio ─────────────────────────────────────────────────────────
@@ -97,14 +152,10 @@ async function transcribeAudio(audioBuffer: Buffer): Promise<TranscriptResult> {
       timestamp_granularities: ['word'],
     });
 
-    // verbose_json returns `words` array with { word, start, end }
-    const words: TranscriptWord[] = (response as any).words?.map((w: any) => ({
-      word:  w.word,
-      start: w.start,
-      end:   w.end,
-    })) ?? [];
-
-    return { text: response.text ?? '', words };
+    return validateTranscriptEvidence({
+      text: response.text,
+      words: (response as any).words,
+    });
   } finally {
     // File construction requires a plain typed-array copy. Erase that copy on
     // every provider outcome; the caller separately erases the source buffer.
@@ -270,19 +321,24 @@ export function normaliseForScoring(text: string): string {
 
 // ─── Levenshtein Transcript-Match Score ───────────────────────────────────────
 
-function levenshtein(a: string, b: string): number {
-  const m = a.length, n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
-    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
-  );
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      dp[i][j] = a[i - 1] === b[j - 1]
-        ? dp[i - 1][j - 1]
-        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+export function boundedLevenshteinDistance(a: string, b: string): number {
+  // Retain only two rows and place the shorter string on the columns. Memory is
+  // O(min(m,n)); request/schema limits separately bound CPU work.
+  const [longer, shorter] = a.length >= b.length ? [a, b] : [b, a];
+  let previous = new Uint32Array(shorter.length + 1);
+  let current = new Uint32Array(shorter.length + 1);
+  for (let column = 0; column <= shorter.length; column++) previous[column] = column;
+
+  for (let row = 1; row <= longer.length; row++) {
+    current[0] = row;
+    for (let column = 1; column <= shorter.length; column++) {
+      current[column] = longer[row - 1] === shorter[column - 1]
+        ? previous[column - 1]
+        : 1 + Math.min(previous[column], current[column - 1], previous[column - 1]);
     }
+    [previous, current] = [current, previous];
   }
-  return dp[m][n];
+  return previous[shorter.length];
 }
 
 /**
@@ -302,7 +358,7 @@ function calcClarity(expected: string, actual: string): number {
   const a = normaliseForScoring(actual);
   if (!e) return 100;
   if (!a) return 0;
-  const dist = levenshtein(e, a);
+  const dist = boundedLevenshteinDistance(e, a);
   const maxLen = Math.max(e.length, a.length);
   return Math.round(Math.max(0, (1 - dist / maxLen) * 100));
 }
@@ -321,7 +377,10 @@ function calcPacing(
   if (words.length < 2) return { score: 0, measuredWpm: 0 };
 
   const durationSeconds = words[words.length - 1].end - words[0].start;
-  const measuredWpm = Math.round((words.length / durationSeconds) * 60);
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return { score: 0, measuredWpm: 0 };
+  }
+  const measuredWpm = Math.min(1_000, Math.max(0, Math.round((words.length / durationSeconds) * 60)));
 
   const band = WPM_BANDS[level];
   const [low, high] = band.target;
@@ -476,8 +535,6 @@ export interface ScoreInput {
   content: ClearSpeakSessionContent;
   userLevel: 1 | 2 | 3;
   hardWords: HardWordEntry[];
-  /** Whether the user retried the retry_sentence and succeeded */
-  retryAttempted: boolean;
 }
 
 /**
@@ -491,7 +548,7 @@ export interface ScoreInput {
  * The caller must NOT store the audioBuffer after this returns.
  */
 export async function scoreSession(input: ScoreInput): Promise<ClearSpeakSessionScore> {
-  const { audioBuffer, content, userLevel, hardWords, retryAttempted } = input;
+  const { audioBuffer, content, userLevel, hardWords } = input;
 
   try {
     if (!isClearSpeakScoringAvailable()) {
@@ -500,17 +557,19 @@ export async function scoreSession(input: ScoreInput): Promise<ClearSpeakSession
 
     // 1. Transcribe — the buffer remains memory-only.
     const transcript = await transcribeAudio(audioBuffer);
+    const transcriptText = transcript.text.slice(0, MAX_TRANSCRIPT_TEXT_CHARS);
+    const transcriptWords = transcript.words.slice(0, MAX_TRANSCRIPT_WORDS);
 
     // Build expected full text from passageData tokens.
     const expectedText = content.passageData.map(t => t.text).join(' ');
 
     // 2. Calculate bounded practice heuristics.
-    const clarity = calcClarity(expectedText, transcript.text);
-    const { score: pacing, measuredWpm } = calcPacing(transcript.words, userLevel);
-    const rhythm = calcRhythm(transcript.words, content, pacing);
+    const clarity = calcClarity(expectedText, transcriptText);
+    const { score: pacing, measuredWpm } = calcPacing(transcriptWords, userLevel);
+    const rhythm = calcRhythm(transcriptWords, content, pacing);
 
     // 3. Hard-word modifier.
-    const hardWordBonus = calcHardWordBonus(transcript.text, hardWords);
+    const hardWordBonus = calcHardWordBonus(transcriptText, hardWords);
 
     // 4. Composite: transcript match×0.5 + pace×0.25 + pause timing×0.25.
     const composite = Math.min(
@@ -518,7 +577,7 @@ export async function scoreSession(input: ScoreInput): Promise<ClearSpeakSession
       Math.round(clarity * 0.5 + pacing * 0.25 + rhythm * 0.25 + hardWordBonus)
     );
 
-    return {
+    return ClearSpeakSessionScoreSchema.parse({
       clarity,
       pacing,
       rhythm,
@@ -526,10 +585,11 @@ export async function scoreSession(input: ScoreInput): Promise<ClearSpeakSession
       hardWordBonus,
       feedbackTip: buildFeedbackTip(clarity, pacing, rhythm),
       measuredWpm,
-      retrySuccess: retryAttempted && clarity >= 70,
+      // A browser boolean cannot prove that a distinct retry was performed.
+      retrySuccess: false,
       evidenceBasis: CLEAR_SPEAK_SCORE_EVIDENCE_BASIS,
       pronunciationAssessed: false,
-    };
+    });
   } finally {
     // Zero the actual allocation on success, provider failure, timeout, or
     // unavailable configuration. Nulling a reference alone does not erase audio.

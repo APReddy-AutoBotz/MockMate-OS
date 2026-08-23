@@ -70,9 +70,16 @@ describe('ClearSpeak accent V1 truth and authority', () => {
     expect(AccentScoreV1Schema.parse(score)).toEqual(score);
   });
 
-  it('projects each history row with its actual provenance and evidence status', () => {
+  it('replays a non-word history row with its persisted prompt-derived practice mode', () => {
     const result = unsupportedUserAudioResult('10000000-0000-4000-a000-000000000099', prompt);
-    expect(projectAccentHistoryAttempt({ fixture: false, evidence_provenance: 'user_recording_unscored', result })).toMatchObject({
+    const phrasePrompt = promptFor(ACCENT_PROFILES[0], 'phrase');
+    expect(projectAccentHistoryAttempt({
+      prompt_id: phrasePrompt.promptId,
+      fixture: false,
+      evidence_provenance: 'user_recording_unscored',
+      result,
+    })).toMatchObject({
+      practiceMode: 'phrase',
       fixture: false,
       evidenceProvenance: 'user_recording_unscored',
       evidenceStatus: {

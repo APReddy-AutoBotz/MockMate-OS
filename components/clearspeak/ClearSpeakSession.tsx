@@ -38,6 +38,8 @@ interface ClearSpeakSessionProps {
    * Carries the full structured bridge payload (contract: ClearSpeakBridgePayload).
    */
   onInterviewBridge: (payload: ClearSpeakBridgePayload) => void;
+  /** Notifies App while a score request may commit quota/progress server-side. */
+  onScoreCommitStateChange?: (inFlight: boolean) => void;
   /** Called when session fully completes */
   onComplete: (topicTag?: string) => void;
   /** Called once when a grounded score reaches canonical completion (including replay). */
@@ -125,6 +127,7 @@ const INITIAL_STATE: SessionState = {
 
 const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   onInterviewBridge,
+  onScoreCommitStateChange,
   onComplete,
   onCanonicalGroundedScore,
   recentTopics = [],
@@ -149,6 +152,11 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   // Track whether feedback widget is showing
   const [showFeedback, setShowFeedback] = useState(false);
   const notifiedGroundedCompletion = useRef<string | null>(null);
+
+  useEffect(() => {
+    onScoreCommitStateChange?.(state.phase === 'processing');
+    return () => onScoreCommitStateChange?.(false);
+  }, [onScoreCommitStateChange, state.phase]);
 
   // SCORE_RECEIVED is the canonical completion boundary for a grounded attempt.
   // Notify the application here rather than waiting for a later score-card action,

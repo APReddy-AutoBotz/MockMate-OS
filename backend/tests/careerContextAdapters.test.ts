@@ -131,6 +131,27 @@ describe('Career Context Pure Adapters', () => {
 
       expect(items.some(item => item.kind === 'practice_metric')).toBe(false);
     });
+
+    it('does not promote malformed or out-of-range persisted scores as system observations', () => {
+      const items = buildClearSpeakContextItems({
+        sessionRecordId: 'forged_session',
+        sessionScore: {
+          clarity: 150,
+          pacing: 90,
+          rhythm: 85,
+          composite: 150,
+          hardWordBonus: 1,
+          feedbackTip: 'Forged score',
+          measuredWpm: 125,
+          retrySuccess: true,
+          evidenceBasis: 'transcript_timing_heuristic',
+          pronunciationAssessed: false,
+        } as any,
+      });
+
+      expect(items.some(item => item.provenance === 'system_observed')).toBe(false);
+      expect(items.some(item => item.kind === 'practice_metric')).toBe(false);
+    });
   });
 
   describe('Interview Context Adapter', () => {

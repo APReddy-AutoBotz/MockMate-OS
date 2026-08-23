@@ -26,7 +26,7 @@ import { trackQuestionUsage } from '../services/storageService';
 
 interface MockSessionProps {
   sessionContext: InterviewSessionContext;
-  onReportGenerated: (report: FinalReport) => void;
+  onReportGenerated: (report: FinalReport, sessionId?: string) => void;
   onCancel: () => void;
   restoredSession?: InterviewSessionResume | null;
   onSessionStarted?: (sessionId: string) => void;
@@ -107,7 +107,7 @@ const MockSession: React.FC<MockSessionProps> = ({
           if (restoredSession.status === 'awaiting_report') {
             setSessionPhase('generating_report');
             const report = await generateFinalReport(restoredSession.id);
-            onReportGenerated(report);
+            onReportGenerated(report, restoredSession.id);
             return;
           }
 
@@ -360,7 +360,7 @@ const MockSession: React.FC<MockSessionProps> = ({
     setReportError('');
     try {
       const report = await generateFinalReport(sessionId);
-      onReportGenerated(report);
+      onReportGenerated(report, sessionId);
     } catch (error) {
       setReportError('Report generation failed. Please try again, or exit without results.');
       setSessionPhase('confirm_exit');

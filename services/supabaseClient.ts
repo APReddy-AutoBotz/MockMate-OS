@@ -137,7 +137,8 @@ export const signOut = async (_authObj?: any) => {
     return;
   }
   if (supabase) {
-    await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut();
+    if (error) throw Object.assign(error, { code: 'auth/signout-failed' });
   }
 };
 

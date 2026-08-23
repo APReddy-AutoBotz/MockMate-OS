@@ -16,10 +16,12 @@ jest.mock('../../services/clearSpeakService', () => ({
 
 jest.mock('../clearspeak/ClearSpeakSession', () => ({
   __esModule: true,
-  default: ({ onCanonicalGroundedScore, grounding }: any) => (
+  default: ({ onCanonicalGroundedScore, onScoreCommitStateChange, grounding }: any) => (
     <div>
-      <button onClick={() => onCanonicalGroundedScore?.(grounding.bridge.id)}>canonical score</button>
+      {grounding && <button onClick={() => onCanonicalGroundedScore?.(grounding.bridge.id)}>canonical score</button>}
       <button>failed score</button>
+      <button onClick={() => onScoreCommitStateChange?.(true)}>start score commit</button>
+      <button onClick={() => onScoreCommitStateChange?.(false)}>finish score commit</button>
     </div>
   ),
 }));
@@ -97,5 +99,20 @@ describe('Resume to ClearSpeak one-time grounding lifecycle', () => {
     expect(await screen.findByText('Speaking practice did not load')).toBeInTheDocument();
     expect(screen.getByText('Network unavailable')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+  });
+
+  it('forwards score commit state so App can block global navigation', async () => {
+    const onScoreCommitStateChange = jest.fn();
+    render(
+      <ClearSpeakDashboard
+        onInterviewBridge={jest.fn()}
+        onScoreCommitStateChange={onScoreCommitStateChange}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("Start today's scored practice"));
+    fireEvent.click(screen.getByText('start score commit'));
+    fireEvent.click(screen.getByText('finish score commit'));
+    expect(onScoreCommitStateChange.mock.calls).toEqual([[true], [false]]);
   });
 });

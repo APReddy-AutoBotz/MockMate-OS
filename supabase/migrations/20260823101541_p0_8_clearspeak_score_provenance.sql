@@ -98,3 +98,79 @@ END; $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp;
 
 REVOKE EXECUTE ON FUNCTION public.finalize_clearspeak_grounded_score_tx(UUID,UUID,UUID,UUID,TEXT,JSONB,TEXT[],JSONB,UUID) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.finalize_clearspeak_grounded_score_tx(UUID,UUID,UUID,UUID,TEXT,JSONB,TEXT[],JSONB,UUID) TO service_role;
+
+-- Client sessions may read their own rows, but all beta entitlement, score,
+-- and score-derived progress writes are server-authoritative. RLS policies and
+-- table grants are both narrowed so a future API request cannot self-enable the
+-- beta or forge verified progress.
+REVOKE ALL ON TABLE public.profiles FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public.clearspeak_sessions FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public.clearspeak_progress FROM PUBLIC, anon, authenticated;
+
+GRANT SELECT ON TABLE public.profiles TO authenticated;
+GRANT SELECT ON TABLE public.clearspeak_sessions TO authenticated;
+GRANT SELECT ON TABLE public.clearspeak_progress TO authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.profiles TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.clearspeak_sessions TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.clearspeak_progress TO service_role;
+
+DROP POLICY IF EXISTS "profiles owner access" ON public.profiles;
+CREATE POLICY "profiles owner access" ON public.profiles
+  FOR SELECT TO authenticated
+  USING (user_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "clearspeak sessions owner access" ON public.clearspeak_sessions;
+CREATE POLICY "clearspeak sessions owner access" ON public.clearspeak_sessions
+  FOR SELECT TO authenticated
+  USING (user_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "clearspeak progress owner access" ON public.clearspeak_progress;
+CREATE POLICY "clearspeak progress owner access" ON public.clearspeak_progress
+  FOR SELECT TO authenticated
+  USING (user_id = (SELECT auth.uid()));
+
+-- Legacy score rows predate explicit evidence provenance, so validate only new
+-- writes. Every new score must have the exact governed shape and bounded values.
+ALTER TABLE public.clearspeak_sessions
+  DROP CONSTRAINT IF EXISTS clearspeak_sessions_score_verified_check;
+
+ALTER TABLE public.clearspeak_sessions
+  ADD CONSTRAINT clearspeak_sessions_score_verified_check
+  CHECK (
+    CASE
+      WHEN jsonb_typeof(score) IS DISTINCT FROM 'object' THEN FALSE
+      WHEN (score ?& ARRAY[
+        'clarity','pacing','rhythm','composite','hardWordBonus','feedbackTip',
+        'measuredWpm','retrySuccess','evidenceBasis','pronunciationAssessed'
+      ]) IS DISTINCT FROM TRUE THEN FALSE
+      WHEN (score - ARRAY[
+        'clarity','pacing','rhythm','composite','hardWordBonus','feedbackTip',
+        'measuredWpm','retrySuccess','evidenceBasis','pronunciationAssessed'
+      ]::TEXT[]) IS DISTINCT FROM '{}'::jsonb THEN FALSE
+      WHEN jsonb_typeof(score->'clarity') IS DISTINCT FROM 'number'
+        OR jsonb_typeof(score->'pacing') IS DISTINCT FROM 'number'
+        OR jsonb_typeof(score->'rhythm') IS DISTINCT FROM 'number'
+        OR jsonb_typeof(score->'composite') IS DISTINCT FROM 'number'
+        OR jsonb_typeof(score->'hardWordBonus') IS DISTINCT FROM 'number'
+        OR jsonb_typeof(score->'measuredWpm') IS DISTINCT FROM 'number'
+        OR jsonb_typeof(score->'feedbackTip') IS DISTINCT FROM 'string'
+        OR jsonb_typeof(score->'retrySuccess') IS DISTINCT FROM 'boolean'
+        OR jsonb_typeof(score->'evidenceBasis') IS DISTINCT FROM 'string'
+        OR jsonb_typeof(score->'pronunciationAssessed') IS DISTINCT FROM 'boolean'
+        THEN FALSE
+      ELSE
+        (score->>'clarity')::numeric BETWEEN 0 AND 100
+        AND (score->>'pacing')::numeric BETWEEN 0 AND 100
+        AND (score->>'rhythm')::numeric BETWEEN 0 AND 100
+        AND (score->>'composite')::numeric BETWEEN 0 AND 100
+        AND (score->>'hardWordBonus')::numeric BETWEEN 0 AND 5
+        AND (score->>'measuredWpm')::numeric BETWEEN 0 AND 1000
+        AND char_length(btrim(score->>'feedbackTip')) BETWEEN 1 AND 1000
+        AND score->>'evidenceBasis' = 'transcript_timing_heuristic'
+        AND (score->>'pronunciationAssessed')::boolean IS FALSE
+    END
+  ) NOT VALID;
+
+COMMENT ON CONSTRAINT clearspeak_sessions_score_verified_check ON public.clearspeak_sessions IS
+  'New ClearSpeak scores must be exact, bounded transcript/timing heuristic results. NOT VALID preserves legacy rows without legitimizing them.';

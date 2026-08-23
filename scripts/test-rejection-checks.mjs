@@ -97,7 +97,7 @@ assertNoMatch(/Failed to create grounding snapshot\/bridge:[\s\S]{0,180}onSkip\(
 const replayArtifactMigration = 'supabase/migrations/20260809020000_p0_3_replay_grounding_artifact_authority.sql';
 assertMatch(/reserve_clearspeak_grounded_score_tx[\s\S]*content_hash<>p_submitted_hash/, replayArtifactMigration, 'generated-content integrity reservation before scoring');
 assertMatch(/status='completed'[\s\S]*canonical_response/, replayArtifactMigration, 'canonical grounded score replay');
-assertMatch(/groundingInput[\s\S]*generateSession\(profile, recentTopics, sessionAttemptLength, groundingInput\)/, 'backend/clearspeak/routes.ts', 'snapshot-grounded ClearSpeak generation');
+assertMatch(/groundingInput[\s\S]*generateSession\(\s*profile,\s*generationHistory\.recentTopics,[\s\S]*groundingInput/, 'backend/clearspeak/routes.ts', 'snapshot-grounded ClearSpeak generation');
 assertNoMatch(/evaluateBridgeTrigger\(userId, prior\.score, false\)/, 'backend/clearspeak/routes.ts', 'hard-coded replay bridge trigger');
 assertMatch(/getAuthoritativePlanForBridge[\s\S]*consumeUsage\(userId, 'interview_question'\)/, 'backend/routes/interviewRoutes.ts', 'Interview plan replay before usage charging');
 const replayConvergenceMigration = 'supabase/migrations/20260809030000_p0_3_replay_grounding_convergence.sql';
@@ -121,7 +121,7 @@ assertMatch(/const sessionGrounding = useRef\(grounding\)\.current/, 'components
 assertMatch(/const shouldRetry = !sessionGrounding/, 'components/clearspeak/ClearSpeakSession.tsx', 'completed grounded score cannot offer a misleading audio retry after parent handoff cleanup');
 assertMatch(/state\.phase !== 'score_card'[\s\S]*onCanonicalGroundedScore/, 'components/clearspeak/ClearSpeakSession.tsx', 'grounding clears at canonical score completion');
 assertMatch(/notifiedGroundingBridge[\s\S]*notifyGroundingConsumed/, 'components/clearspeak/ClearSpeakDashboard.tsx', 'canonical grounding completion notifies parent once');
-assertMatch(/isValid && result\.content[\s\S]*applyAuthoritativeGrounding\(result\.content, profile, grounding\)[\s\S]*passageCache\.set\(cacheKey, \{ content: acceptedContent/, 'backend/clearspeak/generateService.ts', 'schema-valid provider content is deterministically grounded before cache/persistence');
+assertMatch(/isValid && result\.content[\s\S]*applyAuthoritativeGrounding\(result\.content, profile, grounding\)[\s\S]*passageCache\.set\(cacheKey, acceptedContent/, 'backend/clearspeak/generateService.ts', 'schema-valid provider content is deterministically grounded before cache/persistence');
 assertMatch(/applyAuthoritativeGrounding\(fallback, profile, grounding\)/, 'backend/clearspeak/generateService.ts', 'provider and safety fallback share the authoritative grounding transformation');
 const groundingFinalMigration = 'supabase/migrations/20260809060000_p0_3_grounding_authority_final_closure.sql';
 assertMatch(/reserve_interview_plan_generation_tx[\s\S]*pg_advisory_xact_lock[\s\S]*usage_ledger/, groundingFinalMigration, 'grounded plan generation serialized before one usage charge');
@@ -156,7 +156,7 @@ assertNoMatch(/s\.final_report/, 'backend/routes/careerContextRoutes.ts', 'Inter
 // P0-8 hosted-preview truthfulness, privacy, access, and restoration guards.
 assertNoMatch(/using MOCK scoring|clarity:\s*88[\s\S]*pacing:\s*90[\s\S]*rhythm:\s*85/, 'backend/clearspeak/scoringService.ts', 'fabricated ClearSpeak provider fallback');
 assertMatch(/ClearSpeakScoringUnavailableError[\s\S]*finally[\s\S]*audioBuffer\.fill\(0\)/, 'backend/clearspeak/scoringService.ts', 'ClearSpeak unavailable failure and all-path audio zeroing');
-assertMatch(/isClearSpeakScoringAvailable\(\)[\s\S]*consumeUsage\(userId, 'clearspeak_session'\)/, 'backend/clearspeak/routes.ts', 'ClearSpeak capability rejection before quota consumption');
+assertMatch(/isGovernedClearSpeakScoringAvailable\(\)[\s\S]*consumeUsage\(userId, 'clearspeak_session'\)/, 'backend/clearspeak/routes.ts', 'governed ClearSpeak capability rejection before quota consumption');
 assertMatch(/ClearSpeakSessionContentSchema\.safeParse\(submittedContent\)[\s\S]*consumeUsage\(userId, 'clearspeak_session'\)/, 'backend/clearspeak/routes.ts', 'ClearSpeak request validation before quota consumption');
 assertMatch(/evidenceBasis:\s*CLEAR_SPEAK_SCORE_EVIDENCE_BASIS[\s\S]*pronunciationAssessed:\s*false/, 'backend/clearspeak/scoringService.ts', 'truthful ClearSpeak score provenance');
 assertMatch(/score_evidence_basis='transcript_timing_heuristic'[\s\S]*jsonb_array_length\(v_trend\)>=3/, 'supabase/migrations/20260823101541_p0_8_clearspeak_score_provenance.sql', 'verified three-observation grounded bridge authority');

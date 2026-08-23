@@ -79,6 +79,11 @@ jobs:
           POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: npm run test:clearspeak-p0-5-db
 
+      - name: 8b. ClearSpeak P0-8 score provenance and authority contract
+        env:
+          POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: npm run test:clearspeak-p0-8-db
+
       - name: 9. Frontend build
         run: npm run build
 
@@ -151,13 +156,16 @@ jobs:
       - name: 16. Mobile lint
         run: npm run mobile:lint
 
-      - name: 16a. Mobile governed core parity guard
+      - name: 16a. Mobile web bundle and static export guard
+        run: node scripts/test-mobile-web-bundle.mjs
+
+      - name: 16b. Mobile governed core parity guard
         run: npm run test:mobile-governed-parity
 
-      - name: 16b. P0-8 hosted acceptance fail-closed contract
+      - name: 16c. P0-8 hosted acceptance fail-closed contract
         run: npm run test:hosted-acceptance-contract
 
-      - name: 16c. P0-8 hosted capture/reference authority guard
+      - name: 16d. P0-8 hosted capture/reference authority guard
         run: node scripts/test-hosted-capture-authority.mjs
 
       - name: 20. Recognized full-history secret scan

@@ -1604,35 +1604,63 @@ export const ClearSpeakProfileSchema = z.object({
 export type ClearSpeakProfile = z.infer<typeof ClearSpeakProfileSchema>;
 
 export const PassageTokenSchema = z.object({
-  text: z.string(),
+  text: z.string().min(1).max(240),
   isStressed: z.boolean(),
   pauseType: z.enum(['none', 'short', 'stop']),
 }).strict();
 export type PassageToken = z.infer<typeof PassageTokenSchema>;
 
+export const CLEAR_SPEAK_CONTENT_MAX_TEXT_CHARS = 12_000;
+
 export const ClearSpeakSessionContentSchema = z.object({
-  topicTag: z.string(),
-  difficultyLevel: z.number(),
-  targetSkill: z.string(),
-  keyVocab: z.array(z.string()),
-  passageData: z.array(PassageTokenSchema),
-  repeatPhrase: z.string().optional(),
-  retrySentence: z.string().optional(),
+  topicTag: z.string().min(1).max(80),
+  difficultyLevel: z.number().int().min(1).max(3),
+  targetSkill: z.string().min(1).max(240),
+  keyVocab: z.array(z.string().min(1).max(80)).max(32),
+  passageData: z.array(PassageTokenSchema).min(1).max(120),
+  repeatPhrase: z.string().max(1_000).optional(),
+  retrySentence: z.string().max(1_000).optional(),
   bridgeReady: z.boolean(),
-  interviewBridgeQuestion: z.string().optional(),
+  interviewBridgeQuestion: z.string().max(1_000).optional(),
   generationArtifactId: z.string().uuid().optional(),
   generationArtifactHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-}).strict();
+}).strict().superRefine((content, context) => {
+  const totalTextChars = content.topicTag.length + content.targetSkill.length +
+    content.keyVocab.reduce((total, word) => total + word.length, 0) +
+    content.passageData.reduce((total, token) => total + token.text.length, 0) +
+    (content.repeatPhrase?.length ?? 0) + (content.retrySentence?.length ?? 0) +
+    (content.interviewBridgeQuestion?.length ?? 0);
+  if (totalTextChars > CLEAR_SPEAK_CONTENT_MAX_TEXT_CHARS) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `ClearSpeak content exceeds ${CLEAR_SPEAK_CONTENT_MAX_TEXT_CHARS} text characters`,
+    });
+  }
+});
 export type ClearSpeakSessionContent = z.infer<typeof ClearSpeakSessionContentSchema>;
 
+export const ClearSpeakGenerateRequestSchema = z.object({
+  // These browser hints are bounded for compatibility, but the server derives
+  // generation history from persisted owner rows before selecting content.
+  recentTopics: z.array(z.string().min(1).max(80)).max(20).optional(),
+  sessionAttemptLength: z.number().int().min(0).max(100).optional(),
+  grounding: z.object({
+    snapshotId: z.string().uuid(),
+    bridgeSessionId: z.string().uuid(),
+  }).strict().optional(),
+}).strict();
+export type ClearSpeakGenerateRequest = z.infer<typeof ClearSpeakGenerateRequestSchema>;
+
+const ClearSpeakPercentScoreSchema = z.number().finite().min(0).max(100);
+
 export const ClearSpeakSessionScoreSchema = z.object({
-  clarity: z.number(),
-  pacing: z.number(),
-  rhythm: z.number(),
-  composite: z.number(),
-  hardWordBonus: z.number(),
-  feedbackTip: z.string(),
-  measuredWpm: z.number(),
+  clarity: ClearSpeakPercentScoreSchema,
+  pacing: ClearSpeakPercentScoreSchema,
+  rhythm: ClearSpeakPercentScoreSchema,
+  composite: ClearSpeakPercentScoreSchema,
+  hardWordBonus: z.number().finite().min(0).max(5),
+  feedbackTip: z.string().min(1).max(1_000),
+  measuredWpm: z.number().finite().min(0).max(1_000),
   retrySuccess: z.boolean(),
   evidenceBasis: z.literal('transcript_timing_heuristic'),
   pronunciationAssessed: z.literal(false),
