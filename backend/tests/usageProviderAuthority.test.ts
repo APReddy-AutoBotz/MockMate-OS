@@ -95,9 +95,9 @@ describe('P0-8 Interview provider/quota reservation authority', () => {
   });
 
   it.each([
-    '018f9c2e-7b18-7abc-8def-0123456789ab',
-    '00000000-0000-0000-0000-000000000000',
-  ])('reserves provider work for every UUID accepted by the shared adaptive schema (%s)', async (clientSubmissionId) => {
+    '018f9c2e-7b18-1abc-8def-0123456789ab',
+    '018f9c2e-7b18-5abc-bdef-0123456789ab',
+  ])('reserves provider work for database-preserved submission UUID %s', async (clientSubmissionId) => {
     mockRpc.mockResolvedValueOnce({
       data: { state: 'reserved', requestHash: '7'.repeat(32) },
       error: null,
@@ -116,6 +116,24 @@ describe('P0-8 Interview provider/quota reservation authority', () => {
       p_client_submission_id: clientSubmissionId,
     }));
     response.fire('finish');
+  });
+
+  it.each([
+    '018f9c2e-7b18-7abc-8def-0123456789ab',
+    '00000000-0000-0000-0000-000000000000',
+  ])('rejects submission UUID %s before the SQL canonicalizer can rewrite its identity', async (clientSubmissionId) => {
+    const next: NextFunction = jest.fn();
+    const { res } = responseHarness();
+
+    await enforceUsageLimit('interview_question')(
+      adaptiveRequest({ clientSubmissionId }),
+      res,
+      next,
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect((res.status as jest.Mock)).toHaveBeenCalledWith(422);
   });
 
   it('rejects malformed answer payloads before reservation or provider work', async () => {

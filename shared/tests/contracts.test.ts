@@ -9,6 +9,7 @@ import {
   RawInterviewPlanSchema,
   InterviewSessionStartResponseSchema,
   AnswerSubmissionResponseSchema,
+  AdaptiveClientSubmissionIdSchema,
   ATSDiagnosticsResultSchema,
   ClearSpeakProfileSchema,
   ClearSpeakGenerateRequestSchema,
@@ -20,6 +21,13 @@ import {
 } from '../src/index';
 
 describe('Shared Canonical Runtime Contracts', () => {
+  it('accepts only submission UUIDs the database preserves as idempotency keys', () => {
+    expect(AdaptiveClientSubmissionIdSchema.safeParse('018f9c2e-7b18-1abc-8def-0123456789ab').success).toBe(true);
+    expect(AdaptiveClientSubmissionIdSchema.safeParse('018f9c2e-7b18-5abc-bdef-0123456789ab').success).toBe(true);
+    expect(AdaptiveClientSubmissionIdSchema.safeParse('018f9c2e-7b18-7abc-8def-0123456789ab').success).toBe(false);
+    expect(AdaptiveClientSubmissionIdSchema.safeParse('00000000-0000-0000-0000-000000000000').success).toBe(false);
+  });
+
   it('validates explicit ApiErrorCode enums and rejects arbitrary strings', () => {
     expect(ApiErrorCodeSchema.safeParse('UNAUTHORIZED').success).toBe(true);
     expect(ApiErrorCodeSchema.safeParse('CONTRACT_RESPONSE_INVALID').success).toBe(true);

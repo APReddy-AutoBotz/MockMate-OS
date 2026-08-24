@@ -1339,18 +1339,23 @@ export const AnswerSubmissionResponseSchema = z.object({
 }).strict();
 export type AnswerSubmissionResponse = z.infer<typeof AnswerSubmissionResponseSchema>;
 
+export const AdaptiveClientSubmissionIdSchema = z.string().regex(
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  'Client submission ID must be a canonical UUID version 1-5',
+);
+
 export const AdaptiveAnswerSubmissionRequestSchema = z.discriminatedUnion('answerKind', [
   z.object({
     questionId: z.string().min(1),
     expectedSessionVersion: z.number().int().min(1),
-    clientSubmissionId: z.string().uuid(),
+    clientSubmissionId: AdaptiveClientSubmissionIdSchema,
     answerKind: z.literal('answered'),
     answerText: z.string().refine(val => val.trim().length > 0, { message: 'Answer text must be non-empty' }),
   }),
   z.object({
     questionId: z.string().min(1),
     expectedSessionVersion: z.number().int().min(1),
-    clientSubmissionId: z.string().uuid(),
+    clientSubmissionId: AdaptiveClientSubmissionIdSchema,
     answerKind: z.literal('skipped'),
     answerText: z.string().optional().nullable().refine(val => val === undefined || val === null || val.trim().length === 0, { message: 'Skipped answer text must be absent or null' }),
   }),
