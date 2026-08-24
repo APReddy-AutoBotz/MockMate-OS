@@ -47,6 +47,11 @@ const scenarioFile = requireValue('HOSTED_ACCEPTANCE_SCENARIOS_FILE');
 const userAToken = requireValue('MOCKMATE_TEST_USER_A_TOKEN');
 const userBToken = requireValue('MOCKMATE_TEST_USER_B_TOKEN');
 const adminToken = process.env.MOCKMATE_TEST_ADMIN_TOKEN?.trim();
+const artifactPath = path.resolve(process.env.HOSTED_ACCEPTANCE_EVIDENCE_FILE || 'artifacts/p0-8-hosted-preview-acceptance.json');
+
+if (fs.existsSync(artifactPath)) {
+  fail('HOSTED_ACCEPTANCE_EVIDENCE_FILE already exists. Preserve it and choose a unique empty path before a new run.');
+}
 
 if (!fs.existsSync(scenarioFile)) fail('HOSTED_ACCEPTANCE_SCENARIOS_FILE does not exist.');
 let manifest;
@@ -830,8 +835,7 @@ const evidence = {
   summary: { total: results.length, passed: results.filter((result) => result.passed).length },
 };
 
-const artifactPath = path.resolve(process.env.HOSTED_ACCEPTANCE_EVIDENCE_FILE || 'artifacts/p0-8-hosted-preview-acceptance.json');
 fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
-fs.writeFileSync(artifactPath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+fs.writeFileSync(artifactPath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
 const digest = crypto.createHash('sha256').update(fs.readFileSync(artifactPath)).digest('hex');
 console.log(`[HOSTED_PREVIEW_ACCEPTANCE_OK] ${results.length} scenarios passed semantic/state acceptance; evidence_sha256=${digest}`);

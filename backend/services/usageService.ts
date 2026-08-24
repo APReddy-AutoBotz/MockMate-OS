@@ -1,6 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../supabaseAdmin';
 import { runtimeMode } from '../config/runtimeConfig';
+import {
+  AdaptiveAnswerSubmissionRequestSchema,
+  AnswerSubmissionRequestSchema,
+} from 'mockmate-shared';
 
 export const USAGE_LIMITS = {
   resume_review: 3,
@@ -13,7 +17,7 @@ export type UsageFeature = keyof typeof USAGE_LIMITS;
 
 const friendlyLimitMessage = "You have used today's free practice. Come back tomorrow or continue with saved work.";
 const memoryUsage = new Map<string, { used: number; limit: number }>();
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const RESERVATION_RENEW_MS = 20_000;
 const RESERVATION_WAIT_MS = 25_000;
 
@@ -74,35 +78,35 @@ async function reservationInput(req: Request, userId: string): Promise<AdaptiveR
   const sessionId = String((req as any).params?.sessionId || '');
   const body: any = (req as any).body || {};
   if (!UUID_PATTERN.test(sessionId)) return null;
-  if (typeof body.questionId !== 'string' || !body.questionId.trim()) return null;
-  if (!['answered', 'skipped'].includes(body.answerKind)) return null;
-  if (body.answerKind === 'answered' && (typeof body.answerText !== 'string' || !body.answerText.trim())) return null;
-  if (body.answerKind === 'skipped' && body.answerText != null && (typeof body.answerText !== 'string' || body.answerText.trim())) return null;
 
   const isAdaptive = body.clientSubmissionId !== undefined || body.expectedSessionVersion !== undefined;
   if (isAdaptive) {
-    if (!UUID_PATTERN.test(String(body.clientSubmissionId || ''))) return null;
-    if (!Number.isInteger(body.expectedSessionVersion) || body.expectedSessionVersion < 1) return null;
+    const parsed = AdaptiveAnswerSubmissionRequestSchema.safeParse(body);
+    if (!parsed.success || !parsed.data.questionId.trim()) return null;
     return {
       userId,
       sessionId,
-      clientSubmissionId: body.clientSubmissionId,
-      questionId: body.questionId,
-      expectedSessionVersion: body.expectedSessionVersion,
-      answerKind: body.answerKind,
-      answerText: adaptiveAnswerText(body.answerKind, body.answerText),
+      clientSubmissionId: parsed.data.clientSubmissionId,
+      questionId: parsed.data.questionId,
+      expectedSessionVersion: parsed.data.expectedSessionVersion,
+      answerKind: parsed.data.answerKind,
+      answerText: adaptiveAnswerText(parsed.data.answerKind, parsed.data.answerText),
     };
   }
 
-  if (!Number.isInteger(body.expectedQuestionIndex) || body.expectedQuestionIndex < 0) return null;
+  const parsed = AnswerSubmissionRequestSchema.safeParse(body);
+  if (!parsed.success || !parsed.data.questionId.trim()) return null;
+  if (!Number.isInteger(parsed.data.expectedQuestionIndex) || parsed.data.expectedQuestionIndex < 0) return null;
+  if (parsed.data.answerKind === 'answered' && (typeof parsed.data.answerText !== 'string' || !parsed.data.answerText.trim())) return null;
+  if (parsed.data.answerKind === 'skipped' && parsed.data.answerText != null && parsed.data.answerText.trim()) return null;
   return {
     userId,
     sessionId,
     clientSubmissionId: 'legacy',
-    questionId: body.questionId,
+    questionId: parsed.data.questionId,
     expectedSessionVersion: await legacyExpectedSessionVersion(userId, sessionId),
-    answerKind: body.answerKind,
-    answerText: adaptiveAnswerText(body.answerKind, body.answerText),
+    answerKind: parsed.data.answerKind,
+    answerText: adaptiveAnswerText(parsed.data.answerKind, parsed.data.answerText),
   };
 }
 
@@ -254,9 +258,10 @@ export function enforceUsageLimit(feature: UsageFeature) {
       if (feature === 'interview_question' && supabaseAdmin && req.route?.path === '/sessions/:sessionId/answers') {
         const input = await reservationInput(req, userId);
         if (!input) {
-          // The route schema rejects malformed answer bodies before provider work.
-          (req as any).usage = { feature, authority: 'atomic_adaptive_turn_unreserved_invalid_body' };
-          return next();
+          return res.status(422).json({
+            error: 'Invalid answer submission payload',
+            code: 'invalid_answer_submission',
+          });
         }
 
         let reservation = await reserveAdaptiveProviderWork(input);

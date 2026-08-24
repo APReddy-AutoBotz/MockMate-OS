@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
@@ -359,5 +361,35 @@ assert.match(captureGuard, /test-hosted-committed-manifest-preflight\.mjs/, 'P0-
 const refused = spawnSync(process.execPath, [fileURLToPath(new URL('./hosted-preview-acceptance.mjs', import.meta.url))], { env: {}, encoding: 'utf8' });
 assert.notEqual(refused.status, 0, 'empty configuration must be refused before any network activity');
 assert.match(`${refused.stdout}${refused.stderr}`, /HOSTED_PREVIEW_ACCEPTANCE_REFUSED/);
+
+const staleEvidencePath = path.join(os.tmpdir(), `mockmate-p0-8-stale-evidence-${process.pid}.json`);
+fs.writeFileSync(staleEvidencePath, '{"stale":true}\n', { mode: 0o600, flag: 'wx' });
+try {
+  const staleEvidenceRefused = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL('./hosted-preview-acceptance.mjs', import.meta.url))],
+    {
+      env: {
+        AUTHORIZE_HOSTED_PREVIEW_ACCEPTANCE: 'true',
+        BOUNDED_TEST_DATA_CONFIRMED: 'true',
+        MOCKMATE_PREVIEW_ORIGIN: 'https://mockmate-preflight.netlify.app',
+        MOCKMATE_PREVIEW_TARGET_ID: 'p0-8-stale-evidence-guard',
+        MOCKMATE_SUPABASE_PROJECT_REF: 'aaaaaaaaaaaaaaaaaaaa',
+        EXPECTED_HEAD_SHA: 'a'.repeat(40),
+        HOSTED_ACCEPTANCE_SCENARIOS_FILE: fileURLToPath(new URL('../config/hosted-acceptance-scenarios.example.json', import.meta.url)),
+        MOCKMATE_TEST_USER_A_TOKEN: 'offline-user-a-token',
+        MOCKMATE_TEST_USER_B_TOKEN: 'offline-user-b-token',
+        HOSTED_ACCEPTANCE_EVIDENCE_FILE: staleEvidencePath,
+      },
+      encoding: 'utf8',
+    },
+  );
+  const staleEvidenceOutput = `${staleEvidenceRefused.stdout || ''}${staleEvidenceRefused.stderr || ''}`;
+  assert.equal(staleEvidenceRefused.status, 2, 'an existing evidence path must be refused before hosted network activity');
+  assert.match(staleEvidenceOutput, /HOSTED_ACCEPTANCE_EVIDENCE_FILE already exists/, 'stale success evidence must fail closed');
+  assert.equal(fs.readFileSync(staleEvidencePath, 'utf8'), '{"stale":true}\n', 'the existing evidence artifact must remain preserved');
+} finally {
+  fs.unlinkSync(staleEvidencePath);
+}
 
 console.log('P0-8 hosted acceptance schema-v4/origin/timeout/cleanup/semantic/quota/lifecycle guard passed.');

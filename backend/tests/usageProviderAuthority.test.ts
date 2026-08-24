@@ -94,6 +94,49 @@ describe('P0-8 Interview provider/quota reservation authority', () => {
     }));
   });
 
+  it.each([
+    '018f9c2e-7b18-7abc-8def-0123456789ab',
+    '00000000-0000-0000-0000-000000000000',
+  ])('reserves provider work for every UUID accepted by the shared adaptive schema (%s)', async (clientSubmissionId) => {
+    mockRpc.mockResolvedValueOnce({
+      data: { state: 'reserved', requestHash: '7'.repeat(32) },
+      error: null,
+    });
+    const next: NextFunction = jest.fn();
+    const response = responseHarness();
+
+    await enforceUsageLimit('interview_question')(
+      adaptiveRequest({ clientSubmissionId }),
+      response.res,
+      next,
+    );
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(mockRpc).toHaveBeenCalledWith('reserve_adaptive_turn_evaluation_tx', expect.objectContaining({
+      p_client_submission_id: clientSubmissionId,
+    }));
+    response.fire('finish');
+  });
+
+  it('rejects malformed answer payloads before reservation or provider work', async () => {
+    const next: NextFunction = jest.fn();
+    const { res } = responseHarness();
+
+    await enforceUsageLimit('interview_question')(
+      adaptiveRequest({ clientSubmissionId: 'not-a-uuid' }),
+      res,
+      next,
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect((res.status as jest.Mock)).toHaveBeenCalledWith(422);
+    expect((res.json as jest.Mock)).toHaveBeenCalledWith({
+      error: 'Invalid answer submission payload',
+      code: 'invalid_answer_submission',
+    });
+  });
+
   it('lets only the reservation owner reach the route while a duplicate replays canonical output', async () => {
     const canonicalResponse = {
       completedTurnId: '44444444-4444-4444-8444-444444444444',
