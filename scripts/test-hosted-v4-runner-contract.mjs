@@ -26,8 +26,21 @@ assert.match(harness, /verification cannot declare captures/, 'post-state verifi
 assert.match(harness, /may capture only from an ordinary single successful request/, 'repeated concurrency/replay scenarios must not create captures');
 
 assert.match(harness, /process\.on\('exit', \(\) => captureStore\.clear\(\)\)/, 'capture state must clear even on refusal exits');
-assert.match(harness, /finally \{\s*captureStore\.clear\(\);\s*\}/s, 'capture state must clear before normal evidence or failure completion');
-const evidenceSlice = harness.slice(harness.indexOf('const evidence ='));
+const lifecycleFinallyIndex = harness.lastIndexOf('} finally {');
+const lifecycleCompletionIndex = harness.indexOf('\nif (runError)', lifecycleFinallyIndex);
+assert.ok(lifecycleFinallyIndex >= 0 && lifecycleCompletionIndex > lifecycleFinallyIndex, 'runner must have a terminal lifecycle finally block');
+const lifecycleFinally = harness.slice(lifecycleFinallyIndex, lifecycleCompletionIndex);
+const captureClearIndex = lifecycleFinally.indexOf('captureStore.clear();');
+const tokenClearIndex = lifecycleFinally.indexOf('tokens.userA = undefined;');
+assert.ok(captureClearIndex >= 0, 'capture state must clear before normal evidence or failure completion');
+assert.ok(tokenClearIndex > captureClearIndex, 'capture state must clear before token authority is released');
+assert.match(lifecycleFinally, /delete process\.env\.MOCKMATE_TEST_USER_A_TOKEN;/, 'terminal cleanup must erase the user A token environment authority');
+assert.match(lifecycleFinally, /delete process\.env\.MOCKMATE_TEST_USER_B_TOKEN;/, 'terminal cleanup must erase the user B token environment authority');
+assert.match(lifecycleFinally, /delete process\.env\.MOCKMATE_TEST_ADMIN_TOKEN;/, 'terminal cleanup must erase the admin token environment authority');
+const evidenceStartIndex = harness.indexOf('const evidence = {');
+const evidenceEndIndex = harness.indexOf('\n  };', evidenceStartIndex);
+assert.ok(evidenceStartIndex >= 0 && evidenceEndIndex > evidenceStartIndex, 'runner must construct an explicit evidence object');
+const evidenceSlice = harness.slice(evidenceStartIndex, evidenceEndIndex);
 assert.ok(!/captureStore|captures|ownerOf|names\(\)/.test(evidenceSlice), 'capture names, owners and values must not be persisted to evidence');
 assert.ok(!/\bawait fetch\s*\(/.test(harness), 'runner must not bypass shared bounded request authorities');
 assert.match(harness, /boundedAbandonedRequest/, 'response-loss replay must use explicit bounded response abandonment');
