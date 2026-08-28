@@ -82,7 +82,7 @@ describe('GroundingPreviewModal conflict authority', () => {
     const confirm = screen.getByRole('button', { name: /continue with selected context/i });
     fireEvent.click(confirm);
     fireEvent.click(confirm);
-    fireEvent.click(screen.getByRole('button', { name: /continue without grounding/i }));
+    fireEvent.click(screen.getByRole('button', { name: /continue without saved context/i }));
     fireEvent.click(screen.getByRole('button', { name: /close context selection/i }));
     fireEvent.keyDown(document, { key: 'Escape' });
 

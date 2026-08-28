@@ -85,7 +85,7 @@ export const CareerContextPanel: React.FC<CareerContextPanelProps> = ({ onBack }
           </button>
           <div>
             <span className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.14em] flex items-center gap-1.5">
-              <Shield className="w-3.5 h-3.5" /> User-Owned Grounding
+              <Shield className="w-3.5 h-3.5" /> Your reusable context
             </span>
             <h1 className="text-2xl md:text-3xl font-semibold text-white mt-0.5">Career Context Hub</h1>
           </div>

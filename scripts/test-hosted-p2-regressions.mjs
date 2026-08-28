@@ -7,6 +7,8 @@ const app = read('../App.tsx');
 const onboarding = read('../components/OnboardingQuestions.tsx');
 const roleCapture = read('../components/RoleCapture.tsx');
 const clearSpeakOnboarding = read('../components/clearspeak/ClearSpeakOnboarding.tsx');
+const careerContext = read('../components/CareerContextPanel.tsx');
+const contextPreview = read('../components/GroundingPreviewModal.tsx');
 const uploadSetup = read('../components/resume/UploadSetupScreen.tsx');
 const sessionControls = read('../components/SessionControlsEditor.tsx');
 const sessionPrep = read('../components/SessionPrep.tsx');
@@ -46,6 +48,12 @@ assert.match(sessionControls, /type="button"[\s\S]*role="switch"/, 'session swit
 assert.doesNotMatch(sessionControls, /<div[^>]+onClick=\{opt\.onToggle\}/, 'session switch rows must not double-toggle through bubbling');
 
 assert.match(systemStatus, /role="status" aria-live="polite" aria-atomic="true"/, 'offline status must be announced as a complete live update');
+
+assert.match(careerContext, /Your reusable context/, 'Career Context must use plain user-facing ownership language');
+assert.match(contextPreview, /Continue Without Saved Context/, 'context handoff must use plain saved-context language');
+assert.match(contextPreview, /Resume-informed interview practice/, 'context handoff titles must explain their practical effect');
+assert.doesNotMatch(contextPreview, /User-Owned Grounding|>\s*Grounded\s*</i, 'context handoff must not expose internal grounding labels');
+assert.doesNotMatch(contextPreview, /authoritative value/i, 'context handoff must not expose internal authority terminology');
 
 assert.doesNotMatch(sessionPrep, /buildFallbackInterviewPlan|setPlan\(fallbackPlan\)/, 'browser code must not mint an interview plan after an authority failure');
 assert.match(sessionPrep, /setPlanError\('We could not generate an authoritative interview plan\./, 'plan authority failure must be disclosed visibly');

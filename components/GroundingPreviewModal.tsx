@@ -93,10 +93,10 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
 
   const getPurposeLabel = (p: GroundingPurpose) => {
     switch (p) {
-      case 'resume_to_interview': return 'Resume Grounded Interview Practice';
-      case 'resume_to_clearspeak': return 'Resume Grounded ClearSpeak Practice';
-      case 'clearspeak_to_interview': return 'ClearSpeak Grounded Interview Practice';
-      default: return 'Cross-Module Context Grounding';
+      case 'resume_to_interview': return 'Resume-informed interview practice';
+      case 'resume_to_clearspeak': return 'Resume-informed speaking practice';
+      case 'clearspeak_to_interview': return 'Speaking-informed interview practice';
+      default: return 'Use your saved context';
     }
   };
 
@@ -121,7 +121,7 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
               {getPurposeLabel(purpose)}
             </h2>
             <p id="grounding-dialog-description" className="text-xs text-brand-tint mt-1">
-              Select which verified facts to ground this practice session. Unselected items will be excluded.
+              Select which verified details to use in this practice session. Unselected details will stay out.
             </p>
           </div>
           <button ref={closeButtonRef} type="button" aria-label="Close context selection" onClick={handleClose} disabled={isSubmitting} className="text-brand-tint hover:text-white p-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40">
@@ -136,7 +136,7 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
               <AlertTriangle className="w-4 h-4" /> Conflict Detected
             </div>
             <p className="text-xs text-amber-200/80">
-              Select one authoritative value for every conflict before continuing.
+              Choose the value you want to use for each conflict before continuing.
             </p>
             {conflicts.filter(c => c.requiresUserChoice).map(conflict => (
               <fieldset key={conflict.canonicalKey} className="space-y-1 pt-2">
@@ -156,12 +156,12 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
         {/* Fact Items Selection List */}
         <div className="space-y-3">
           <p className="text-[10px] font-bold uppercase tracking-widest text-brand-tint">
-            Available Evidence ({selectedIds.length} of {eligibleItems.length} selected)
+            Saved details ({selectedIds.length} of {eligibleItems.length} selected)
           </p>
 
           {eligibleItems.length === 0 ? (
             <div className="p-4 bg-white/5 rounded-xl text-center text-xs text-white/40">
-              No verified context items available yet. You can continue without grounding.
+              No verified context items are available yet. You can continue without saved context.
             </div>
           ) : (
             <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
@@ -205,7 +205,7 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
 
         {/* This flow creates a single immutable launch snapshot. */}
         <div className="border-t border-white/10 pt-4 space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-brand-tint">Consent Scope</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-brand-tint">How it will be used</p>
           <div className="rounded-xl border border-brand-primary/40 bg-white/10 p-3 text-left text-white">
             <div className="text-xs font-semibold">One-time session</div>
             <div className="mt-0.5 text-[10px] text-brand-tint">Use the selected facts for this launch only.</div>
@@ -213,7 +213,7 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
         </div>
 
         <p role="status" aria-live="polite" className="min-h-4 text-center text-xs text-brand-tint">
-          {isSubmitting ? 'Creating your one-time grounded session. Other actions are temporarily locked.' : ''}
+          {isSubmitting ? 'Preparing your one-time practice session. Other actions are temporarily locked.' : ''}
         </p>
 
         {/* Action Buttons */}
@@ -223,14 +223,14 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
             disabled={isSubmitting}
             className="px-4 py-2.5 rounded-xl border border-white/10 text-white/60 hover:text-white text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Continue Without Grounding
+            Continue Without Saved Context
           </button>
           <button
             onClick={() => { void handleConfirm(); }}
             disabled={isSubmitting || selectedIds.length === 0 || conflicts.some(c => c.requiresUserChoice && !conflictSelections[c.canonicalKey])}
             className="px-6 py-2.5 rounded-xl bg-brand-primary text-brand-dark hover:bg-brand-primary/90 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors disabled:opacity-40"
           >
-            {isSubmitting ? 'Creating grounded session…' : 'Continue With Selected Context'} {!isSubmitting && <ChevronRight className="w-4 h-4" />}
+            {isSubmitting ? 'Preparing session…' : 'Continue With Selected Context'} {!isSubmitting && <ChevronRight className="w-4 h-4" />}
           </button>
         </div>
       </div>
