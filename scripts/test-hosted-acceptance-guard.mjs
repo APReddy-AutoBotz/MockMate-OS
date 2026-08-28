@@ -9,9 +9,17 @@ import {
   exactHostedOrigin,
   exactOriginUrl,
 } from './hosted-acceptance-safety.mjs';
+import { compensateTestUserAppData } from './hosted-acceptance-cleanup.mjs';
+import {
+  awaitParallelQuiescence,
+  evidenceCleanupStatus,
+  finalizeOwnedEvidence,
+} from './hosted-acceptance-lifecycle.mjs';
 
 const harness = fs.readFileSync(new URL('./hosted-preview-acceptance.mjs', import.meta.url), 'utf8');
 const safety = fs.readFileSync(new URL('./hosted-acceptance-safety.mjs', import.meta.url), 'utf8');
+const cleanupGuard = fs.readFileSync(new URL('./hosted-acceptance-cleanup.mjs', import.meta.url), 'utf8');
+const lifecycleGuard = fs.readFileSync(new URL('./hosted-acceptance-lifecycle.mjs', import.meta.url), 'utf8');
 const captureGuard = fs.readFileSync(new URL('./test-hosted-capture-authority.mjs', import.meta.url), 'utf8');
 const scenarioTemplate = fs.readFileSync(new URL('../config/hosted-acceptance-scenarios.example.json', import.meta.url), 'utf8');
 const runtimeConfig = fs.readFileSync(new URL('../backend/config/runtimeConfig.ts', import.meta.url), 'utf8');
@@ -105,6 +113,190 @@ assert.match(runtimeConfig, /GIT_HEAD_SHA/, 'preview runtime must validate the d
 assert.match(server, /gitHeadSha: runtime\.previewAuthority\.gitHeadSha/, 'preview health must expose only deployed head identity');
 assert.match(harness, /supabaseProjectRef/, 'hosted acceptance must verify Supabase target authority');
 assert.match(harness, /Hostile origin was accepted by CORS/, 'hosted acceptance must reject hostile origins');
+assert.match(cleanupGuard, /requestImpl = boundedRequest/, 'compensating cleanup must default to the bounded hosted transport');
+assert.match(cleanupGuard, /exactOriginUrl\(originUrl, CLEANUP_PATH\)/, 'compensating cleanup must stay on the exact authorized origin');
+assert.equal((harness.match(/if \(mutatingMethods\.has\(prepared\.method\)\) mutationsMayHaveStarted = true;/g) || []).length, 2, 'cleanup authority must arm immediately before ordinary or abandoned mutating dispatch');
+assert.ok(!harness.includes('scenarioExecutionStarted'), 'non-mutating scenario execution must not arm destructive cleanup');
+assert.match(harness, /await compensateTestUserAppData\(/, 'scenario failures must invoke compensating app-data cleanup');
+assert.match(harness, /compensating_cleanup=\$\{cleanupStatus\}/, 'failure output must disclose whether compensating cleanup completed');
+assert.match(harness, /delete process\.env\.MOCKMATE_TEST_USER_A_TOKEN/, 'the runner must release user A token environment authority after the run');
+assert.match(harness, /delete process\.env\.MOCKMATE_TEST_USER_B_TOKEN/, 'the runner must release user B token environment authority after the run');
+assert.match(harness, /delete process\.env\.MOCKMATE_TEST_ADMIN_TOKEN/, 'the runner must release optional admin token environment authority after the run');
+assert.match(lifecycleGuard, /openSync\(artifactPath, 'wx', 0o600\)/, 'evidence finalization must acquire exclusive file ownership');
+assert.match(lifecycleGuard, /if \(ownsArtifact\)[\s\S]*unlinkSync\(artifactPath\)/, 'evidence finalization may remove only an artifact it owns');
+const guardedLifecycleSlice = harness.slice(harness.indexOf('let runError;'), harness.indexOf('if (runError)'));
+assert.ok(guardedLifecycleSlice.indexOf('const evidence =') < guardedLifecycleSlice.indexOf('} catch (error)'), 'evidence construction must remain inside the guarded lifecycle');
+assert.ok(guardedLifecycleSlice.indexOf('finalizeOwnedEvidence') < guardedLifecycleSlice.indexOf('} catch (error)'), 'exclusive evidence write and hash must remain inside the guarded lifecycle');
+assert.ok(guardedLifecycleSlice.indexOf('await compensateTestUserAppData') < guardedLifecycleSlice.indexOf('tokens.userA = undefined'), 'test-user token authority must remain available through compensation');
+assert.match(harness, /evidence_cleanup=\$\{artifactCleanupStatus\}/, 'failure output must report redacted owned-evidence cleanup status');
+
+const cleanupResponses = [];
+const cleanupCalls = [];
+await compensateTestUserAppData({
+  originUrl: exactOrigin,
+  userAToken: 'offline-user-a-token',
+  userBToken: 'offline-user-b-token',
+  timeoutMs: 3210,
+  maxResponseBytes: 4321,
+  requestImpl: async (url, options, limits) => {
+    cleanupCalls.push({ url: url.href, options, limits });
+    const body = Buffer.from(JSON.stringify({ success: true, operation: 'app_data_deleted', failedTables: [] }));
+    cleanupResponses.push(body);
+    return { status: 200, headers: new Headers(), body };
+  },
+});
+assert.equal(cleanupCalls.length, 2, 'compensating cleanup must attempt both bounded test identities');
+assert.deepEqual(cleanupCalls.map((call) => call.url), [
+  `${exactOrigin.origin}/api/me/data`,
+  `${exactOrigin.origin}/api/me/data`,
+], 'compensating cleanup must use only the fixed account-data endpoint');
+assert.deepEqual(cleanupCalls.map((call) => call.options.method), ['DELETE', 'DELETE'], 'compensating cleanup must delete app data for both identities');
+assert.deepEqual(cleanupCalls.map((call) => call.options.headers.Authorization), [
+  'Bearer offline-user-a-token',
+  'Bearer offline-user-b-token',
+], 'compensating cleanup must use each test-user token exactly once');
+assert.ok(cleanupCalls.every((call) => call.options.headers.Origin === exactOrigin.origin), 'compensating cleanup must bind the authorized Origin header');
+assert.ok(cleanupCalls.every((call) => call.options.redirect === 'manual'), 'compensating cleanup must refuse redirect following');
+assert.ok(cleanupCalls.every((call) => call.limits.timeoutMs === 3210 && call.limits.maxResponseBytes === 4321), 'compensating cleanup must retain bounded request limits');
+assert.ok(cleanupResponses.every((body) => body.every((byte) => byte === 0)), 'compensating cleanup response bodies must be wiped');
+
+const incompleteCleanupCalls = [];
+const incompleteCleanupBody = Buffer.from(JSON.stringify({ success: false, operation: 'app_data_deleted', failedTables: ['synthetic_table'] }));
+await assert.rejects(
+  compensateTestUserAppData({
+    originUrl: exactOrigin,
+    userAToken: 'offline-user-a-token',
+    userBToken: 'offline-user-b-token',
+    timeoutMs: 3210,
+    maxResponseBytes: 4321,
+    requestImpl: async (_url, options) => {
+      incompleteCleanupCalls.push(options.headers.Authorization);
+      if (incompleteCleanupCalls.length === 1) return { status: 500, headers: new Headers(), body: incompleteCleanupBody };
+      throw new Error('synthetic transport failure');
+    },
+  }),
+  /incomplete for userA and userB/,
+  'any incomplete principal cleanup must fail closed',
+);
+assert.equal(incompleteCleanupCalls.length, 2, 'a failed first cleanup must not prevent the second cleanup attempt');
+assert.ok(incompleteCleanupBody.every((byte) => byte === 0), 'failed cleanup response bodies must also be wiped');
+
+const missingFailedTablesCalls = [];
+await assert.rejects(
+  compensateTestUserAppData({
+    originUrl: exactOrigin,
+    userAToken: 'offline-user-a-token',
+    userBToken: 'offline-user-b-token',
+    timeoutMs: 3210,
+    maxResponseBytes: 4321,
+    requestImpl: async () => {
+      missingFailedTablesCalls.push(true);
+      return {
+        status: 200,
+        headers: new Headers(),
+        body: Buffer.from(JSON.stringify({ success: true, operation: 'app_data_deleted' })),
+      };
+    },
+  }),
+  /incomplete for userA and userB/,
+  'cleanup success must require an explicitly empty failedTables array',
+);
+assert.equal(missingFailedTablesCalls.length, 2, 'malformed success responses must not prevent both cleanup attempts');
+
+const firstParallelFailure = new Error('synthetic first parallel failure');
+let slowMutationActive = true;
+let slowMutationSettled = false;
+const fastFailedMutation = new Promise((_, reject) => {
+  setTimeout(() => reject(firstParallelFailure), 5);
+});
+const slowSuccessfulMutation = new Promise((resolve) => {
+  setTimeout(() => {
+    slowMutationActive = false;
+    slowMutationSettled = true;
+    resolve({ status: 200 });
+  }, 30);
+});
+let observedParallelFailure;
+let cleanupWouldHaveRaced;
+try {
+  await awaitParallelQuiescence([fastFailedMutation, slowSuccessfulMutation]);
+} catch (error) {
+  observedParallelFailure = error;
+  cleanupWouldHaveRaced = slowMutationActive;
+}
+assert.strictEqual(observedParallelFailure, firstParallelFailure, 'parallel quiescence must preserve the first rejection');
+assert.equal(cleanupWouldHaveRaced, false, 'parallel failure propagation must wait until no mutating request remains active');
+assert.equal(slowMutationSettled, true, 'the slower parallel mutation must settle before compensation can begin');
+assert.deepEqual(
+  await awaitParallelQuiescence([Promise.resolve('first'), Promise.resolve('second')]),
+  ['first', 'second'],
+  'successful parallel attempts must retain manifest order',
+);
+
+const evidenceTestDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `mockmate-p0-8-evidence-${process.pid}-`));
+const partialEvidencePath = path.join(evidenceTestDirectory, 'partial.json');
+const hashFailureEvidencePath = path.join(evidenceTestDirectory, 'hash-failure.json');
+const foreignEvidencePath = path.join(evidenceTestDirectory, 'foreign.json');
+const successfulEvidencePath = path.join(evidenceTestDirectory, 'success.json');
+try {
+  const partialWriteFailure = new Error('synthetic partial evidence write failure');
+  const partialFileSystem = {
+    mkdirSync: (...args) => fs.mkdirSync(...args),
+    openSync: (...args) => fs.openSync(...args),
+    writeFileSync: (descriptor, serialized) => {
+      fs.writeSync(descriptor, serialized.subarray(0, 8));
+      throw partialWriteFailure;
+    },
+    fsyncSync: (...args) => fs.fsyncSync(...args),
+    closeSync: (...args) => fs.closeSync(...args),
+    unlinkSync: (...args) => fs.unlinkSync(...args),
+    readFileSync: (...args) => fs.readFileSync(...args),
+  };
+  let observedPartialWriteFailure;
+  try {
+    finalizeOwnedEvidence({ artifactPath: partialEvidencePath, evidence: { passed: true }, fileSystem: partialFileSystem });
+  } catch (error) {
+    observedPartialWriteFailure = error;
+  }
+  assert.strictEqual(observedPartialWriteFailure, partialWriteFailure, 'evidence cleanup must preserve the original finalization error');
+  assert.equal(evidenceCleanupStatus(observedPartialWriteFailure), 'complete', 'owned partial evidence cleanup must report complete');
+  assert.equal(fs.existsSync(partialEvidencePath), false, 'a partial evidence file owned by this run must be removed');
+
+  const hashFailure = new Error('synthetic evidence hash failure');
+  let observedHashFailure;
+  try {
+    finalizeOwnedEvidence({
+      artifactPath: hashFailureEvidencePath,
+      evidence: { passed: true },
+      hashFile: () => { throw hashFailure; },
+    });
+  } catch (error) {
+    observedHashFailure = error;
+  }
+  assert.strictEqual(observedHashFailure, hashFailure, 'post-write hash failure must remain the primary error');
+  assert.equal(evidenceCleanupStatus(observedHashFailure), 'complete', 'post-write hash failure must remove owned evidence');
+  assert.equal(fs.existsSync(hashFailureEvidencePath), false, 'hash failure must leave no evidence artifact');
+
+  fs.writeFileSync(foreignEvidencePath, 'foreign-owner\n', { mode: 0o600, flag: 'wx' });
+  let foreignOwnershipFailure;
+  try {
+    finalizeOwnedEvidence({ artifactPath: foreignEvidencePath, evidence: { passed: true } });
+  } catch (error) {
+    foreignOwnershipFailure = error;
+  }
+  assert.equal(foreignOwnershipFailure?.code, 'EEXIST', 'exclusive evidence ownership must reject a pre-existing path');
+  assert.equal(evidenceCleanupStatus(foreignOwnershipFailure), 'not-owned', 'a pre-existing evidence path must never be claimed by this run');
+  assert.equal(fs.readFileSync(foreignEvidencePath, 'utf8'), 'foreign-owner\n', 'failure must preserve evidence owned by another actor');
+
+  const successfulDigest = finalizeOwnedEvidence({ artifactPath: successfulEvidencePath, evidence: { passed: true } });
+  assert.match(successfulDigest, /^[a-f0-9]{64}$/, 'successful exclusive evidence finalization must return its SHA-256 digest');
+  assert.deepEqual(JSON.parse(fs.readFileSync(successfulEvidencePath, 'utf8')), { passed: true }, 'successful evidence must contain only the supplied bounded object');
+} finally {
+  for (const ownedPath of [partialEvidencePath, hashFailureEvidencePath, foreignEvidencePath, successfulEvidencePath]) {
+    if (fs.existsSync(ownedPath)) fs.unlinkSync(ownedPath);
+  }
+  fs.rmdirSync(evidenceTestDirectory);
+}
 
 let hangingSignal;
 await assert.rejects(
@@ -210,7 +402,8 @@ assert.match(harness, /clientSubmissionId/, 'repetition must require endpoint-na
 assert.match(harness, /expectedSessionVersion/, 'repetition must bind Interview session version');
 assert.match(harness, /same session advanced by exactly one version/, 'verification must prove one authoritative transition');
 assert.match(harness, /must use endpoint-native clientSubmissionId rather than Idempotency-Key/, 'repetition must reject controller-only idempotency metadata');
-assert.match(harness, /Promise\.all/, 'parallel duplicate requests must actually be concurrent');
+assert.match(harness, /awaitParallelQuiescence/, 'parallel duplicate requests must use the quiescent failure barrier');
+assert.match(lifecycleGuard, /Promise\.all/, 'the quiescence barrier must start and await all parallel requests');
 assert.match(harness, /boundedAbandonedRequest/, 'response-loss replay must abandon the first response through bounded authority');
 assert.match(harness, /canonical responses diverged/, 'retries must compare canonical responses');
 

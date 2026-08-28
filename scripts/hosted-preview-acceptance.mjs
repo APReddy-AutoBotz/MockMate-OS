@@ -2,7 +2,13 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { boundedAbandonedRequest, boundedRequest, exactHostedOrigin, exactOriginUrl } from './hosted-acceptance-safety.mjs';
+import { compensateTestUserAppData } from './hosted-acceptance-cleanup.mjs';
 import { createCaptureStore } from './hosted-acceptance-captures.mjs';
+import {
+  awaitParallelQuiescence,
+  evidenceCleanupStatus,
+  finalizeOwnedEvidence,
+} from './hosted-acceptance-lifecycle.mjs';
 import {
   jsonRequestLimitForOperation,
   operationOwnedHeaders,
@@ -12,7 +18,9 @@ import {
 const captureStore = createCaptureStore();
 process.on('exit', () => captureStore.clear());
 
+let mutationsMayHaveStarted = false;
 const fail = (message) => {
+  if (mutationsMayHaveStarted) throw new Error(message);
   console.error(`[HOSTED_PREVIEW_ACCEPTANCE_REFUSED] ${message}`);
   process.exit(2);
 };
@@ -44,9 +52,9 @@ const previewTargetId = requireValue('MOCKMATE_PREVIEW_TARGET_ID', /^[a-zA-Z0-9]
 const supabaseProjectRef = requireValue('MOCKMATE_SUPABASE_PROJECT_REF', /^[a-z0-9]{20}$/);
 const expectedHeadSha = requireValue('EXPECTED_HEAD_SHA', /^[0-9a-f]{40}$/);
 const scenarioFile = requireValue('HOSTED_ACCEPTANCE_SCENARIOS_FILE');
-const userAToken = requireValue('MOCKMATE_TEST_USER_A_TOKEN');
-const userBToken = requireValue('MOCKMATE_TEST_USER_B_TOKEN');
-const adminToken = process.env.MOCKMATE_TEST_ADMIN_TOKEN?.trim();
+let userAToken = requireValue('MOCKMATE_TEST_USER_A_TOKEN');
+let userBToken = requireValue('MOCKMATE_TEST_USER_B_TOKEN');
+let adminToken = process.env.MOCKMATE_TEST_ADMIN_TOKEN?.trim();
 const artifactPath = path.resolve(process.env.HOSTED_ACCEPTANCE_EVIDENCE_FILE || 'artifacts/p0-8-hosted-preview-acceptance.json');
 
 if (fs.existsSync(artifactPath)) {
@@ -170,6 +178,7 @@ for (const operation of requiredOperations) {
 const tokens = { userA: userAToken, userB: userBToken, admin: adminToken };
 const results = [];
 const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+const mutatingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const allowedAssertionOps = new Set(['exists', 'equals', 'oneOf', 'type', 'matches', 'includes']);
 const allowedJsonTypes = new Set(['string', 'number', 'boolean', 'object', 'array', 'null']);
 const MAX_RESPONSE_BYTES = 256 * 1024;
@@ -409,6 +418,7 @@ async function executeRequest(spec, scenarioId, phase) {
   const prepared = prepareRequest(spec, scenarioId, phase);
   let responseData;
   try {
+    if (mutatingMethods.has(prepared.method)) mutationsMayHaveStarted = true;
     responseData = await boundedRequest(prepared.targetUrl, { method: prepared.method, headers: prepared.headers, redirect: 'manual', body: prepared.requestBody }, {
       timeoutMs: REQUEST_TIMEOUT_MS,
       maxResponseBytes: MAX_RESPONSE_BYTES,
@@ -434,6 +444,7 @@ async function executeRequest(spec, scenarioId, phase) {
 async function executeAbandonedRequest(spec, scenarioId, phase) {
   const prepared = prepareRequest(spec, scenarioId, phase);
   try {
+    if (mutatingMethods.has(prepared.method)) mutationsMayHaveStarted = true;
     const response = await boundedAbandonedRequest(prepared.targetUrl, {
       method: prepared.method,
       headers: prepared.headers,
@@ -732,7 +743,7 @@ async function requestScenario(rawScenario) {
   let captureJson;
 
   if (plan.mode === 'parallel') {
-    const attempts = await Promise.all(Array.from({ length: plan.attempts }, (_, index) => executeRequest(scenario, scenario.id, `parallel attempt ${index + 1}`)));
+    const attempts = await awaitParallelQuiescence(Array.from({ length: plan.attempts }, (_, index) => executeRequest(scenario, scenario.id, `parallel attempt ${index + 1}`)));
     statuses.push(...attempts.map((attempt) => attempt.status));
     canonical.push(...attempts.map((attempt) => attempt.canonical));
   } else if (scenario.operation === 'replay.response-loss') {
@@ -808,34 +819,60 @@ async function preflight() {
 }
 
 let runError;
+let cleanupError;
+let digest;
 try {
   validateManifestBeforeNetwork();
   await preflight();
   for (const scenario of manifest.scenarios) await requestScenario(scenario);
+
+  const evidence = {
+    schemaVersion: manifest.schemaVersion,
+    generatedAt: new Date().toISOString(),
+    expectedHeadSha,
+    previewOriginHost: originUrl.hostname,
+    previewTargetId,
+    supabaseProjectRef,
+    scenarioManifestSha256: crypto.createHash('sha256').update(fs.readFileSync(scenarioFile)).digest('hex'),
+    results,
+    summary: { total: results.length, passed: results.filter((result) => result.passed).length },
+  };
+  digest = finalizeOwnedEvidence({ artifactPath, evidence });
 } catch (error) {
   runError = error;
+  if (mutationsMayHaveStarted) {
+    try {
+      await compensateTestUserAppData({
+        originUrl,
+        userAToken,
+        userBToken,
+        timeoutMs: REQUEST_TIMEOUT_MS,
+        maxResponseBytes: MAX_RESPONSE_BYTES,
+      });
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
 } finally {
   captureStore.clear();
+  tokens.userA = undefined;
+  tokens.userB = undefined;
+  tokens.admin = undefined;
+  userAToken = undefined;
+  userBToken = undefined;
+  adminToken = undefined;
+  delete process.env.MOCKMATE_TEST_USER_A_TOKEN;
+  delete process.env.MOCKMATE_TEST_USER_B_TOKEN;
+  delete process.env.MOCKMATE_TEST_ADMIN_TOKEN;
 }
 
 if (runError) {
-  console.error(`[HOSTED_PREVIEW_ACCEPTANCE_FAILED] ${runError instanceof Error ? runError.message : 'Unknown failure'}`);
+  const cleanupStatus = mutationsMayHaveStarted
+    ? (cleanupError ? 'incomplete' : 'complete')
+    : 'not-required';
+  const artifactCleanupStatus = evidenceCleanupStatus(runError) ?? 'not-required';
+  console.error(`[HOSTED_PREVIEW_ACCEPTANCE_FAILED] ${runError instanceof Error ? runError.message : 'Unknown failure'}; compensating_cleanup=${cleanupStatus}; evidence_cleanup=${artifactCleanupStatus}`);
   process.exit(1);
 }
 
-const evidence = {
-  schemaVersion: manifest.schemaVersion,
-  generatedAt: new Date().toISOString(),
-  expectedHeadSha,
-  previewOriginHost: originUrl.hostname,
-  previewTargetId,
-  supabaseProjectRef,
-  scenarioManifestSha256: crypto.createHash('sha256').update(fs.readFileSync(scenarioFile)).digest('hex'),
-  results,
-  summary: { total: results.length, passed: results.filter((result) => result.passed).length },
-};
-
-fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
-fs.writeFileSync(artifactPath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-const digest = crypto.createHash('sha256').update(fs.readFileSync(artifactPath)).digest('hex');
 console.log(`[HOSTED_PREVIEW_ACCEPTANCE_OK] ${results.length} scenarios passed semantic/state acceptance; evidence_sha256=${digest}`);
