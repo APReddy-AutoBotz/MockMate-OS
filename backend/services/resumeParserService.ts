@@ -1,4 +1,4 @@
-const pdfParse = require('pdf-parse');
+import { PDFParse } from 'pdf-parse';
 import * as mammoth from 'mammoth';
 import Groq from 'groq-sdk';
 import { ResumeData, ResumeDataSchema } from 'mockmate-shared';
@@ -414,8 +414,13 @@ export const validateProviderExtraction = (raw: unknown, sourceText: string): Re
 export const extractTextFromFile = async (fileBuffer: Buffer, mimetype: string): Promise<string> => {
     try {
         if (mimetype === 'application/pdf') {
-            const data = await pdfParse(fileBuffer);
-            return data.text;
+            const parser = new PDFParse({ data: fileBuffer });
+            try {
+                const data = await parser.getText();
+                return data.text;
+            } finally {
+                await parser.destroy();
+            }
         }
         if (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
             const result = await mammoth.extractRawText({ buffer: fileBuffer });
