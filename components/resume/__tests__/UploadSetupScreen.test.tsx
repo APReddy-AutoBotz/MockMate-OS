@@ -20,7 +20,8 @@ describe('Resume setup UI', () => {
     render(<UploadSetupScreen onComplete={jest.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /upload existing resume/i }));
 
-    const input = document.querySelector('#file-input') as HTMLInputElement;
+    expect(screen.getByRole('button', { name: /drop your resume here/i })).toBeVisible();
+    const input = screen.getByLabelText('Choose resume file') as HTMLInputElement;
     const invalid = new File(['not a resume'], 'resume.txt', { type: 'text/plain' });
     fireEvent.change(input, { target: { files: [invalid] } });
 
@@ -49,5 +50,14 @@ describe('Resume setup UI', () => {
     expect(screen.getByText('Professional Summary')).toBeVisible();
     expect(screen.getByText('Experience')).toBeVisible();
     expect(screen.getByText('Education')).toBeVisible();
+    expect(screen.getByLabelText('Name')).toBeVisible();
+    expect(screen.getByLabelText('Professional summary')).toBeVisible();
+    expect(screen.getByLabelText('company')).toBeVisible();
+    expect(screen.getByLabelText('Achievement 1 for role 1')).toBeVisible();
+    expect(screen.getByLabelText('Skill category 1')).toBeVisible();
+    expect(screen.getByLabelText('Skills in category 1')).toBeVisible();
+    expect(screen.getByLabelText('Institution 1')).toBeVisible();
+    expect(screen.getByLabelText('Degree or major 1')).toBeVisible();
+    expect(screen.getByLabelText('Target job description')).toBeVisible();
   });
 });

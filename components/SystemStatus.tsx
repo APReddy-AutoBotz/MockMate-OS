@@ -47,7 +47,7 @@ const SystemStatus: React.FC<{ avoidMobileTabs?: boolean }> = ({ avoidMobileTabs
   return (
     <div className={`fixed left-4 right-4 z-[70] flex flex-col items-center gap-3 pointer-events-none sm:left-auto sm:right-6 sm:max-w-sm lg:bottom-4 ${avoidMobileTabs ? 'bottom-[calc(env(safe-area-inset-bottom)+5.5rem)]' : 'bottom-4'}`}>
       {!isOnline && (
-        <div className="pointer-events-auto flex w-full items-start gap-3 rounded-2xl border border-brand-primary/30 bg-brand-dark/95 p-4 text-brand-tint shadow-2xl backdrop-blur-xl">
+        <div role="status" aria-live="polite" aria-atomic="true" className="pointer-events-auto flex w-full items-start gap-3 rounded-2xl border border-brand-primary/30 bg-brand-dark/95 p-4 text-brand-tint shadow-2xl backdrop-blur-xl">
           <WifiOff className="mt-0.5 h-5 w-5 shrink-0 text-brand-primary" />
           <div>
             <p className="text-sm font-semibold text-white">You are offline</p>

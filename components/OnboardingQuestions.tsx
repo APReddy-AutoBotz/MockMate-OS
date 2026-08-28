@@ -1,4 +1,4 @@
-import { UserProfile } from "../types/ui";
+import type { UserProfile } from "../types/ui";
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 ;
@@ -44,7 +44,9 @@ const OnboardingQuestions: React.FC<OnboardingQuestionsProps> = ({ onComplete })
             </header>
 
             <form onSubmit={handleSubmit} className="flex w-full flex-col items-center gap-8 md:gap-10">
+                <label htmlFor="onboarding-target-role" className="sr-only">Target role</label>
                 <input
+                    id="onboarding-target-role"
                     type="text"
                     placeholder="e.g. Sales Manager, Nurse, Engineer"
                     value={targetRole}
@@ -64,6 +66,7 @@ const OnboardingQuestions: React.FC<OnboardingQuestionsProps> = ({ onComplete })
             </form>
 
             <button
+                type="button"
                 onClick={() => onComplete({ name: 'Candidate', experienceLevel: 'mid', primaryGoal: 'skill_building' }, '')}
                 className="mt-12 text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint transition-all hover:text-white"
             >

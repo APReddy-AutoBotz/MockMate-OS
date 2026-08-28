@@ -1,6 +1,6 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { UploadCloud, PenTool, Loader2, FileText, X, Plus, Trash2 } from 'lucide-react';
-import { ResumeData } from 'mockmate-shared';
+import type { ResumeData } from 'mockmate-shared';
 import { GovernedResumeScoreResponseSchema, ResumeParseResponseSchema } from 'mockmate-shared/resume-integrity';
 import { apiClient, ApiError } from '../../services/apiClient';
 
@@ -28,6 +28,7 @@ const friendlyResumeError = (error: unknown) => {
 };
 
 export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete }) => {
+    const fileInputRef = useRef<HTMLInputElement>(null);
     const [mode, setMode] = useState<'CHOOSER' | 'UPLOAD' | 'SCRATCH'>('CHOOSER');
     const [file, setFile] = useState<File | null>(null);
     const [isDragOver, setIsDragOver] = useState(false);
@@ -40,6 +41,12 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
     const [skills, setSkills] = useState([{ category: 'Technical Skills', items: '' }]);
     const [education, setEducation] = useState([{ institution: '', degree: '', year: '' }]);
     const [experience, setExperience] = useState([{ company: '', position: '', startDate: '', endDate: '', bullets: [''] }]);
+
+    const openFilePicker = () => {
+        if (!fileInputRef.current) return;
+        fileInputRef.current.value = '';
+        fileInputRef.current.click();
+    };
 
     const selectFile = useCallback((candidate?: File | null) => {
         if (!candidate) {
@@ -127,7 +134,7 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
                     { icon: UploadCloud, label: 'Upload existing resume', desc: 'Fastest. We will read your PDF or DOCX and show what to improve.', action: () => setMode('UPLOAD') },
                     { icon: PenTool, label: 'Build from scratch', desc: 'No resume yet? We will guide you section by section.', action: () => setMode('SCRATCH') }
                 ].map(({ icon: Icon, label, desc, action }) => (
-                    <button key={label} onClick={action}
+                    <button type="button" key={label} onClick={action}
                         className="group flex flex-col items-start rounded-[22px] border border-white/5 bg-gradient-to-b from-white/[0.04] to-transparent p-6 text-left transition-all duration-500 hover:-translate-y-1 hover:border-brand-primary/30 hover:shadow-[0_20px_40px_-20px_rgba(255,188,3,0.15)] sm:p-8"
                         style={{ boxShadow: 'inset 0 1px 0 0 rgba(255,255,255,0.05)' }}>
                         <div className="w-12 h-12 rounded-2xl bg-brand-primary/10 border border-brand-primary/20 flex items-center justify-center mb-5 text-brand-primary group-hover:scale-110 transition-transform duration-300">
@@ -143,7 +150,7 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
 
     if (mode === 'UPLOAD') return (
         <div className="mx-auto w-full max-w-2xl px-0 sm:px-4">
-            <button onClick={() => setMode('CHOOSER')} className="text-brand-tint hover:text-white text-xs font-bold uppercase tracking-[0.12em] mb-8 transition-colors">Back</button>
+            <button type="button" onClick={() => setMode('CHOOSER')} className="text-brand-tint hover:text-white text-xs font-bold uppercase tracking-[0.12em] mb-8 transition-colors">Back</button>
             <h2 className="text-3xl font-black text-white tracking-tighter mb-2">Upload your resume</h2>
             <p className="text-brand-tint text-sm mb-8">We will review it and show practical ways to improve it.</p>
 
@@ -151,9 +158,8 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
                 onDrop={onDrop}
                 onDragOver={(event) => { event.preventDefault(); setIsDragOver(true); }}
                 onDragLeave={() => setIsDragOver(false)}
-                onClick={() => document.getElementById('file-input')?.click()}
-                className={`relative mb-6 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-6 text-center transition-all sm:p-10 ${isDragOver ? 'border-brand-primary/70 bg-brand-primary/10' : 'border-white/10 hover:border-brand-primary/30 hover:bg-white/[0.02]'}`}>
-                <input id="file-input" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden"
+                className={`relative mb-6 flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-6 text-center transition-all sm:p-10 ${isDragOver ? 'border-brand-primary/70 bg-brand-primary/10' : 'border-white/10 hover:border-brand-primary/30 hover:bg-white/[0.02]'}`}>
+                <input ref={fileInputRef} id="file-input" type="file" aria-label="Choose resume file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="sr-only"
                     onChange={event => selectFile(event.target.files?.[0])} />
                 {file ? (
                     <div className="flex items-center gap-3">
@@ -162,26 +168,27 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
                             <p className="text-white font-semibold text-sm">{file.name}</p>
                             <p className="text-brand-tint text-xs">{(file.size / 1024).toFixed(0)} KB</p>
                         </div>
-                        <button onClick={(event) => { event.stopPropagation(); setFile(null); }} className="ml-4 text-brand-tint hover:text-red-400 transition-colors"><X className="w-4 h-4" /></button>
+                        <button type="button" onClick={openFilePicker} className="ml-4 text-xs font-semibold text-brand-primary hover:text-brand-primary/80">Choose another</button>
+                        <button type="button" aria-label="Remove selected resume" onClick={() => { setFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }} className="text-brand-tint hover:text-red-400 transition-colors"><X className="w-4 h-4" /></button>
                     </div>
                 ) : (
-                    <>
+                    <button type="button" onClick={openFilePicker} className="flex w-full flex-col items-center rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand-primary">
                         <UploadCloud className={`w-10 h-10 mb-3 transition-colors ${isDragOver ? 'text-brand-primary' : 'text-brand-tint'}`} />
                         <p className="text-white font-semibold text-sm mb-1">Drop your resume here</p>
                         <p className="text-brand-tint text-xs">or click to browse. PDF or DOCX, max 10MB.</p>
-                    </>
+                    </button>
                 )}
             </div>
 
             <div className="mb-6">
-                <label className={labelCls}>Target job description <span className="text-brand-tint normal-case tracking-normal">optional, but helpful</span></label>
-                <textarea value={jdText} onChange={event => setJdText(event.target.value)} rows={4}
+                <label htmlFor="upload-target-job-description" className={labelCls}>Target job description <span className="text-brand-tint normal-case tracking-normal">optional, but helpful</span></label>
+                <textarea id="upload-target-job-description" value={jdText} onChange={event => setJdText(event.target.value)} rows={4}
                     className={inputCls} placeholder="Paste the job description here to compare your resume with the role." />
             </div>
 
             {error && <div role="alert" className="text-red-300 text-sm mb-4 px-4 py-3 bg-red-900/20 border border-red-400/20 rounded-xl">{error}</div>}
 
-            <button onClick={handleFileUpload} disabled={isProcessing || !file}
+            <button type="button" onClick={handleFileUpload} disabled={isProcessing || !file}
                 className="w-full bg-brand-primary hover:bg-brand-primary/90 disabled:opacity-40 text-brand-dark font-bold py-4 rounded-xl text-sm uppercase tracking-[0.12em] transition-all hover:-translate-y-0.5 flex items-center justify-center gap-2 shadow-[0_10px_30px_-10px_rgba(255,188,3,0.4)]">
                 {isProcessing ? <><Loader2 className="w-4 h-4 animate-spin" /> Reviewing your resume...</> : 'Review my resume'}
             </button>
@@ -190,7 +197,7 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
 
     return (
         <div className="mx-auto w-full max-w-2xl px-0 pb-10 sm:px-4">
-            <button onClick={() => setMode('CHOOSER')} className="text-brand-tint hover:text-white text-xs font-bold uppercase tracking-[0.12em] mb-8 transition-colors">Back</button>
+            <button type="button" onClick={() => setMode('CHOOSER')} className="text-brand-tint hover:text-white text-xs font-bold uppercase tracking-[0.12em] mb-8 transition-colors">Back</button>
             <h2 className="text-3xl font-black text-white tracking-tighter mb-2">Build your resume</h2>
             <p className="text-brand-tint text-sm mb-8">Fill in the sections below. We will help you improve the wording next.</p>
 
@@ -198,8 +205,8 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {(['name', 'email', 'phone', 'location'] as const).map(field => (
                         <div key={field}>
-                            <label className={labelCls}>{field.charAt(0).toUpperCase() + field.slice(1)}</label>
-                            <input className={inputCls} placeholder={field === 'name' ? 'Full Name' : field === 'email' ? 'you@example.com' : field === 'phone' ? '+1 555 000 0000' : 'City, Country'}
+                            <label htmlFor={`resume-${field}`} className={labelCls}>{field.charAt(0).toUpperCase() + field.slice(1)}</label>
+                            <input id={`resume-${field}`} type={field === 'email' ? 'email' : field === 'phone' ? 'tel' : 'text'} className={inputCls} placeholder={field === 'name' ? 'Full Name' : field === 'email' ? 'you@example.com' : field === 'phone' ? '+1 555 000 0000' : 'City, Country'}
                                 value={basics[field]} onChange={event => setBasics({ ...basics, [field]: event.target.value })} />
                         </div>
                     ))}
@@ -207,7 +214,8 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
             </Section>
 
             <Section title="Professional Summary">
-                <textarea className={inputCls} rows={3} placeholder="A 2-3 sentence summary of your background, key skills, and career goal."
+                <label htmlFor="resume-professional-summary" className="sr-only">Professional summary</label>
+                <textarea id="resume-professional-summary" className={inputCls} rows={3} placeholder="A 2-3 sentence summary of your background, key skills, and career goal."
                     value={summary} onChange={event => setSummary(event.target.value)} />
             </Section>
 
@@ -216,25 +224,26 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
                     <div key={index} className="mb-6 bg-white/[0.02] border border-white/5 rounded-2xl p-5">
                         <div className="flex justify-between items-center mb-4">
                             <span className="text-xs font-bold text-brand-tint uppercase tracking-[0.12em]">Role {index + 1}</span>
-                            {index > 0 && <button onClick={() => setExperience(current => current.filter((_, itemIndex) => itemIndex !== index))} className="text-red-300 hover:text-red-200 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>}
+                            {index > 0 && <button type="button" aria-label={`Remove role ${index + 1}`} onClick={() => setExperience(current => current.filter((_, itemIndex) => itemIndex !== index))} className="text-red-300 hover:text-red-200 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>}
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-                            {(['company', 'position'] as const).map(field => <div key={field}><label className={labelCls}>{field}</label><input className={inputCls} placeholder={field === 'company' ? 'Company Name' : 'Job Title'} value={role[field]} onChange={event => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: event.target.value } : item))} /></div>)}
-                            {(['startDate', 'endDate'] as const).map(field => <div key={field}><label className={labelCls}>{field === 'startDate' ? 'Start Date' : 'End Date'}</label><input className={inputCls} placeholder="e.g. Jan 2022" value={role[field]} onChange={event => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: event.target.value } : item))} /></div>)}
+                            {(['company', 'position'] as const).map(field => <div key={field}><label htmlFor={`experience-${index}-${field}`} className={labelCls}>{field}</label><input id={`experience-${index}-${field}`} className={inputCls} placeholder={field === 'company' ? 'Company Name' : 'Job Title'} value={role[field]} onChange={event => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: event.target.value } : item))} /></div>)}
+                            {(['startDate', 'endDate'] as const).map(field => <div key={field}><label htmlFor={`experience-${index}-${field}`} className={labelCls}>{field === 'startDate' ? 'Start Date' : 'End Date'}</label><input id={`experience-${index}-${field}`} className={inputCls} placeholder="e.g. Jan 2022" value={role[field]} onChange={event => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: event.target.value } : item))} /></div>)}
                         </div>
-                        <label className={labelCls}>Key achievements, one per line</label>
+                        <p className={labelCls}>Key achievements, one per line</p>
                         {role.bullets.map((bullet, bulletIndex) => (
                             <div key={bulletIndex} className="flex gap-2 mb-2">
-                                <input className={inputCls} placeholder={`Achievement ${bulletIndex + 1}...`} value={bullet}
+                                <label htmlFor={`experience-${index}-achievement-${bulletIndex}`} className="sr-only">Achievement {bulletIndex + 1} for role {index + 1}</label>
+                                <input id={`experience-${index}-achievement-${bulletIndex}`} className={inputCls} placeholder={`Achievement ${bulletIndex + 1}...`} value={bullet}
                                     onChange={event => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, bullets: item.bullets.map((currentBullet, currentBulletIndex) => currentBulletIndex === bulletIndex ? event.target.value : currentBullet) } : item))} />
-                                {bulletIndex > 0 && <button onClick={() => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, bullets: item.bullets.filter((_, currentBulletIndex) => currentBulletIndex !== bulletIndex) } : item))} className="text-brand-tint hover:text-red-300 transition-colors flex-shrink-0"><X className="w-4 h-4" /></button>}
+                                {bulletIndex > 0 && <button type="button" aria-label={`Remove achievement ${bulletIndex + 1} from role ${index + 1}`} onClick={() => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, bullets: item.bullets.filter((_, currentBulletIndex) => currentBulletIndex !== bulletIndex) } : item))} className="text-brand-tint hover:text-red-300 transition-colors flex-shrink-0"><X className="w-4 h-4" /></button>}
                             </div>
                         ))}
-                        <button onClick={() => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, bullets: [...item.bullets, ''] } : item))}
+                        <button type="button" onClick={() => setExperience(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, bullets: [...item.bullets, ''] } : item))}
                             className="text-xs text-brand-primary/80 hover:text-brand-primary flex items-center gap-1 mt-1 transition-colors"><Plus className="w-3 h-3" /> Add bullet</button>
                     </div>
                 ))}
-                <button onClick={() => setExperience(current => [...current, { company: '', position: '', startDate: '', endDate: '', bullets: [''] }])}
+                <button type="button" onClick={() => setExperience(current => [...current, { company: '', position: '', startDate: '', endDate: '', bullets: [''] }])}
                     className="w-full border border-dashed border-white/10 rounded-2xl py-3 text-xs text-brand-tint hover:text-white hover:border-brand-primary/30 transition-all flex items-center justify-center gap-2">
                     <Plus className="w-3.5 h-3.5" /> Add another role
                 </button>
@@ -243,36 +252,41 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
             <Section title="Skills">
                 {skills.map((group, index) => (
                     <div key={index} className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3 items-center">
-                        <input className={inputCls} placeholder="Category" value={group.category} onChange={event => setSkills(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, category: event.target.value } : item))} />
+                        <div>
+                            <label htmlFor={`skill-${index}-category`} className="sr-only">Skill category {index + 1}</label>
+                            <input id={`skill-${index}-category`} className={inputCls} placeholder="Category" value={group.category} onChange={event => setSkills(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, category: event.target.value } : item))} />
+                        </div>
                         <div className="sm:col-span-2 flex gap-2">
-                            <input className={inputCls} placeholder="Skill 1, Skill 2, Skill 3..." value={group.items} onChange={event => setSkills(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, items: event.target.value } : item))} />
-                            {index > 0 && <button onClick={() => setSkills(current => current.filter((_, itemIndex) => itemIndex !== index))} className="text-brand-tint hover:text-red-300 transition-colors flex-shrink-0"><Trash2 className="w-4 h-4" /></button>}
+                            <label htmlFor={`skill-${index}-items`} className="sr-only">Skills in category {index + 1}</label>
+                            <input id={`skill-${index}-items`} className={inputCls} placeholder="Skill 1, Skill 2, Skill 3..." value={group.items} onChange={event => setSkills(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, items: event.target.value } : item))} />
+                            {index > 0 && <button type="button" aria-label={`Remove skill category ${index + 1}`} onClick={() => setSkills(current => current.filter((_, itemIndex) => itemIndex !== index))} className="text-brand-tint hover:text-red-300 transition-colors flex-shrink-0"><Trash2 className="w-4 h-4" /></button>}
                         </div>
                     </div>
                 ))}
-                <button onClick={() => setSkills(current => [...current, { category: '', items: '' }])}
+                <button type="button" onClick={() => setSkills(current => [...current, { category: '', items: '' }])}
                     className="text-xs text-brand-primary/80 hover:text-brand-primary flex items-center gap-1 transition-colors mt-1"><Plus className="w-3 h-3" /> Add skill category</button>
             </Section>
 
             <Section title="Education">
                 {education.map((entry, index) => (
                     <div key={index} className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-                        <input className={inputCls} placeholder="Institution" value={entry.institution} onChange={event => setEducation(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, institution: event.target.value } : item))} />
-                        <input className={inputCls} placeholder="Degree / Major" value={entry.degree} onChange={event => setEducation(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, degree: event.target.value } : item))} />
-                        <input className={inputCls} placeholder="Year" value={entry.year} onChange={event => setEducation(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, year: event.target.value } : item))} />
+                        <div><label htmlFor={`education-${index}-institution`} className="sr-only">Institution {index + 1}</label><input id={`education-${index}-institution`} className={inputCls} placeholder="Institution" value={entry.institution} onChange={event => setEducation(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, institution: event.target.value } : item))} /></div>
+                        <div><label htmlFor={`education-${index}-degree`} className="sr-only">Degree or major {index + 1}</label><input id={`education-${index}-degree`} className={inputCls} placeholder="Degree / Major" value={entry.degree} onChange={event => setEducation(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, degree: event.target.value } : item))} /></div>
+                        <div><label htmlFor={`education-${index}-year`} className="sr-only">Education year {index + 1}</label><input id={`education-${index}-year`} className={inputCls} placeholder="Year" value={entry.year} onChange={event => setEducation(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, year: event.target.value } : item))} /></div>
                     </div>
                 ))}
-                <button onClick={() => setEducation(current => [...current, { institution: '', degree: '', year: '' }])}
+                <button type="button" onClick={() => setEducation(current => [...current, { institution: '', degree: '', year: '' }])}
                     className="text-xs text-brand-primary/80 hover:text-brand-primary flex items-center gap-1 transition-colors mt-1"><Plus className="w-3 h-3" /> Add education</button>
             </Section>
 
             <Section title="Target Job Description">
-                <textarea rows={4} className={inputCls} placeholder="Paste a job description to compare your resume with the role." value={jdText} onChange={event => setJdText(event.target.value)} />
+                <label htmlFor="scratch-target-job-description" className="sr-only">Target job description</label>
+                <textarea id="scratch-target-job-description" rows={4} className={inputCls} placeholder="Paste a job description to compare your resume with the role." value={jdText} onChange={event => setJdText(event.target.value)} />
             </Section>
 
             {error && <div role="alert" className="mb-4 rounded-xl border border-red-400/20 bg-red-900/20 px-4 py-3 text-sm text-red-200">{error}</div>}
 
-            <button onClick={handleScratchProceed} disabled={isProcessing || !basics.name.trim()}
+            <button type="button" onClick={handleScratchProceed} disabled={isProcessing || !basics.name.trim()}
                 className="w-full bg-brand-primary hover:bg-brand-primary/90 disabled:opacity-40 text-brand-dark font-bold py-4 rounded-xl text-sm uppercase tracking-[0.12em] transition-all hover:-translate-y-0.5 flex items-center justify-center gap-2 shadow-[0_10px_30px_-10px_rgba(255,188,3,0.4)] mt-4">
                 {isProcessing ? <><Loader2 className="w-4 h-4 animate-spin" /> Building your resume...</> : 'Review my resume'}
             </button>

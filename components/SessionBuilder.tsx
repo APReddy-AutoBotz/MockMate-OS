@@ -1,6 +1,6 @@
 
 import { motion } from 'framer-motion';
-import { QuestionBlueprint } from 'mockmate-shared';
+import type { InterviewPlan, QuestionBlueprint, SessionControls } from 'mockmate-shared';
 import React from 'react';
 
 type JDInsights = Record<string, any>;
@@ -12,6 +12,8 @@ interface SessionBuilderProps {
     dimensionWeights?: CompetencyWeight[]; // legacy alias
     questionSet?: QuestionBlueprint[];
     researchLinks?: { uri: string; title: string; }[];
+    planSource?: InterviewPlan['meta']['planSource'];
+    sourceMode?: SessionControls['sourceMode'];
     onAdjustSpecs?: () => void;
     onInitialize?: () => void;
 }
@@ -68,6 +70,8 @@ const SessionBuilder: React.FC<SessionBuilderProps> = ({
     jdInsights,
     competencyWeights,
     dimensionWeights,
+    planSource,
+    sourceMode,
     onAdjustSpecs = () => {},
     onInitialize = () => {},
 }) => {
@@ -79,6 +83,12 @@ const SessionBuilder: React.FC<SessionBuilderProps> = ({
     const domains     = jdInsights.domains?.length         > 0 ? jdInsights.domains       : [];
     const tools       = jdInsights.tools?.length           > 0 ? jdInsights.tools         : [];
     const softSkills  = jdInsights.softSkills?.length      > 0 ? jdInsights.softSkills    : [];
+    const isProviderFreePlan = planSource === 'deterministic_fallback';
+    const sourceLabel = sourceMode === 'question_bank' || jdInsights.source === 'question_bank' || jdInsights.source === 'questionBank'
+        ? 'Question bank'
+        : sourceMode === 'job_description' || jdInsights.source === 'job_description'
+            ? 'JD analysis'
+            : 'Practice plan';
 
     const formattedWeights = weights.map(w => ({
         label: w.name.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim().toLowerCase(),
@@ -102,9 +112,17 @@ const SessionBuilder: React.FC<SessionBuilderProps> = ({
                     Your interview plan
                 </h1>
                 <p className="text-sm md:text-base text-white/40 max-w-xl mx-auto font-normal italic leading-relaxed">
-                    We've tailored your practice session based on your goal. Review it below before you start.
+                    {isProviderFreePlan
+                        ? 'We prepared a standard provider-free question plan for your goal. Review it below before you start.'
+                        : "We've tailored your practice session based on your goal. Review it below before you start."}
                 </p>
             </motion.div>
+
+            {isProviderFreePlan && (
+                <div role="status" className="mb-5 rounded-xl border border-brand-primary/25 bg-brand-primary/10 px-4 py-3 text-sm text-brand-tint">
+                    Standard question plan in use. These questions come from MockMate's provider-free question bank.
+                </div>
+            )}
 
             {/* ── Blueprint Card ───────────────────────────────────── */}
             <motion.div
@@ -123,7 +141,7 @@ const SessionBuilder: React.FC<SessionBuilderProps> = ({
                         What your interview will cover
                     </h2>
                     <span className="ml-auto text-[10px] text-brand-tint font-bold uppercase tracking-[0.12em]">
-                        {jdInsights.source === 'questionBank' ? 'Question bank' : 'JD analysis'}
+                        {sourceLabel}
                     </span>
                 </div>
 
@@ -151,12 +169,14 @@ const SessionBuilder: React.FC<SessionBuilderProps> = ({
                 {/* Actions */}
                 <div className="px-6 md:px-8 py-5 flex flex-col sm:flex-row gap-3 relative z-10">
                     <button
+                        type="button"
                         onClick={onInitialize}
                         className="flex-[2] bg-brand-primary hover:bg-brand-primary/90 text-brand-dark font-bold py-4 px-8 rounded-xl text-xs uppercase tracking-[0.12em] shadow-[0_10px_30px_-8px_rgba(255,188,3,0.4)] transition-all active:scale-[0.98] order-1 sm:order-2"
                     >
                         Start my interview →
                     </button>
                     <button
+                        type="button"
                         onClick={onAdjustSpecs}
                         className="flex-1 bg-white/5 hover:bg-white/10 border border-white/[0.07] text-brand-tint hover:text-white font-bold py-4 px-8 rounded-xl text-xs uppercase tracking-[0.12em] transition-all active:scale-[0.98] order-2 sm:order-1"
                     >

@@ -724,7 +724,7 @@ const App: React.FC = () => {
                                 <RoleCapture
                                     userProfile={userProfile}
                                     onRoleSubmit={handleRoleSubmit}
-                                    onBack={handleLogout}
+                                    onBack={handleRestart}
                                     onViewHistory={toggleHistory}
                                 />
                             </ErrorBoundary>
@@ -921,17 +921,19 @@ const App: React.FC = () => {
                                             </>
                                         )}
                                         <button
+                                            type="button"
                                             onClick={handleLogout}
                                             className="text-[8px] sm:text-[10px] font-bold bg-white/5 hover:bg-white/10 text-white border border-white/10 rounded-lg sm:rounded-xl px-3 sm:px-6 py-2 sm:py-3 transition-all backdrop-blur-md uppercase tracking-widest"
                                         >
-                                            {appState === 'HUB' ? 'Sign Out' : 'End Session'}
+                                            Sign out
                                         </button>
                                     </div>
                                     <button
+                                        type="button"
                                         onClick={handleLogout}
                                         className="pointer-events-auto rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.1em] text-white backdrop-blur-md transition-all hover:bg-white/10 lg:hidden"
                                     >
-                                        {appState === 'HUB' ? 'Sign out' : 'Exit'}
+                                        Sign out
                                     </button>
                                 </motion.header>
                             )}

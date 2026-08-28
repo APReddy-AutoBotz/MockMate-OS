@@ -1,4 +1,4 @@
-import { UserProfile } from "../types/ui";
+import type { UserProfile } from "../types/ui";
 import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 ;
@@ -39,11 +39,12 @@ const RoleCapture: React.FC<RoleCaptureProps> = ({ userProfile, onRoleSubmit, on
                 <div className="space-y-4">
                     <div className="mb-2 flex items-center gap-4">
                         <div className="h-px flex-grow bg-brand-tint/15" />
-                        <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint">Target role</span>
+                        <label htmlFor="interview-target-role" className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint">Target role</label>
                         <div className="h-px flex-grow bg-brand-tint/15" />
                     </div>
 
                     <textarea
+                        id="interview-target-role"
                         value={intentText}
                         onChange={(e) => setIntentText(e.target.value)}
                         placeholder="e.g. Sales Manager, Teacher, Engineer..."
@@ -53,6 +54,9 @@ const RoleCapture: React.FC<RoleCaptureProps> = ({ userProfile, onRoleSubmit, on
 
                     <div className="pt-2">
                         <button
+                            type="button"
+                            aria-expanded={showCompanyFields}
+                            aria-controls="interview-company-fields"
                             onClick={() => setShowCompanyFields(!showCompanyFields)}
                             className="mx-auto flex items-center gap-2 py-2 text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint transition-all hover:text-brand-primary"
                         >
@@ -63,20 +67,25 @@ const RoleCapture: React.FC<RoleCaptureProps> = ({ userProfile, onRoleSubmit, on
                         <AnimatePresence>
                             {showCompanyFields && (
                                 <motion.div
+                                    id="interview-company-fields"
                                     initial={{ height: 0, opacity: 0 }}
                                     animate={{ height: 'auto', opacity: 1 }}
                                     exit={{ height: 0, opacity: 0 }}
                                     className="mt-6 overflow-hidden"
                                 >
                                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                        <label htmlFor="interview-company-name" className="sr-only">Company name</label>
                                         <input
+                                            id="interview-company-name"
                                             type="text"
                                             placeholder="Company name"
                                             value={companyName}
                                             onChange={(e) => setCompanyName(e.target.value)}
                                             className="rounded-xl border border-brand-tint/15 bg-white/[0.03] px-6 py-4 text-base font-medium text-white outline-none transition-all placeholder:text-brand-tint/45 focus:border-brand-primary/40"
                                         />
+                                        <label htmlFor="interview-company-website" className="sr-only">Company website (optional)</label>
                                         <input
+                                            id="interview-company-website"
                                             type="text"
                                             placeholder="Company website (optional)"
                                             value={companyUrl}
@@ -92,6 +101,7 @@ const RoleCapture: React.FC<RoleCaptureProps> = ({ userProfile, onRoleSubmit, on
 
                 <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                     <button
+                        type="button"
                         onClick={() => handleSubmit('structured')}
                         disabled={!intentText.trim()}
                         className="group relative rounded-[24px] border border-brand-tint/15 bg-white/[0.035] p-8 text-left shadow-2xl transition-all duration-300 hover:-translate-y-1 hover:border-brand-primary/30 disabled:opacity-70 disabled:hover:translate-y-0"
@@ -105,6 +115,7 @@ const RoleCapture: React.FC<RoleCaptureProps> = ({ userProfile, onRoleSubmit, on
                     </button>
 
                     <button
+                        type="button"
                         onClick={() => handleSubmit('conversational')}
                         disabled={!intentText.trim()}
                         className="group relative rounded-[24px] border border-brand-tint/15 bg-white/[0.035] p-8 text-left shadow-2xl transition-all duration-300 hover:-translate-y-1 hover:border-brand-primary/30 disabled:opacity-70 disabled:hover:translate-y-0"
@@ -119,7 +130,7 @@ const RoleCapture: React.FC<RoleCaptureProps> = ({ userProfile, onRoleSubmit, on
                 </div>
 
                 <div className="flex justify-center pt-6">
-                    <button onClick={onBack} className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint transition-all hover:text-white">
+                    <button type="button" onClick={onBack} className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint transition-all hover:text-white">
                         Back to practice home
                     </button>
                 </div>
