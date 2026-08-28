@@ -788,6 +788,7 @@ describe('Backend Express API & Route Parity Tests', () => {
   });
 
   it('33. Mocked Supabase deletion returns 200 and success=true when all table deletions succeed', async () => {
+    const cacheDeleteEq = jest.fn().mockResolvedValue({ error: null });
     const mockFrom = jest.fn().mockImplementation((table: string) => {
       if (table === 'interview_sessions') {
         return {
@@ -797,6 +798,11 @@ describe('Backend Express API & Route Parity Tests', () => {
           delete: jest.fn().mockReturnValue({
             eq: jest.fn().mockResolvedValue({ error: null }),
           }),
+        };
+      }
+      if (table === 'ai_cache') {
+        return {
+          delete: jest.fn().mockReturnValue({ eq: cacheDeleteEq }),
         };
       }
       return {
@@ -821,6 +827,8 @@ describe('Backend Express API & Route Parity Tests', () => {
       expect(res.body.authIdentityDeleted).toBe(false);
       expect(res.body.authIdentityRetainedReason).toContain('retained');
       expect(res.body.failedTables).toEqual([]);
+      expect(res.body.deletedTables).toContain('ai_cache');
+      expect(cacheDeleteEq).toHaveBeenCalledWith('user_id', testUserId);
     } finally {
       (supabaseAdminModule as any).supabaseAdmin = orig;
     }

@@ -129,6 +129,7 @@ router.delete('/data', async (req, res) => {
     // 3. Delete remaining application data tables
     const applicationTables = [
       'resume_reviews',
+      'ai_cache',
       'interview_sessions',
       'clearspeak_sessions',
       'clearspeak_progress',

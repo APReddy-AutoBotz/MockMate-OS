@@ -100,6 +100,42 @@ if (snapshot10Drop === -1 || snapshot10Create === -1 || snapshot10Drop > snapsho
   failures.push('The source-authority migration must safely replace the existing ten-argument create_grounding_snapshot_tx signature');
 }
 
+// 5. Resume-score cache responses must remain subordinate to one durable,
+// user-owned source record and must follow account/auth-identity deletion.
+const resumeScoreProvenanceMigration = (
+  await readFile(
+    path.join(migrationsDir, '20260828110000_p0_8_resume_score_provenance.sql'),
+    'utf8',
+  )
+).toLowerCase().replace(/\s+/g, ' ');
+if (!resumeScoreProvenanceMigration.includes('add column if not exists request_hash text')) {
+  failures.push('Resume reviews must record exact governed score request identity');
+}
+if (!/unique \(user_id, request_hash\)/.test(resumeScoreProvenanceMigration)) {
+  failures.push('Resume review request identity must be unique per user');
+}
+if (!resumeScoreProvenanceMigration.includes('add column if not exists user_id uuid')) {
+  failures.push('AI cache must support explicit user ownership');
+}
+if (!/foreign key \(user_id\) references auth\.users\(id\) on delete cascade/.test(resumeScoreProvenanceMigration)) {
+  failures.push('Owned AI cache must follow Auth identity deletion');
+}
+if (!resumeScoreProvenanceMigration.includes("where kind in ('resume_score_governed_v2', 'resume_suggest_governed_v1')")) {
+  failures.push('Legacy ownerless resume score and suggestion cache entries must be purged');
+}
+if (!resumeScoreProvenanceMigration.includes('create policy "resume reviews owner read"')) {
+  failures.push('Resume reviews must retain an owner-only read policy');
+}
+if (!resumeScoreProvenanceMigration.includes('revoke all on public.resume_reviews, public.ai_cache')) {
+  failures.push('Authenticated clients must not mutate server-authored resume review provenance');
+}
+if (!resumeScoreProvenanceMigration.includes('grant select on public.resume_reviews to authenticated')) {
+  failures.push('Authenticated owners must retain read access to resume reviews');
+}
+if (!resumeScoreProvenanceMigration.includes('grant select, insert, update, delete on public.resume_reviews, public.ai_cache to service_role')) {
+  failures.push('Service role must retain explicit resume review and owned-cache persistence privileges');
+}
+
 if (failures.length > 0) {
   console.error('Supabase migration static verification FAILED with errors:');
   for (const failure of failures) {

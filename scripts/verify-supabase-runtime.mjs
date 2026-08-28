@@ -119,6 +119,17 @@ async function runRuntimeVerification() {
       const sql = await readFile(path.join(migrationsDir, file), 'utf8');
       await client.query(sql);
 
+      // Model Supabase's default API-role grants for the legacy resume review
+      // table. The final provenance migration must reduce this to owner reads
+      // while preserving service-role persistence.
+      if (file === '001_initial_schema.sql') {
+        await client.query(`
+          GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE
+            ON TABLE public.resume_reviews
+            TO PUBLIC, service_role, authenticated, anon;
+        `);
+      }
+
       // Model Supabase's default result-table mutation grants before the
       // forward authority hardening is applied. The final migration must close
       // both service and browser bypasses without removing owner history reads.
@@ -152,6 +163,38 @@ async function runRuntimeVerification() {
     }
     console.log('[Runtime Verification] All migration SQL compiled and executed cleanly!');
 
+    const resumeReviewPrivileges = await client.query(`
+      SELECT
+        has_table_privilege('service_role', 'public.resume_reviews', 'INSERT') AS service_insert,
+        has_table_privilege('authenticated', 'public.resume_reviews', 'SELECT') AS authenticated_select,
+        has_table_privilege('authenticated', 'public.resume_reviews', 'INSERT') AS authenticated_insert,
+        has_table_privilege('authenticated', 'public.resume_reviews', 'UPDATE') AS authenticated_update,
+        has_table_privilege('authenticated', 'public.resume_reviews', 'DELETE') AS authenticated_delete,
+        has_table_privilege('anon', 'public.resume_reviews', 'TRUNCATE') AS anon_truncate,
+        has_table_privilege('service_role', 'public.ai_cache', 'SELECT') AS service_cache_select,
+        has_table_privilege('service_role', 'public.ai_cache', 'INSERT') AS service_cache_insert,
+        has_table_privilege('service_role', 'public.ai_cache', 'UPDATE') AS service_cache_update,
+        has_table_privilege('service_role', 'public.ai_cache', 'DELETE') AS service_cache_delete,
+        has_table_privilege('authenticated', 'public.ai_cache', 'SELECT') AS authenticated_cache_select
+    `);
+    const resumePrivileges = resumeReviewPrivileges.rows[0];
+    if (
+      !resumePrivileges?.service_insert ||
+      !resumePrivileges?.service_cache_select ||
+      !resumePrivileges?.service_cache_insert ||
+      !resumePrivileges?.service_cache_update ||
+      !resumePrivileges?.service_cache_delete ||
+      !resumePrivileges?.authenticated_select ||
+      resumePrivileges?.authenticated_insert ||
+      resumePrivileges?.authenticated_update ||
+      resumePrivileges?.authenticated_delete ||
+      resumePrivileges?.anon_truncate ||
+      resumePrivileges?.authenticated_cache_select
+    ) {
+      throw new Error('Resume review grants did not converge on service-write/owner-read authority');
+    }
+    console.log('[Runtime Verification] Resume-review client DML is closed while service persistence remains available.');
+
     // Regression for the complete empty-database chain: the accepted authority
     // migration and the newest forward migration both define this contract, but
     // applying the chain once must converge on exactly one callable signature.
@@ -183,6 +226,44 @@ async function runRuntimeVerification() {
         ON CONFLICT (id) DO NOTHING;
       `);
     } catch (_) {}
+
+    // Supplemental resume-score provenance contract: the same exact request
+    // is one source lineage per user, and both its review and owned cache data
+    // follow Auth identity deletion.
+    const resumeProvenanceUser = 'aaaaaaaa-1111-4111-8111-111111111111';
+    const resumeRequestHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    await client.query(`
+      INSERT INTO auth.users (id, email)
+      VALUES ('${resumeProvenanceUser}', 'resume-provenance@example.com')
+      ON CONFLICT (id) DO NOTHING;
+      INSERT INTO public.resume_reviews (user_id, request_hash, resume_data)
+      VALUES ('${resumeProvenanceUser}', '${resumeRequestHash}', '{}'::jsonb)
+      ON CONFLICT (user_id, request_hash) DO NOTHING;
+      INSERT INTO public.resume_reviews (user_id, request_hash, resume_data)
+      VALUES ('${resumeProvenanceUser}', '${resumeRequestHash}', '{}'::jsonb)
+      ON CONFLICT (user_id, request_hash) DO NOTHING;
+      INSERT INTO public.ai_cache (cache_key, kind, payload, user_id)
+      VALUES ('resume-score-provenance-test', 'resume_score_governed_v2', '{}'::jsonb, '${resumeProvenanceUser}');
+    `);
+    const oneResumeReview = await client.query(`
+      SELECT count(*)::int AS count
+      FROM public.resume_reviews
+      WHERE user_id = '${resumeProvenanceUser}'
+        AND request_hash = '${resumeRequestHash}'
+    `);
+    if (oneResumeReview.rows[0]?.count !== 1) {
+      throw new Error('Resume score request identity did not converge on one user-owned review');
+    }
+    await client.query(`DELETE FROM auth.users WHERE id = '${resumeProvenanceUser}'`);
+    const deletedResumeAuthority = await client.query(`
+      SELECT
+        (SELECT count(*)::int FROM public.resume_reviews WHERE user_id = '${resumeProvenanceUser}') AS reviews,
+        (SELECT count(*)::int FROM public.ai_cache WHERE user_id = '${resumeProvenanceUser}') AS cache_rows
+    `);
+    if (deletedResumeAuthority.rows[0]?.reviews !== 0 || deletedResumeAuthority.rows[0]?.cache_rows !== 0) {
+      throw new Error('Resume review or owned cache data survived Auth identity deletion');
+    }
+    console.log('[Runtime Verification] Resume-score idempotency and owned-cache cascade passed.');
 
     await client.query(`
       INSERT INTO public.profiles (user_id, full_name) VALUES
