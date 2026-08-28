@@ -6,6 +6,7 @@ const read = (relativePath) => fs.readFileSync(new URL(relativePath, import.meta
 const app = read('../App.tsx');
 const onboarding = read('../components/OnboardingQuestions.tsx');
 const roleCapture = read('../components/RoleCapture.tsx');
+const clearSpeakOnboarding = read('../components/clearspeak/ClearSpeakOnboarding.tsx');
 const uploadSetup = read('../components/resume/UploadSetupScreen.tsx');
 const sessionControls = read('../components/SessionControlsEditor.tsx');
 const sessionPrep = read('../components/SessionPrep.tsx');
@@ -32,6 +33,10 @@ for (const [source, requiredLabel] of [
   [uploadSetup, 'htmlFor={`skill-${index}-items`}'],
   [uploadSetup, 'htmlFor={`education-${index}-institution`}'],
   [sessionPrep, 'htmlFor="session-job-description"'],
+  [clearSpeakOnboarding, 'htmlFor="cs-role-input"'],
+  [clearSpeakOnboarding, 'htmlFor="cs-goal-input"'],
+  [clearSpeakOnboarding, 'htmlFor="cs-audience-input"'],
+  [clearSpeakOnboarding, 'htmlFor="cs-comfort-lang"'],
 ]) {
   assert.ok(source.includes(requiredLabel), `core field must retain its programmatic label: ${requiredLabel}`);
 }
