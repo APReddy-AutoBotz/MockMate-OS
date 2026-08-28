@@ -1,10 +1,12 @@
 const mockGetText = jest.fn().mockResolvedValue({ text: 'MockMate hosted acceptance resume' });
 const mockDestroy = jest.fn().mockResolvedValue(undefined);
+const mockCanvasFactory = class MockCanvasFactory {};
 const mockPDFParse = jest.fn().mockImplementation(() => ({
   getText: mockGetText,
   destroy: mockDestroy,
 }));
 
+jest.mock('pdf-parse/worker', () => ({ CanvasFactory: mockCanvasFactory }));
 jest.mock('pdf-parse', () => ({ PDFParse: mockPDFParse }));
 
 import { extractTextFromFile } from '../services/resumeParserService';
@@ -20,7 +22,7 @@ describe('resume text extraction', () => {
     await expect(extractTextFromFile(pdf, 'application/pdf'))
       .resolves.toBe('MockMate hosted acceptance resume');
 
-    expect(mockPDFParse).toHaveBeenCalledWith({ data: pdf });
+    expect(mockPDFParse).toHaveBeenCalledWith({ data: pdf, CanvasFactory: mockCanvasFactory });
     expect(mockGetText).toHaveBeenCalledTimes(1);
     expect(mockDestroy).toHaveBeenCalledTimes(1);
   });

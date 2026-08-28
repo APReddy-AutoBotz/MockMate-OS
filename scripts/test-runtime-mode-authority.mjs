@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [backend, backendAuth, backendUsage, backendPersistence, browser, mobileMode, mobileApi, mobileAuth, llmGateway, shared, eas, netlifyToml, netlifyFunctionPackage, netlifyFunctionLock] = await Promise.all([
+const [backend, backendServer, backendAuth, backendUsage, backendPersistence, browser, mobileMode, mobileApi, mobileAuth, llmGateway, shared, eas, netlifyToml, netlifyFunctionPackage, netlifyFunctionLock] = await Promise.all([
   readFile('backend/config/runtimeConfig.ts', 'utf8'),
+  readFile('backend/server.ts', 'utf8'),
   readFile('backend/middleware/authMiddleware.ts', 'utf8'),
   readFile('backend/services/usageService.ts', 'utf8'),
   readFile('backend/supabaseAdmin.ts', 'utf8'),
@@ -67,6 +68,15 @@ assert.match(netlifyToml, /command = "npm ci && npm --prefix netlify\/functions 
   'Netlify must install both the workspace and function adapter from committed lockfiles');
 assert.doesNotMatch(netlifyToml, /\bnpm install\b|package-lock\s*=\s*false/,
   'Netlify must never bypass committed lockfiles');
+const externalNodeModules = netlifyToml.match(/external_node_modules\s*=\s*\[([^\]]+)\]/)?.[1] ?? '';
+for (const dependency of ['express', 'pdf-parse', '@napi-rs/canvas']) {
+  assert.match(externalNodeModules, new RegExp(`['"]${dependency.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`),
+    `Netlify must package ${dependency} as an external Node module`);
+}
+assert.match(backendServer, /catch \(e\) \{\s*console\.error\("Failed to mount routes", e\);\s*throw e;\s*\}/,
+  'required route registration failures must fail startup instead of degrading into 404s');
+assert.match(backendServer, /catch \(e\) \{\s*console\.error\('Failed to mount ClearSpeak routes', e\);\s*throw e;\s*\}/,
+  'ClearSpeak route registration failures must fail startup instead of degrading into 404s');
 assert.equal(netlifyFunctionPackage.dependencies?.['serverless-http'], '4.0.0',
   'Netlify Express adapter must be an exact committed dependency');
 assert.equal(netlifyFunctionLock.lockfileVersion, 3, 'Netlify function dependency lock must use the current lock format');

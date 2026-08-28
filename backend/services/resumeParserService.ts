@@ -1,3 +1,4 @@
+import { CanvasFactory } from 'pdf-parse/worker';
 import { PDFParse } from 'pdf-parse';
 import * as mammoth from 'mammoth';
 import Groq from 'groq-sdk';
@@ -414,7 +415,7 @@ export const validateProviderExtraction = (raw: unknown, sourceText: string): Re
 export const extractTextFromFile = async (fileBuffer: Buffer, mimetype: string): Promise<string> => {
     try {
         if (mimetype === 'application/pdf') {
-            const parser = new PDFParse({ data: fileBuffer });
+            const parser = new PDFParse({ data: fileBuffer, CanvasFactory });
             try {
                 const data = await parser.getText();
                 return data.text;

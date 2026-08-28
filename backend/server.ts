@@ -133,6 +133,7 @@ try {
   app.use('/api/career-context', careerContextRoutes);
 } catch (e) {
   console.error("Failed to mount routes", e);
+  throw e;
 }
 
 try {
@@ -140,6 +141,7 @@ try {
   app.use('/api/clearspeak', clearSpeakRoutes);
 } catch (e) {
   console.error('Failed to mount ClearSpeak routes', e);
+  throw e;
 }
 
 app.use((_req, res) => res.status(404).json({ error: 'Not Found' }));
