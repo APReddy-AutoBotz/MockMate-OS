@@ -9,6 +9,9 @@ const ITEM_EMAIL_ID = '10000000-0000-0000-0000-000000000002';
 const ITEM_INFERRED_ID = '10000000-0000-0000-0000-000000000003';
 const SNAPSHOT_ID = '20000000-0000-0000-0000-000000000001';
 const BRIDGE_ID = '30000000-0000-0000-0000-000000000001';
+const POSTGREST_DB_TIMESTAMP = '2026-08-28T10:20:30.123456+00:00';
+const CANONICAL_DB_TIMESTAMP = '2026-08-28T10:20:30.123Z';
+const CLIENT_TIMESTAMP = '2026-08-28T10:20:30.123Z';
 
 // Mock Auth Middleware
 jest.mock('../middleware/authMiddleware', () => ({
@@ -22,6 +25,7 @@ const mockItems: any[] = [];
 const mockSnapshots: any[] = [];
 const mockBridges: any[] = [];
 const mockSnapshotMemberships = new Map<string, string[]>();
+let mockStateTimestamp: unknown = POSTGREST_DB_TIMESTAMP;
 
 const mockSupabaseClient: any = {
   from: (table: string) => {
@@ -29,8 +33,8 @@ const mockSupabaseClient: any = {
       return {
         select: () => ({
           eq: () => ({
-            single: async () => ({ data: { user_id: TEST_USER_ID, context_version: 1, personalization_enabled: true, updated_at: new Date().toISOString() } }),
-            maybeSingle: async () => ({ data: { user_id: TEST_USER_ID, context_version: 1, personalization_enabled: true, updated_at: new Date().toISOString() } }),
+            single: async () => ({ data: { user_id: TEST_USER_ID, context_version: 1, personalization_enabled: true, updated_at: mockStateTimestamp } }),
+            maybeSingle: async () => ({ data: { user_id: TEST_USER_ID, context_version: 1, personalization_enabled: true, updated_at: mockStateTimestamp } }),
           }),
         }),
         upsert: (row: any) => ({
@@ -198,7 +202,7 @@ const mockSupabaseClient: any = {
           userId: args.p_user_id,
           contextVersion: (args.p_expected_context_version ?? 1) + 1,
           personalizationEnabled: args.p_enabled,
-          updatedAt: new Date().toISOString(),
+          updatedAt: POSTGREST_DB_TIMESTAMP,
         },
         error: null,
       };
@@ -209,7 +213,7 @@ const mockSupabaseClient: any = {
       if (args.p_decision === 'confirm') {
         item.item_status = 'active';
         item.provenance = 'user_confirmed';
-        item.user_confirmed_at = new Date().toISOString();
+        item.user_confirmed_at = POSTGREST_DB_TIMESTAMP;
         return { data: { item }, error: null };
       }
       if (args.p_decision === 'reject' || args.p_decision === 'revoke') {
@@ -231,7 +235,7 @@ const mockSupabaseClient: any = {
           value: { type: 'text', text: args.p_new_value },
           provenance: 'user_edited',
           item_status: 'active',
-          user_confirmed_at: new Date().toISOString(),
+          user_confirmed_at: POSTGREST_DB_TIMESTAMP,
         };
         mockItems.push(newItem);
         return { data: { item: newItem }, error: null };
@@ -250,7 +254,7 @@ const mockSupabaseClient: any = {
         source_modules: args.p_source_modules,
         client_request_id: args.p_client_request_id,
         request_hash: args.p_request_hash,
-        created_at: new Date().toISOString(),
+        created_at: POSTGREST_DB_TIMESTAMP,
       };
       mockSnapshots.push(snapshotRow);
       mockSnapshotMemberships.set(snapId, [...args.p_item_ids]);
@@ -274,10 +278,10 @@ const mockSupabaseClient: any = {
         status: 'confirmed',
         client_request_id: args.p_client_request_id,
         request_hash: args.p_request_hash,
-        confirmed_at: new Date().toISOString(),
+        confirmed_at: POSTGREST_DB_TIMESTAMP,
         consumed_at: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        created_at: POSTGREST_DB_TIMESTAMP,
+        updated_at: POSTGREST_DB_TIMESTAMP,
       };
       mockBridges.push(bridgeRow);
       return { data: { bridgeId }, error: null };
@@ -291,7 +295,7 @@ const mockSupabaseClient: any = {
       }
       bridge.status = 'consumed';
       bridge.target_session_id = args.p_target_session_id;
-      bridge.consumed_at = new Date().toISOString();
+      bridge.consumed_at = POSTGREST_DB_TIMESTAMP;
       return { data: { success: true }, error: null };
     }
     return { data: null, error: null };
@@ -319,6 +323,7 @@ describe('Career Context API Routes (P0-3)', () => {
     mockSnapshots.length = 0;
     mockBridges.length = 0;
     mockSnapshotMemberships.clear();
+    mockStateTimestamp = POSTGREST_DB_TIMESTAMP;
 
     // Seed mock active item & contact item & inferred item
     mockItems.push({
@@ -337,8 +342,9 @@ describe('Career Context API Routes (P0-3)', () => {
       provenance: 'user_confirmed',
       item_status: 'active',
       sensitivity: 'standard',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      created_at: POSTGREST_DB_TIMESTAMP,
+      updated_at: POSTGREST_DB_TIMESTAMP,
+      user_confirmed_at: POSTGREST_DB_TIMESTAMP,
     });
 
     mockItems.push({
@@ -357,8 +363,8 @@ describe('Career Context API Routes (P0-3)', () => {
       provenance: 'user_confirmed',
       item_status: 'active',
       sensitivity: 'personal_contact', // MUST BE EXCLUDED FROM SNAPSHOTS
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      created_at: POSTGREST_DB_TIMESTAMP,
+      updated_at: POSTGREST_DB_TIMESTAMP,
     });
 
     mockItems.push({
@@ -377,8 +383,8 @@ describe('Career Context API Routes (P0-3)', () => {
       provenance: 'inferred_pending',
       item_status: 'pending_confirmation',
       sensitivity: 'standard',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      created_at: POSTGREST_DB_TIMESTAMP,
+      updated_at: POSTGREST_DB_TIMESTAMP,
     });
   });
 
@@ -388,6 +394,33 @@ describe('Career Context API Routes (P0-3)', () => {
     expect(res.body.state).toBeDefined();
     expect(res.body.activeItems.length).toBe(2);
     expect(res.body.pendingItems.length).toBe(1);
+    expect(res.body.state.updatedAt).toBe(CANONICAL_DB_TIMESTAMP);
+    expect(res.body.activeItems[0].createdAt).toBe(CANONICAL_DB_TIMESTAMP);
+    expect(res.body.activeItems[0].updatedAt).toBe(CANONICAL_DB_TIMESTAMP);
+    expect(res.body.activeItems[0].userConfirmedAt).toBe(CANONICAL_DB_TIMESTAMP);
+    expect(res.body.activeItems[0].source.capturedAt).toBe(CANONICAL_DB_TIMESTAMP);
+  });
+
+  it.each([null, 'malformed-database-timestamp'])(
+    'fails closed when authoritative state has invalid updated_at %p',
+    async (invalidTimestamp) => {
+      mockStateTimestamp = invalidTimestamp;
+      const res = await request(app).get('/api/career-context');
+      expect(res.status).toBe(503);
+      expect(res.body.error).toBe(
+        'Authoritative persistence returned an invalid career_context_state.updated_at timestamp'
+      );
+      expect(JSON.stringify(res.body)).not.toContain(String(invalidTimestamp));
+    }
+  );
+
+  it('does not silently erase a malformed optional persisted timestamp', async () => {
+    mockItems[0].user_confirmed_at = '';
+    const res = await request(app).get('/api/career-context');
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe(
+      'Authoritative persistence returned an invalid career_context_items.user_confirmed_at timestamp'
+    );
   });
 
   it('2. POST /api/career-context/preference toggles personalization', async () => {
@@ -397,6 +430,7 @@ describe('Career Context API Routes (P0-3)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.state.personalizationEnabled).toBe(false);
+    expect(res.body.state.updatedAt).toBe(CANONICAL_DB_TIMESTAMP);
   });
 
   it('3. POST /api/career-context/items/:itemId/decision confirms pending item', async () => {
@@ -407,6 +441,9 @@ describe('Career Context API Routes (P0-3)', () => {
     expect(res.status).toBe(200);
     expect(res.body.item.status).toBe('active');
     expect(res.body.item.provenance).toBe('user_confirmed');
+    expect(res.body.item.createdAt).toBe(CANONICAL_DB_TIMESTAMP);
+    expect(res.body.item.updatedAt).toBe(CANONICAL_DB_TIMESTAMP);
+    expect(res.body.item.userConfirmedAt).toBe(CANONICAL_DB_TIMESTAMP);
   });
 
   it('4. POST /api/career-context/snapshots creates immutable snapshot and excludes PII personal_contact', async () => {
@@ -422,7 +459,7 @@ describe('Career Context API Routes (P0-3)', () => {
           includedItemIds: [ITEM_ROLE_ID],
           excludedItemIds: [ITEM_EMAIL_ID],
           sourceModules: ['resume'],
-          acknowledgedAt: new Date().toISOString(),
+          acknowledgedAt: CLIENT_TIMESTAMP,
         },
         clientRequestId: 'snap_req_test_001',
       });
@@ -430,6 +467,7 @@ describe('Career Context API Routes (P0-3)', () => {
     expect(res.status).toBe(200);
     expect(res.body.snapshot).toBeDefined();
     expect(res.body.snapshot.itemIds).toEqual([ITEM_ROLE_ID]);
+    expect(res.body.snapshot.createdAt).toBe(CANONICAL_DB_TIMESTAMP);
   });
 
   it('5. POST /api/career-context/bridges creates idempotent bridge session', async () => {
@@ -442,7 +480,7 @@ describe('Career Context API Routes (P0-3)', () => {
       conflicts: [],
       consent: { scope: 'one_time', sourceModules: ['resume'] },
       source_modules: ['resume'],
-      created_at: new Date().toISOString(),
+      created_at: POSTGREST_DB_TIMESTAMP,
     });
 
     const reqBody = {
@@ -456,6 +494,10 @@ describe('Career Context API Routes (P0-3)', () => {
     const res1 = await request(app).post('/api/career-context/bridges').send(reqBody);
     expect(res1.status).toBe(200);
     expect(res1.body.bridge.id).toBeDefined();
+    expect(res1.body.bridge.createdAt).toBe(CANONICAL_DB_TIMESTAMP);
+    expect(res1.body.bridge.updatedAt).toBe(CANONICAL_DB_TIMESTAMP);
+    expect(res1.body.bridge.confirmedAt).toBe(CANONICAL_DB_TIMESTAMP);
+    expect(res1.body.bridge.consumedAt).toBeUndefined();
 
     // Re-sending same clientRequestId returns identical bridge
     const res2 = await request(app).post('/api/career-context/bridges').send(reqBody);
@@ -484,7 +526,7 @@ describe('Career Context API Routes (P0-3)', () => {
         includedItemIds: [ITEM_ROLE_ID],
         excludedItemIds: [competingRoleId],
         sourceModules: ['resume'],
-        acknowledgedAt: new Date().toISOString(),
+        acknowledgedAt: CLIENT_TIMESTAMP,
       },
       clientRequestId: 'snap_conflict_replay_001',
     };

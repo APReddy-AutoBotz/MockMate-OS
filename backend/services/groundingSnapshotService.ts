@@ -3,10 +3,15 @@ import {
   GroundingPurpose,
   CareerContextModule,
   CareerContextSnapshotSchema,
-  CareerContextItem
+  CareerContextItem,
+  CareerContextItemSchema,
 } from 'mockmate-shared';
 import { supabaseAdmin } from '../supabaseAdmin';
 import { projectCareerContext, resolveSnapshotConflictItems } from './careerContextProjectionService';
+import {
+  normalizeOptionalDbTimestamp,
+  normalizeRequiredDbTimestamp,
+} from './databaseTimestamp';
 import crypto from 'crypto';
 
 export interface CreateSnapshotInput {
@@ -272,14 +277,30 @@ function getSnapshotFromDbRow(data: any): CareerContextSnapshot {
     projection: data.projection,
     conflicts: data.conflicts || [],
     consent: data.consent,
-    createdAt: data.created_at,
+    createdAt: normalizeRequiredDbTimestamp(
+      data.created_at,
+      'career_context_snapshots.created_at'
+    ),
     sourceModules: data.source_modules,
     itemIds: data.consent?.includedItemIds || [],
   });
 }
 
 function mapDbToCareerContextItem(r: any): CareerContextItem {
-  return {
+  const createdAt = normalizeRequiredDbTimestamp(
+    r.created_at,
+    'career_context_items.created_at'
+  );
+  const updatedAt = normalizeRequiredDbTimestamp(
+    r.updated_at,
+    'career_context_items.updated_at'
+  );
+  const userConfirmedAt = normalizeOptionalDbTimestamp(
+    r.user_confirmed_at,
+    'career_context_items.user_confirmed_at'
+  );
+
+  return CareerContextItemSchema.parse({
     id: r.id,
     userId: r.user_id,
     kind: r.item_kind,
@@ -292,15 +313,15 @@ function mapDbToCareerContextItem(r: any): CareerContextItem {
       fieldPath: r.source_path,
       sourceRevision: r.source_revision,
       sourceHash: r.source_hash,
-      capturedAt: r.created_at,
+      capturedAt: createdAt,
     },
     exactExcerpt: r.exact_excerpt,
     provenance: r.provenance,
     status: r.item_status,
     sensitivity: r.sensitivity,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
+    createdAt,
+    updatedAt,
     supersededBy: r.superseded_by,
-    userConfirmedAt: r.user_confirmed_at,
-  };
+    userConfirmedAt,
+  });
 }

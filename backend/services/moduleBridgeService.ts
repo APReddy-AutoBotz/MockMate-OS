@@ -6,6 +6,10 @@ import {
 } from 'mockmate-shared';
 import { supabaseAdmin } from '../supabaseAdmin';
 import crypto from 'crypto';
+import {
+  normalizeOptionalDbTimestamp,
+  normalizeRequiredDbTimestamp,
+} from './databaseTimestamp';
 
 export interface CreateBridgeInput {
   userId: string;
@@ -118,6 +122,15 @@ export async function getModuleBridgeById(userId: string, bridgeId: string): Pro
 }
 
 function mapDbToBridge(row: any): ModuleBridgeSession {
+  const createdAt = normalizeRequiredDbTimestamp(
+    row.created_at,
+    'career_context_bridges.created_at'
+  );
+  const updatedAt = normalizeRequiredDbTimestamp(
+    row.updated_at,
+    'career_context_bridges.updated_at'
+  );
+
   return ModuleBridgeSessionSchema.parse({
     id: row.id,
     userId: row.user_id,
@@ -129,9 +142,15 @@ function mapDbToBridge(row: any): ModuleBridgeSession {
     targetSessionId: row.target_session_id || undefined,
     status: row.status,
     clientRequestId: row.client_request_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at || row.created_at || new Date().toISOString(),
-    confirmedAt: row.confirmed_at || undefined,
-    consumedAt: row.consumed_at || undefined,
+    createdAt,
+    updatedAt,
+    confirmedAt: normalizeOptionalDbTimestamp(
+      row.confirmed_at,
+      'career_context_bridges.confirmed_at'
+    ),
+    consumedAt: normalizeOptionalDbTimestamp(
+      row.consumed_at,
+      'career_context_bridges.consumed_at'
+    ),
   });
 }

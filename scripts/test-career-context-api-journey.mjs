@@ -27,7 +27,8 @@ const headersUserB = {
 
 const USER_A = '11111111-1111-1111-1111-111111111111';
 const ITEM_ID = '55555555-5555-5555-5555-555555555555';
-const now = new Date().toISOString();
+const now = '2026-08-28T10:20:30.123456+00:00';
+const canonicalDbTimestamp = '2026-08-28T10:20:30.123Z';
 const accentAttemptId = (index) => `70000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
 const unsupportedAccentDimension = (summary) => ({ score: null, confidence: 0, evidenceStatus: 'unsupported', summary, evidenceRefs: [] });
 const scoredAccentResult = (attemptId) => ({
@@ -428,7 +429,9 @@ try {
     throw new Error('GET /api/career-context response missing success or state');
   }
 
-  if (getBodyA.state.contextVersion !== versionAfterFirstRebuild || getBodyA.activeItems[0]?.id !== ITEM_ID) {
+  if (getBodyA.state.contextVersion !== versionAfterFirstRebuild || getBodyA.activeItems[0]?.id !== ITEM_ID ||
+      getBodyA.state.updatedAt !== canonicalDbTimestamp || getBodyA.activeItems[0]?.createdAt !== canonicalDbTimestamp ||
+      getBodyA.activeItems[0]?.updatedAt !== canonicalDbTimestamp || getBodyA.activeItems[0]?.userConfirmedAt !== canonicalDbTimestamp) {
     throw new Error('GET did not return authoritative versioned Career Context state');
   }
 
@@ -440,7 +443,9 @@ try {
   });
   if (resPref.status !== 200) throw new Error(`Expected 200 for authoritative preference update, got ${resPref.status}`);
   const prefBody = await resPref.json();
-  if (prefBody.state.contextVersion !== 9) throw new Error('Preference update did not advance context version');
+  if (prefBody.state.contextVersion !== 9 || prefBody.state.updatedAt !== canonicalDbTimestamp) {
+    throw new Error('Preference update did not advance context version with a canonical database timestamp');
+  }
 
   // 5. Create a transactionally validated consent snapshot at the new version.
   const clientReqId = '33333333-3333-3333-3333-333333333333';
@@ -474,7 +479,8 @@ try {
   const snapshotId = snapBody.snapshot.id;
   const reference = snapBody.snapshot.groundingReferences?.[0];
   if (snapBody.snapshot.contextVersion !== 9 || snapBody.snapshot.consent.includedItemIds[0] !== ITEM_ID ||
-      reference?.contextItemId !== ITEM_ID || reference?.exactExcerpt !== 'Built production TypeScript services') {
+      reference?.contextItemId !== ITEM_ID || reference?.exactExcerpt !== 'Built production TypeScript services' ||
+      snapBody.snapshot.createdAt !== canonicalDbTimestamp) {
     throw new Error('Snapshot did not preserve authoritative version, consent, and grounding-reference lineage');
   }
 
@@ -497,6 +503,10 @@ try {
   }
   const bridgeBody = await resBridge.json();
   const bridgeId = bridgeBody.bridge.id;
+  if (bridgeBody.bridge.createdAt !== canonicalDbTimestamp || bridgeBody.bridge.updatedAt !== canonicalDbTimestamp ||
+      bridgeBody.bridge.confirmedAt !== canonicalDbTimestamp) {
+    throw new Error('Bridge did not normalize authoritative database timestamps');
+  }
   const bridgeReplay = await fetch(`${baseUrl}/api/career-context/bridges`, {
     method: 'POST', headers: headersUserA, body: JSON.stringify({
       sourceModule: 'resume', targetModule: 'interview', purpose: 'resume_to_interview', snapshotId, clientRequestId: bridgeReqId,

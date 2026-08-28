@@ -7,6 +7,10 @@ import {
 } from 'mockmate-shared';
 import type { CareerContextSourceManifestEntry } from 'mockmate-shared';
 import { supabaseAdmin } from '../supabaseAdmin';
+import {
+  normalizeOptionalDbTimestamp,
+  normalizeRequiredDbTimestamp,
+} from './databaseTimestamp';
 
 export async function getCareerContextState(userId: string): Promise<CareerContextState> {
   const now = new Date().toISOString();
@@ -24,7 +28,10 @@ export async function getCareerContextState(userId: string): Promise<CareerConte
         userId: data.user_id,
         contextVersion: Number(data.context_version),
         personalizationEnabled: Boolean(data.personalization_enabled),
-        updatedAt: data.updated_at || now,
+        updatedAt: normalizeRequiredDbTimestamp(
+          data.updated_at,
+          'career_context_state.updated_at'
+        ),
       });
     }
 
@@ -47,7 +54,10 @@ export async function getCareerContextState(userId: string): Promise<CareerConte
         userId: inserted.user_id,
         contextVersion: Number(inserted.context_version),
         personalizationEnabled: Boolean(inserted.personalization_enabled),
-        updatedAt: inserted.updated_at,
+        updatedAt: normalizeRequiredDbTimestamp(
+          inserted.updated_at,
+          'career_context_state.updated_at'
+        ),
       });
     }
   }
@@ -82,7 +92,10 @@ export async function setPersonalizationPreference(
     userId: (data as any).userId,
     contextVersion: Number((data as any).contextVersion),
     personalizationEnabled: Boolean((data as any).personalizationEnabled),
-    updatedAt: (data as any).updatedAt,
+    updatedAt: normalizeRequiredDbTimestamp(
+      (data as any).updatedAt,
+      'set_personalization_preference_tx.updatedAt'
+    ),
   });
 }
 
@@ -166,6 +179,19 @@ export async function handleItemDecision(
 }
 
 function mapDbToItem(r: any): CareerContextItem {
+  const createdAt = normalizeRequiredDbTimestamp(
+    r.created_at,
+    'career_context_items.created_at'
+  );
+  const updatedAt = normalizeRequiredDbTimestamp(
+    r.updated_at,
+    'career_context_items.updated_at'
+  );
+  const userConfirmedAt = normalizeOptionalDbTimestamp(
+    r.user_confirmed_at,
+    'career_context_items.user_confirmed_at'
+  );
+
   return CareerContextItemSchema.parse({
     id: r.id,
     userId: r.user_id,
@@ -179,15 +205,15 @@ function mapDbToItem(r: any): CareerContextItem {
       fieldPath: r.source_path,
       sourceRevision: r.source_revision,
       sourceHash: r.source_hash,
-      capturedAt: r.created_at,
+      capturedAt: createdAt,
     },
     exactExcerpt: r.exact_excerpt || undefined,
     provenance: r.provenance,
     status: r.item_status,
     sensitivity: r.sensitivity,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
+    createdAt,
+    updatedAt,
     supersededBy: r.superseded_by || undefined,
-    userConfirmedAt: r.user_confirmed_at || undefined,
+    userConfirmedAt,
   });
 }
