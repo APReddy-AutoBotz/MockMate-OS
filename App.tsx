@@ -881,7 +881,7 @@ const App: React.FC = () => {
                     {showSplash ? null : (
                         <>
                             {showAppHeader && (
-                                <motion.header {...headerAnimation} className="fixed left-0 top-0 z-40 flex w-full items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] sm:px-8 lg:px-12 lg:pb-0 lg:pt-10 pointer-events-none">
+                                <motion.header {...headerAnimation} className="fixed left-0 top-0 z-40 flex w-full items-center justify-between border-b border-white/[0.06] bg-brand-navy px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] shadow-lg sm:px-8 lg:border-b-0 lg:bg-transparent lg:px-12 lg:pb-0 lg:pt-10 lg:shadow-none pointer-events-none">
                                     <button type="button" onClick={handleRestart} aria-label="Go to practice home" className="cursor-pointer transition-transform hover:scale-[1.02] pointer-events-auto">
                                         <Logo className="h-10 w-auto sm:h-12 lg:h-16" />
                                     </button>

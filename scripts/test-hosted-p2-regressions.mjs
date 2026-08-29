@@ -24,6 +24,8 @@ assert.doesNotMatch(roleSelection, /onBack=\{handleLogout\}/, 'back-to-home must
 const appHeader = app.slice(app.indexOf('{showAppHeader && ('), app.indexOf('</motion.header>'));
 assert.ok((appHeader.match(/Sign out/g) || []).length >= 2, 'desktop and mobile header exits must disclose sign-out semantics');
 assert.doesNotMatch(appHeader, /End Session|>Exit</, 'header sign-out controls must not use misleading session-only labels');
+assert.match(appHeader, /bg-brand-navy/, 'fixed mobile header must have an opaque surface over scrolling content');
+assert.match(appHeader, /lg:bg-transparent/, 'desktop header must retain its floating transparent treatment');
 
 assert.match(uploadSetup, /aria-label="Choose resume file"/, 'the resume file input must have an accessible name');
 assert.match(uploadSetup, /type="button" onClick=\{openFilePicker\}/, 'resume browsing must expose a keyboard-operable native button');
