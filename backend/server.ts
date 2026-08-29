@@ -73,11 +73,18 @@ app.use(compression());
 app.use(express.json({ limit: '2mb' }));
 app.use(morgan(':method :url :status :response-time ms'));
 
-// Health
+// Health exposes only non-secret binding metadata in preview so acceptance can prove exact-target authority.
 app.get('/api/health', (_req, res) => res.json({
   ok: true,
   mode: runtime.mode,
   authority: isSupabaseConfigured ? 'configured' : 'unavailable',
+  ...(runtime.mode === 'preview' && 'previewAuthority' in runtime
+    ? {
+        previewTargetId: runtime.previewAuthority.previewTargetId,
+        supabaseProjectRef: runtime.previewAuthority.supabaseProjectRef,
+        gitHeadSha: runtime.previewAuthority.gitHeadSha,
+      }
+    : {}),
 }));
 
 // Gemini Live Ephemeral Token
@@ -126,6 +133,7 @@ try {
   app.use('/api/career-context', careerContextRoutes);
 } catch (e) {
   console.error("Failed to mount routes", e);
+  throw e;
 }
 
 try {
@@ -133,6 +141,7 @@ try {
   app.use('/api/clearspeak', clearSpeakRoutes);
 } catch (e) {
   console.error('Failed to mount ClearSpeak routes', e);
+  throw e;
 }
 
 app.use((_req, res) => res.status(404).json({ error: 'Not Found' }));

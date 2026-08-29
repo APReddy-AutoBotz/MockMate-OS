@@ -11,7 +11,12 @@
 
 import { GoogleGenAI, Type } from '@google/genai';
 import OpenAI from 'openai';
-import type { ClearSpeakProfile, ClearSpeakSessionContent } from 'mockmate-shared';
+import crypto from 'crypto';
+import {
+  ClearSpeakSessionContentSchema,
+  type ClearSpeakProfile,
+  type ClearSpeakSessionContent,
+} from 'mockmate-shared';
 import {
   buildSystemPrompt,
   CLEARSPEAK_CONTENT_SCHEMA,
@@ -41,11 +46,67 @@ const circuitBreaker = {
   cooldownUntil: new Map<string, number>(),
 };
 
-const passageCache = new Map<string, { content: ClearSpeakSessionContent; ts: number }>();
+type PassageCacheEntry = { content: ClearSpeakSessionContent; ts: number };
 
-function getCacheKey(p: ClearSpeakProfile, recentTopics: string[], groundingContext = ''): string {
-  const t = recentTopics.join(',').slice(-30);
-  return `${p.role}:${p.level}:${p.goal.slice(0, 20)}:${t}:${groundingContext}`;
+export class BoundedPassageCache {
+  private readonly entries = new Map<string, PassageCacheEntry>();
+
+  get(key: string, now: number, ttlMs: number): ClearSpeakSessionContent | null {
+    this.pruneExpired(now, ttlMs);
+    const cached = this.entries.get(key);
+    return cached ? cached.content : null;
+  }
+
+  set(key: string, content: ClearSpeakSessionContent, now: number, maxEntries: number): void {
+    if (this.entries.has(key)) this.entries.delete(key);
+    while (this.entries.size >= maxEntries) {
+      const oldest = this.entries.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.entries.delete(oldest);
+    }
+    this.entries.set(key, { content, ts: now });
+  }
+
+  pruneExpired(now: number, ttlMs: number): void {
+    for (const [key, entry] of this.entries) {
+      if (now - entry.ts >= ttlMs) this.entries.delete(key);
+    }
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+}
+
+const passageCache = new BoundedPassageCache();
+
+function boundedPositiveEnvInt(value: string | undefined, fallback: number, max: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
+}
+
+export function getClearSpeakGenerationCacheKey(
+  profile: ClearSpeakProfile,
+  systemPrompt: string,
+  recentTopics: string[],
+  grounding?: { summary: string; vocabulary: string[] },
+): string {
+  // Only the digest is retained. Full prompt inputs and consented grounding
+  // excerpts never become cache keys, logs, or observable identifiers.
+  const input = JSON.stringify({
+    ownerScope: profile.userId,
+    profile,
+    recentTopics,
+    systemPrompt,
+    grounding: grounding ?? null,
+    providers: {
+      primary: process.env.AI_GEN_PRIMARY || 'gemini',
+      primaryModel: process.env.AI_GEN_MODEL_PRIMARY || 'gemini-2.5-flash',
+      fallback: process.env.AI_GEN_FALLBACK || 'groq',
+      fallbackModel: process.env.AI_GEN_MODEL_FALLBACK || 'llama-3.3-70b-versatile',
+    },
+  });
+  return crypto.createHash('sha256').update(input).digest('hex');
 }
 
 // ─── Gemini Adapter (Primary) ─────────────────────────────────────────────────
@@ -189,12 +250,14 @@ async function generateWithResilience(
   const fallbackId = process.env.AI_GEN_FALLBACK || 'groq';
 
   // 1. Caching Check
-  const cacheKey = getCacheKey(profile, recentTopics, grounding?.summary);
-  const cached = passageCache.get(cacheKey);
-  const ttl = parseInt(process.env.AI_GEN_CACHE_TTL_SEC || '300') * 1000;
-  if (cached && Date.now() - cached.ts < ttl) {
-    console.info('[ClearSpeak/Resilience] Serving from cache:', cacheKey);
-    return cached.content;
+  const cacheKey = getClearSpeakGenerationCacheKey(profile, systemPrompt, recentTopics, grounding);
+  const now = Date.now();
+  const ttl = boundedPositiveEnvInt(process.env.AI_GEN_CACHE_TTL_SEC, 300, 3_600) * 1000;
+  const maxEntries = boundedPositiveEnvInt(process.env.AI_GEN_CACHE_MAX_ENTRIES, 100, 500);
+  const cached = passageCache.get(cacheKey, now, ttl);
+  if (cached) {
+    console.info('[ClearSpeak/Resilience] Serving owner-scoped cached content.');
+    return cached;
   }
 
   const routine = [primaryId, fallbackId];
@@ -241,7 +304,7 @@ async function generateWithResilience(
           : result.content;
         
         // Populate Cache
-        passageCache.set(cacheKey, { content: acceptedContent, ts: Date.now() });
+        passageCache.set(cacheKey, acceptedContent, Date.now(), maxEntries);
         
         return acceptedContent;
       }
@@ -300,30 +363,34 @@ export function applyAuthoritativeGrounding(
   profile: ClearSpeakProfile,
   grounding: { summary: string; vocabulary: string[] },
 ): ClearSpeakSessionContent {
-  const words = grounding.summary.trim().split(/\s+/).slice(0, 55);
-  return {
+  const boundedSummary = grounding.summary.trim().slice(0, 12_000);
+  const passageText = boundedSummary.slice(0, 240).trim() ||
+    `Practice a concise update for ${profile.role}`.slice(0, 240);
+  const groundedVocabulary = grounding.vocabulary
+    .map(word => word.trim().slice(0, 80))
+    .filter(Boolean);
+  const keyVocab = [...new Set([...groundedVocabulary, ...content.keyVocab])].slice(0, 3);
+  const grounded = {
     ...content,
-    topicTag: `Resume practice: ${grounding.vocabulary.slice(0, 2).join(' / ') || profile.role}`,
-    keyVocab: [...new Set([...grounding.vocabulary, ...content.keyVocab])].slice(0, 3),
-    passageData: [{ text: words.join(' '), isStressed: false, pauseType: 'stop' }],
-    repeatPhrase: words.slice(0, 12).join(' '),
-    retrySentence: words.slice(0, 18).join(' '),
+    topicTag: `Resume practice: ${groundedVocabulary.slice(0, 2).join(' / ') || profile.role}`.slice(0, 80),
+    keyVocab,
+    passageData: [{ text: passageText, isStressed: false, pauseType: 'stop' as const }],
+    repeatPhrase: passageText.split(/\s+/).slice(0, 12).join(' '),
+    retrySentence: passageText.split(/\s+/).slice(0, 18).join(' '),
   };
+  return ClearSpeakSessionContentSchema.parse(grounded);
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 
 function isValidContent(raw: unknown): raw is ClearSpeakSessionContent {
-  if (!raw || typeof raw !== 'object') return false;
-  const c = raw as Partial<ClearSpeakSessionContent>;
+  const parsed = ClearSpeakSessionContentSchema.safeParse(raw);
+  if (!parsed.success) return false;
+  const c = parsed.data;
   return (
-    typeof c.topicTag === 'string' &&
-    [1, 2, 3].includes(c.difficultyLevel as number) &&
-    Array.isArray(c.keyVocab) && c.keyVocab.length === 3 &&
-    Array.isArray(c.passageData) && c.passageData.length > 0 &&
+    c.keyVocab.length === 3 &&
     typeof c.repeatPhrase === 'string' &&
     typeof c.retrySentence === 'string' &&
-    typeof c.bridgeReady === 'boolean' &&
     typeof c.interviewBridgeQuestion === 'string'
   );
 }

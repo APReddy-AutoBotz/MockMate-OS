@@ -19,7 +19,7 @@ import {
 } from '../services/resumeRewriteIntegrityService';
 import { verifyAuthToken } from '../middleware/authMiddleware';
 import { enforceUsageLimit } from '../services/usageService';
-import { getCachedResult, hashText, setCachedResult } from '../services/cacheService';
+import { getCachedResult, hashExactJson, setCachedResult } from '../services/cacheService';
 import { supabaseAdmin } from '../supabaseAdmin';
 
 const router = express.Router();
@@ -52,6 +52,67 @@ const validationError = (res: express.Response, details: unknown) => res.status(
   details,
 });
 
+class ResumeReviewPersistenceError extends Error {
+  constructor() {
+    super('Resume review persistence unavailable');
+    this.name = 'ResumeReviewPersistenceError';
+  }
+}
+
+const persistResumeReviewOnce = async ({
+  userId,
+  requestHash,
+  resumeData,
+  rawText,
+  jdText,
+  payload,
+}: {
+  userId: string;
+  requestHash: string;
+  resumeData: unknown;
+  rawText: string;
+  jdText: string;
+  payload: unknown;
+}) => {
+  const candidatePayload = GovernedResumeScoreResponseSchema.parse(payload);
+  if (!supabaseAdmin) throw new ResumeReviewPersistenceError();
+
+  try {
+    const { error: upsertError } = await supabaseAdmin.from('resume_reviews').upsert({
+      user_id: userId,
+      request_hash: requestHash,
+      resume_data: resumeData,
+      ats_diagnostics: candidatePayload.atsDiagnostics,
+      jd_match: candidatePayload.jdMatch,
+      raw_text_hash: hashExactJson({ resumeData, rawText }),
+      jd_hash: jdText ? hashExactJson(jdText) : null,
+      created_at: new Date().toISOString(),
+    }, {
+      onConflict: 'user_id,request_hash',
+      ignoreDuplicates: true,
+    });
+    if (upsertError) throw upsertError;
+
+    // A concurrent identical request may have won the insert. Return the
+    // first durable row so every replay observes the same authority record.
+    const { data, error: readError } = await supabaseAdmin
+      .from('resume_reviews')
+      .select('ats_diagnostics, jd_match')
+      .eq('user_id', userId)
+      .eq('request_hash', requestHash)
+      .maybeSingle();
+    if (readError || !data) throw readError || new Error('Persisted review was not readable');
+
+    return GovernedResumeScoreResponseSchema.parse({
+      success: true,
+      atsDiagnostics: data.ats_diagnostics,
+      jdMatch: data.jd_match,
+    });
+  } catch {
+    throw new ResumeReviewPersistenceError();
+  }
+};
+
 router.use(verifyAuthToken);
 
 router.post('/parse', upload.single('resume'), async (req, res) => {
@@ -77,31 +138,57 @@ router.post('/score', enforceUsageLimit('resume_review'), async (req, res) => {
 
   try {
     const { resumeData, rawText, jdText } = request.data;
-    const cacheKey = hashText({ contract: 'governed-resume-score.v2', resumeData, rawText, jdText });
-    const cached = await getCachedResult<unknown>('resume_score_governed_v2', cacheKey);
+    const userId = (req as any).user?.uid;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const requestHash = hashExactJson({
+      contract: 'governed-resume-score.v3',
+      resumeData,
+      rawText,
+      jdText,
+    });
+    const cacheKey = hashExactJson({ userId, requestHash });
+    const cacheScope = { userId };
+    const cached = await getCachedResult<unknown>('resume_score_governed_v2', cacheKey, cacheScope);
     const cachedParsed = GovernedResumeScoreResponseSchema.safeParse(cached);
-    if (cachedParsed.success) return res.json(cachedParsed.data);
+    if (cachedParsed.success) {
+      const authoritativePayload = await persistResumeReviewOnce({
+        userId,
+        requestHash,
+        resumeData,
+        rawText,
+        jdText,
+        payload: cachedParsed.data,
+      });
+      return res.json(authoritativePayload);
+    }
 
     const atsDiagnostics = runATSDiagnostics(resumeData, rawText);
     const jdMatch = jdText.trim() ? await runJDMatch(resumeData, jdText) : null;
-    const payload = GovernedResumeScoreResponseSchema.parse({ success: true, atsDiagnostics, jdMatch });
+    const computedPayload = GovernedResumeScoreResponseSchema.parse({ success: true, atsDiagnostics, jdMatch });
+    const authoritativePayload = await persistResumeReviewOnce({
+      userId,
+      requestHash,
+      resumeData,
+      rawText,
+      jdText,
+      payload: computedPayload,
+    });
 
-    if (supabaseAdmin) {
-      const userId = (req as any).user?.uid;
-      await supabaseAdmin.from('resume_reviews').insert({
-        user_id: userId,
-        resume_data: resumeData,
-        ats_diagnostics: atsDiagnostics,
-        jd_match: jdMatch,
-        raw_text_hash: hashText(rawText || resumeData),
-        jd_hash: jdText ? hashText(jdText) : null,
-        created_at: new Date().toISOString(),
+    try {
+      await setCachedResult('resume_score_governed_v2', cacheKey, authoritativePayload, 24, cacheScope);
+    } catch {
+      console.error('[RESUME_SCORE_CACHE_WRITE_FAILED]');
+    }
+    return res.json(authoritativePayload);
+  } catch (error: any) {
+    if (error instanceof ResumeReviewPersistenceError) {
+      console.error('[RESUME_REVIEW_PERSISTENCE_FAILED]');
+      return res.status(503).json({
+        error: 'Resume review persistence is temporarily unavailable.',
+        code: 'SERVICE_UNAVAILABLE',
       });
     }
-
-    await setCachedResult('resume_score_governed_v2', cacheKey, payload, 24);
-    return res.json(payload);
-  } catch (error: any) {
     console.error('[RESUME_SCORE_FAILED]', error?.message || 'unknown');
     return res.status(500).json({ error: 'Failed to score resume', code: 'INTERNAL_ERROR' });
   }
@@ -111,13 +198,23 @@ router.post('/suggest', enforceUsageLimit('resume_suggestion'), async (req, res)
   const request = ResumeSuggestRequestSchema.safeParse(req.body);
   if (!request.success) return validationError(res, request.error.issues);
 
+  const userId = (req as any).user?.uid;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
   const groq = providerClient();
   if (!groq) return providerUnavailable(res);
 
   try {
     const { resumeData, jdText } = request.data;
-    const cacheKey = hashText({ policy: RESUME_REWRITE_INTEGRITY_POLICY_VERSION, resumeData, jdText });
-    const cached = await getCachedResult<unknown>('resume_suggest_governed_v1', cacheKey);
+    const cacheKey = hashExactJson({
+      contract: 'governed-resume-suggest.v1',
+      userId,
+      policy: RESUME_REWRITE_INTEGRITY_POLICY_VERSION,
+      resumeData,
+      jdText,
+    });
+    const cacheScope = { userId };
+    const cached = await getCachedResult<unknown>('resume_suggest_governed_v1', cacheKey, cacheScope);
     const cachedParsed = GovernedResumeSuggestionResponseSchema.safeParse(cached);
     if (cachedParsed.success) return res.json(cachedParsed.data);
 
@@ -240,7 +337,7 @@ BULLETS:\n${bulletBlock}`;
       integrityPolicyVersion: RESUME_REWRITE_INTEGRITY_POLICY_VERSION,
       filteredSuggestionCount,
     });
-    await setCachedResult('resume_suggest_governed_v1', cacheKey, payload, 24);
+    await setCachedResult('resume_suggest_governed_v1', cacheKey, payload, 24, cacheScope);
     return res.json(payload);
   } catch (error: any) {
     console.error('[RESUME_SUGGEST_PROVIDER_FAILED]', error?.message || 'unknown');

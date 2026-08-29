@@ -91,8 +91,29 @@ describe('accountService — Delete My Data & Local Practice Storage Integrity',
   it('5. clearLocalPracticeData directly clears only mockmate_* keys', () => {
     localStorage.setItem('mockmate_test', '1');
     localStorage.setItem('unrelated', '2');
-    clearLocalPracticeData();
+    expect(clearLocalPracticeData()).toBe(true);
     expect(localStorage.getItem('mockmate_test')).toBeNull();
     expect(localStorage.getItem('unrelated')).toBe('2');
+  });
+
+  it('keeps confirmed server deletion truthful when browser cleanup is denied', async () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        get length() { throw new Error('storage denied'); },
+      },
+    });
+    jest.spyOn(apiClient, 'delete').mockResolvedValueOnce({
+      success: true,
+      operation: 'app_data_deleted',
+      deletedTables: ['interview_sessions'],
+      failedTables: [],
+      authIdentityDeleted: false,
+      authIdentityRetainedReason: 'Supabase Auth retained',
+      requestId: 'req_storage_denied'
+    });
+
+    await expect(deleteMyData()).resolves.toMatchObject({ success: true });
+    expect(clearLocalPracticeData()).toBe(false);
   });
 });

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [backend, backendAuth, backendUsage, backendPersistence, browser, mobileMode, mobileApi, mobileAuth, shared, eas] = await Promise.all([
+const [backend, backendServer, backendAuth, backendUsage, backendPersistence, browser, mobileMode, mobileApi, mobileAuth, llmGateway, shared, eas, netlifyToml, netlifyFunctionPackage, netlifyFunctionLock] = await Promise.all([
   readFile('backend/config/runtimeConfig.ts', 'utf8'),
+  readFile('backend/server.ts', 'utf8'),
   readFile('backend/middleware/authMiddleware.ts', 'utf8'),
   readFile('backend/services/usageService.ts', 'utf8'),
   readFile('backend/supabaseAdmin.ts', 'utf8'),
@@ -10,8 +11,12 @@ const [backend, backendAuth, backendUsage, backendPersistence, browser, mobileMo
   readFile('mobile/src/services/runtimeMode.ts', 'utf8'),
   readFile('mobile/src/services/apiBase.ts', 'utf8'),
   readFile('mobile/src/services/supabaseClient.ts', 'utf8'),
+  readFile('backend/services/llmProviderGateway.ts', 'utf8'),
   readFile('shared/src/index.ts', 'utf8'),
   readFile('mobile/eas.json', 'utf8').then(JSON.parse),
+  readFile('netlify.toml', 'utf8'),
+  readFile('netlify/functions/package.json', 'utf8').then(JSON.parse),
+  readFile('netlify/functions/package-lock.json', 'utf8').then(JSON.parse),
 ]);
 
 const canonical = ['development', 'test', 'preview', 'production'];
@@ -25,6 +30,10 @@ assert.doesNotMatch(backendAuth, /process\.env\.NODE_ENV/, 'auth must consume ca
 assert.match(backendAuth, /mode === 'test'/, 'test-token authority must require canonical test mode');
 assert.doesNotMatch(backendUsage, /process\.env\.NODE_ENV/, 'quota fallback must consume canonical runtime mode');
 assert.match(backendPersistence, /runtimeMode\(\) !== 'test'/, 'test persistence must require canonical test mode');
+assert.doesNotMatch(backend, /GEMINI_API_KEY|GOOGLE_API_KEY|GROQ_API_KEY/,
+  'production-like server startup must not require AI-provider credentials');
+assert.match(llmGateway, /throw new Error\('All AI providers failed or no API keys provided\.'\)/,
+  'AI provider unavailability must fail visibly at the feature boundary');
 assert.match(browser, /throw new Error\('Runtime configuration is invalid \(CONFIGURATION_INVALID\)\.'\)/,
   'unknown browser mode must fail closed');
 assert.match(mobileMode, /if \(isDevelopmentBuild\) return 'development';[\s\S]*throw configurationError\(\)/,
@@ -47,5 +56,37 @@ for (const mode of ['preview', 'production']) {
   assert.equal(eas.build[mode].env.EXPO_PUBLIC_RUNTIME_MODE, mode);
   assert.equal(eas.build[mode].env.EXPO_PUBLIC_ENABLE_MOCK_AUTH, 'false');
 }
+
+assert.match(backend, /VERCEL_GIT_COMMIT_SHA[\s\S]*COMMIT_REF/,
+  'backend preview authority must inspect hosting-provider Git identities');
+assert.match(backend, /providerShas\.some\(value => value !== providerSha\)/,
+  'conflicting hosting-provider Git identities must fail closed');
+assert.match(backend, /providerSha && override && override !== providerSha/,
+  'operator override must not shadow or disagree with hosting-provider Git authority');
+
+assert.match(netlifyToml, /command = "npm ci && npm --prefix netlify\/functions ci --omit=dev && npm run build"/,
+  'Netlify must install both the workspace and function adapter from committed lockfiles');
+assert.doesNotMatch(netlifyToml, /\bnpm install\b|package-lock\s*=\s*false/,
+  'Netlify must never bypass committed lockfiles');
+const externalNodeModules = netlifyToml.match(/external_node_modules\s*=\s*\[([^\]]+)\]/)?.[1] ?? '';
+for (const dependency of ['express', 'pdf-parse', '@napi-rs/canvas']) {
+  assert.match(externalNodeModules, new RegExp(`['"]${dependency.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`),
+    `Netlify must package ${dependency} as an external Node module`);
+}
+assert.match(backendServer, /catch \(e\) \{\s*console\.error\("Failed to mount routes", e\);\s*throw e;\s*\}/,
+  'required route registration failures must fail startup instead of degrading into 404s');
+assert.match(backendServer, /catch \(e\) \{\s*console\.error\('Failed to mount ClearSpeak routes', e\);\s*throw e;\s*\}/,
+  'ClearSpeak route registration failures must fail startup instead of degrading into 404s');
+assert.equal(netlifyFunctionPackage.dependencies?.['serverless-http'], '4.0.0',
+  'Netlify Express adapter must be an exact committed dependency');
+assert.equal(netlifyFunctionLock.lockfileVersion, 3, 'Netlify function dependency lock must use the current lock format');
+assert.equal(netlifyFunctionLock.packages?.['']?.dependencies?.['serverless-http'], '4.0.0',
+  'Netlify function lock root must agree with the manifest');
+const lockedServerlessHttp = netlifyFunctionLock.packages?.['node_modules/serverless-http'];
+assert.equal(lockedServerlessHttp?.version, '4.0.0', 'Netlify adapter version must be locked exactly');
+assert.equal(lockedServerlessHttp?.resolved, 'https://registry.npmjs.org/serverless-http/-/serverless-http-4.0.0.tgz',
+  'Netlify adapter lock must bind the exact registry artifact');
+assert.equal(Object.keys(lockedServerlessHttp?.dependencies ?? {}).length, 0,
+  'serverless-http 4.0.0 must retain its zero-runtime-dependency graph');
 
 console.log('Cross-surface runtime-mode authority tests passed');

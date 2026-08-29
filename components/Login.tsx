@@ -21,6 +21,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onBack }) => {
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<{ code: string; message: string } | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
 
     useEffect(() => {
         if (error) setError(null);
@@ -32,13 +33,21 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onBack }) => {
 
         setIsLoading(true);
         setError(null);
+        setNotice(null);
         audioService.playConfirm();
 
         try {
-            await (mode === 'signup'
-                ? createUserWithEmailAndPassword(auth, email, password)
-                : signInWithEmailAndPassword(auth, email, password)
-            );
+            if (mode === 'signup') {
+                const result = await createUserWithEmailAndPassword(auth, email, password);
+                if (result.confirmationRequired) {
+                    setNotice('Check your email to confirm your account, then return here to sign in.');
+                    return;
+                }
+                onLoginSuccess();
+                return;
+            }
+
+            await signInWithEmailAndPassword(auth, email, password);
             onLoginSuccess();
         } catch (err: any) {
             console.error('Auth error:', err.code || err.message);
@@ -55,6 +64,9 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onBack }) => {
                 case 'auth/invalid-credential':
                     message = 'Invalid email or password.';
                     break;
+                case 'auth/signup-failed':
+                    message = 'Account creation failed. Please try again.';
+                    break;
             }
             setError({ code: errorCode, message });
         } finally {
@@ -65,6 +77,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onBack }) => {
     const handleQuickAccess = async () => {
         if (!isUsingMockAuth) return;
         setIsLoading(true);
+        setNotice(null);
         audioService.playStart();
         try {
             const guestEmail = 'guest@mockmate.io';
@@ -89,12 +102,18 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onBack }) => {
         }
         setIsLoading(true);
         setError(null);
+        setNotice(null);
         audioService.playStart();
         try {
             await signInWithGoogle();
-            onLoginSuccess();
-        } catch {
-            setError({ code: 'auth/google-failed', message: 'Google sign-in failed.' });
+        } catch (err: any) {
+            const providerDisabled = String(err?.message || '').toLowerCase().includes('provider is not enabled');
+            setError({
+                code: err?.code || 'auth/google-failed',
+                message: providerDisabled
+                    ? 'Google sign-in is not enabled yet. Use email and password for now.'
+                    : 'Google sign-in failed.',
+            });
         } finally {
             setIsLoading(false);
         }
@@ -150,9 +169,11 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onBack }) => {
                     <AnimatePresence mode="wait">
                         {error && (
                             <motion.div
+                                key="error"
                                 initial={{ opacity: 0, y: -10 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 exit={{ opacity: 0, y: -10 }}
+                                role="alert"
                                 className="rounded-xl border border-brand-primary/25 bg-brand-primary/8 p-4"
                             >
                                 <p className="text-center text-[11px] font-bold uppercase tracking-[0.12em] text-brand-primary">
@@ -160,13 +181,30 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onBack }) => {
                                 </p>
                             </motion.div>
                         )}
+                        {notice && !error && (
+                            <motion.div
+                                key="notice"
+                                initial={{ opacity: 0, y: -10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -10 }}
+                                role="status"
+                                className="rounded-xl border border-emerald-300/25 bg-emerald-300/10 p-4"
+                            >
+                                <p className="text-center text-[11px] font-bold tracking-[0.04em] text-emerald-200">
+                                    {notice}
+                                </p>
+                            </motion.div>
+                        )}
                     </AnimatePresence>
 
-                    <motion.form variants={itemVariants} onSubmit={handleAuth} className="space-y-5 md:space-y-6">
+                    <motion.form variants={itemVariants} onSubmit={handleAuth} className="space-y-5 md:space-y-6" aria-label={mode === 'signin' ? 'Sign in' : 'Create account'}>
                         <div className="space-y-2">
-                            <label className="ml-4 block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint">Email</label>
+                            <label htmlFor="mockmate-auth-email" className="ml-4 block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint">Email</label>
                             <input
+                                id="mockmate-auth-email"
+                                name="email"
                                 type="email"
+                                autoComplete="email"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 className="w-full rounded-2xl border border-brand-tint/15 bg-white/[0.03] px-6 py-4 text-base text-white outline-none transition-all placeholder:text-brand-tint/45 focus:border-brand-primary/50 focus:bg-white/[0.05]"
@@ -176,9 +214,12 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onBack }) => {
                         </div>
 
                         <div className="space-y-2">
-                            <label className="ml-4 block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint">Password</label>
+                            <label htmlFor="mockmate-auth-password" className="ml-4 block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint">Password</label>
                             <input
+                                id="mockmate-auth-password"
+                                name="password"
                                 type="password"
+                                autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                                 className="w-full rounded-2xl border border-brand-tint/15 bg-white/[0.03] px-6 py-4 text-base text-white outline-none transition-all placeholder:text-brand-tint/45 focus:border-brand-primary/50 focus:bg-white/[0.05]"
@@ -218,6 +259,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onBack }) => {
                             </div>
 
                             <button
+                                type="button"
                                 onClick={handleGoogleLogin}
                                 disabled={isLoading}
                                 className="flex w-full items-center justify-center gap-3 rounded-xl bg-white py-4 text-[11px] font-bold uppercase tracking-[0.12em] text-brand-dark transition-all hover:bg-white/90 active:scale-[0.98]"
@@ -230,13 +272,19 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onBack }) => {
 
                     <motion.div variants={itemVariants} className="flex flex-col items-center gap-6 border-t border-brand-tint/10 pt-8">
                         <button
-                            onClick={() => { setMode(mode === 'signin' ? 'signup' : 'signin'); setError(null); }}
+                            type="button"
+                            onClick={() => {
+                                setMode(mode === 'signin' ? 'signup' : 'signin');
+                                setError(null);
+                                setNotice(null);
+                            }}
                             className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-primary"
                         >
                             {mode === 'signin' ? 'Need an account? Sign up' : 'Have an account? Sign in'}
                         </button>
 
                         <button
+                            type="button"
                             onClick={onBack}
                             className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint transition-colors hover:text-white"
                         >

@@ -1,8 +1,8 @@
 # MockMate Mobile Production Plan
 
-> P0-6 Mobile Core Journey Parity is merged on `main` at `4a465aab6a412917780e9ac7a9a7ced778238388` with post-merge Production Readiness #273 fully green. P0-7 Mobile Career Context & Account Authority Parity is source-only work in Draft PR #16. Neither milestone authorizes EAS builds, store submission, hosted infrastructure mutation, provider activation, real-user execution, or public native claims.
+> P0-7 Mobile Career Context & Account Authority Parity is merged on `main` at `38520a682d1ac6bd9e82724e753f03f67c87cb5f`, with post-merge Production Readiness run #316 / `31941312775` fully green. P0-8 Authorized Hosted Preview & Production-Like Acceptance is active in Draft PR #18 and authorizes a dedicated browser/API preview/test environment only. It does **not** authorize EAS builds, TestFlight/Play/App Store publication, public native claims, uncontrolled users, customer data, or purchase/activation of a new paid speech provider.
 
-MockMate remains browser-first for public release. The `mobile/` app is an Android-first Expo client that must prove the same auth, privacy, contract, replay and fail-closed behavior before any store rollout.
+MockMate remains browser-first for public release. The `mobile/` app is an Android-first Expo client that already carries the governed P0-6/P0-7 source journeys and must later prove the same auth, privacy, contract, replay and fail-closed behavior against the accepted hosted backend on physical devices before any store rollout.
 
 ## Mobile Strategy
 
@@ -20,7 +20,7 @@ Why Expo:
 
 Core mobile screens use `mobile/src/services/apiClient.ts` with authenticated requests and shared Zod response schemas. The client never owns provider, model, scoring policy, service-role, retention, Career Context truth, bridge/snapshot authority, quota or privileged adapter authority.
 
-### Resume — P0-4 governed path
+### Resume — governed path
 
 - `POST /api/resume/parse` validates `ResumeParseResponseSchema`; PDF/DOCX only and raw extracted text remains transient.
 - `POST /api/resume/score` validates `GovernedResumeScoreResponseSchema` and renders ATS/JD status truthfully.
@@ -28,7 +28,7 @@ Core mobile screens use `mobile/src/services/apiClient.ts` with authenticated re
 
 Legacy bulk rewrite endpoints are not part of the mobile contract.
 
-### ClearSpeak Accent — P0-5 governed path
+### ClearSpeak Accent — governed path
 
 Mobile uses:
 
@@ -47,7 +47,7 @@ Mobile preserves P0-5 semantics: explicit microphone consent, server-issued atte
 
 Until a real speech scorer is separately authorized, ordinary user recordings may complete as truthful V1 null-score results rather than synthetic estimates.
 
-### Career Context — P0-7 governed path
+### Career Context — merged P0-7 governed path
 
 Native Career Context uses shared schemas and server-owned state only:
 
@@ -67,7 +67,7 @@ Ungrounded Interview remains available:
 - `POST /api/interview/sessions/:sessionId/answers` with UUID `clientSubmissionId` + exact `expectedSessionVersion` → `AdaptiveAnswerSubmissionResponseSchema`;
 - `POST /api/interview/sessions/:sessionId/report` → `FinalReportSchema`.
 
-P0-7 adds an explicit optional grounded path:
+Merged P0-7 adds an explicit optional grounded path:
 
 1. reload authoritative Career Context;
 2. require personalization enabled and no unresolved user-choice conflicts;
@@ -82,7 +82,7 @@ P0-7 adds an explicit optional grounded path:
 
 The mobile client never invents a snapshot, bridge, projection, question, evaluation, next action or report.
 
-### Account lifecycle — P0-7 governed deletion
+### Account lifecycle — merged P0-7 governed deletion
 
 - `GET /api/me/usage`
 - `DELETE /api/me/data` with `AccountDeletionResponseSchema`
@@ -103,36 +103,39 @@ Every protected request uses the Supabase bearer token through `apiClient`.
 - Keep mock auth disabled for preview/release-like builds.
 - Never expose service-role/provider/admin secrets to Expo public environment variables.
 
-### Phase 2 — Governed Core Journeys
+### Phase 2 — Governed Core Journeys — merged source baseline
 
-Merged P0-6 source scope:
+P0-6 + P0-7 source scope now on `main` includes:
 
-- Resume governed parse + ATS/JD diagnostics.
-- ClearSpeak governed Accent Practice lifecycle and V1/V2 result rendering.
-- Interview canonical plan → session → adaptive typed turns → report.
-- retained mobile TypeScript/lint/parity gates.
-
-P0-7 source scope:
-
+- Resume governed parse + ATS/JD diagnostics;
+- ClearSpeak governed Accent Practice lifecycle and V1/V2 result rendering;
+- Interview canonical plan → session → adaptive typed turns → report;
 - native Career Context review/rebuild/preference/item-decision controls;
 - explicit one-time Resume/ClearSpeak grounded Interview lineage;
 - governed app-data deletion and truthful Auth-identity retention copy;
-- stronger `test:mobile-governed-parity` rejection coverage.
+- retained mobile TypeScript/lint/governed-parity gates and stale-response protections.
 
-### Phase 3 — Native QA & Polish (future authorization)
+### Phase 3 — Hosted Browser/API Acceptance — P0-8 current milestone
 
-Only after source parity is merged and a hosted test target is separately authorized:
+P0-8 first proves the shared backend and browser journeys in an exact, dedicated Vercel + Supabase preview before native device execution. The dedicated Supabase target is active; current blocker: `DEDICATED_SUPABASE_ACTIVE__VERCEL_PREVIEW_NOT_BOUND`.
 
+Required hosted proof includes exact target binding, bounded auth identities, Resume, ClearSpeak, Interview, Career Context/grounding, account deletion, cross-user isolation, concurrency/replay, admin/privacy and PWA/offline truth. Mobile does not become release-ready merely because this browser/API gate passes.
+
+### Phase 4 — Native Internal QA & Polish — later authorization
+
+Only after P0-8 hosted acceptance is green and a mobile-internal-test milestone is separately opened:
+
+- point preview builds only at the exact accepted hosted API/Supabase target;
 - physical-device auth/token-refresh verification;
-- real document upload and microphone lifecycle testing;
+- real bounded document upload and microphone lifecycle testing;
 - interruption/background/permission-revocation recovery;
 - accessibility, touch targets, keyboard behavior and screen-reader review;
-- Career Context conflict/replay and app-data deletion verification in the approved hosted target;
+- Career Context conflict/replay and app-data deletion verification against the accepted target;
 - native history/progress polish.
 
-### Phase 4 — Release (separate approval)
+### Phase 5 — Release — separate approval
 
-- EAS preview build;
+- EAS preview/internal build;
 - TestFlight/internal Play testing;
 - privacy policy and deletion verification;
 - store assets/screenshots;
@@ -140,9 +143,9 @@ Only after source parity is merged and a hosted test target is separately author
 
 ## Current Release Boundary
 
-Passing source CI does **not** prove a public mobile release. Before claiming native Android/iOS availability, separately authorize and verify hosted token exchange, real file/audio behavior, Career Context replay/grounding, app-data deletion, approved provider boundaries, EAS output, physical-device QA, signing and store review.
+Passing source CI or P0-8 browser/API hosted acceptance does **not** prove a public mobile release. Before claiming native Android/iOS availability, separately authorize and verify hosted token exchange from native builds, real bounded file/audio behavior, Career Context replay/grounding, app-data deletion, approved provider boundaries, EAS output, physical-device QA, signing and store review.
 
-Source-only checks:
+Source-only checks retained in P0-8:
 
 ```bash
 npm ci
@@ -151,11 +154,12 @@ npm run mobile:typecheck
 npm run mobile:lint
 ```
 
-The following remain explicitly gated and must not be run without separate approval:
+EAS/store execution remains outside P0-8:
 
 ```bash
 cd mobile
-npx expo start
 eas build --platform android --profile preview
 eas build --platform ios --profile preview
 ```
+
+Do not run or publish those builds as part of P0-8. The next mobile milestone may consume the accepted hosted API as its explicit dependency after the controller closes P0-8.

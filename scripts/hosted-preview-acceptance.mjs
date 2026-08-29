@@ -1,0 +1,878 @@
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+import path from 'node:path';
+import { boundedAbandonedRequest, boundedRequest, exactHostedOrigin, exactOriginUrl } from './hosted-acceptance-safety.mjs';
+import { compensateTestUserAppData } from './hosted-acceptance-cleanup.mjs';
+import { createCaptureStore } from './hosted-acceptance-captures.mjs';
+import {
+  awaitParallelQuiescence,
+  evidenceCleanupStatus,
+  finalizeOwnedEvidence,
+} from './hosted-acceptance-lifecycle.mjs';
+import {
+  jsonRequestLimitForOperation,
+  operationOwnedHeaders,
+  validateHostedOperationBody,
+} from './hosted-acceptance-operation-authority.mjs';
+
+const captureStore = createCaptureStore();
+process.on('exit', () => captureStore.clear());
+
+let mutationsMayHaveStarted = false;
+const fail = (message) => {
+  if (mutationsMayHaveStarted) throw new Error(message);
+  console.error(`[HOSTED_PREVIEW_ACCEPTANCE_REFUSED] ${message}`);
+  process.exit(2);
+};
+
+const requireExact = (name, expected) => {
+  const value = process.env[name];
+  if (value !== expected) fail(`${name} is not explicitly authorized.`);
+  return value;
+};
+
+const requireValue = (name, pattern) => {
+  const value = process.env[name]?.trim();
+  if (!value || (pattern && !pattern.test(value))) fail(`${name} is missing or malformed.`);
+  return value;
+};
+
+requireExact('AUTHORIZE_HOSTED_PREVIEW_ACCEPTANCE', 'true');
+requireExact('BOUNDED_TEST_DATA_CONFIRMED', 'true');
+
+const origin = requireValue('MOCKMATE_PREVIEW_ORIGIN');
+let originUrl;
+try {
+  originUrl = exactHostedOrigin(origin);
+} catch (error) {
+  fail(error instanceof Error ? error.message : 'MOCKMATE_PREVIEW_ORIGIN is invalid.');
+}
+
+const previewTargetId = requireValue('MOCKMATE_PREVIEW_TARGET_ID', /^[a-zA-Z0-9][a-zA-Z0-9._-]{2,79}$/);
+const supabaseProjectRef = requireValue('MOCKMATE_SUPABASE_PROJECT_REF', /^[a-z0-9]{20}$/);
+const expectedHeadSha = requireValue('EXPECTED_HEAD_SHA', /^[0-9a-f]{40}$/);
+const scenarioFile = requireValue('HOSTED_ACCEPTANCE_SCENARIOS_FILE');
+let userAToken = requireValue('MOCKMATE_TEST_USER_A_TOKEN');
+let userBToken = requireValue('MOCKMATE_TEST_USER_B_TOKEN');
+let adminToken = process.env.MOCKMATE_TEST_ADMIN_TOKEN?.trim();
+const artifactPath = path.resolve(process.env.HOSTED_ACCEPTANCE_EVIDENCE_FILE || 'artifacts/p0-8-hosted-preview-acceptance.json');
+
+if (fs.existsSync(artifactPath)) {
+  fail('HOSTED_ACCEPTANCE_EVIDENCE_FILE already exists. Preserve it and choose a unique empty path before a new run.');
+}
+
+if (!fs.existsSync(scenarioFile)) fail('HOSTED_ACCEPTANCE_SCENARIOS_FILE does not exist.');
+let manifest;
+try {
+  manifest = JSON.parse(fs.readFileSync(scenarioFile, 'utf8'));
+} catch {
+  fail('HOSTED_ACCEPTANCE_SCENARIOS_FILE is not valid JSON.');
+}
+
+const operationContracts = new Map(Object.entries({
+  'runtime.health': ['GET', /^\/api\/health$/, 'none', 'none'],
+  'pwa.manifest': ['GET', /^\/manifest\.webmanifest$/, 'none', 'none'],
+  'pwa.offline': ['GET', /^\/sw\.js$/, 'none', 'none'],
+  'auth.identity': ['GET', /^\/api\/auth\/test$/, 'userA', 'none'],
+  'resume.parse': ['POST', /^\/api\/resume\/parse$/, 'userA', 'resume'],
+  'resume.score': ['POST', /^\/api\/resume\/score$/, 'userA', 'json'],
+  'resume.suggest': ['POST', /^\/api\/resume\/suggest$/, 'userA', 'json'],
+  'clearspeak.prompt': ['POST', /^\/api\/clearspeak\/v1\/accent\/prompts$/, 'userA', 'json'],
+  'clearspeak.authority': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempt-authority$/, 'userA', 'json'],
+  'clearspeak.create': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts$/, 'userA', 'audio'],
+  'clearspeak.submit': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/status$/, 'userA', 'none'],
+  'clearspeak.result': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/status$/, 'userA', 'none'],
+  'clearspeak.replay': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts$/, 'userA', 'audio'],
+  'clearspeak.cancel-authority': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempt-authority$/, 'userA', 'json'],
+  'clearspeak.cancel': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/cancel$/, 'userA', 'json'],
+  'clearspeak.cancel-status': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+\/status$/, 'userA', 'none'],
+  'clearspeak.cancel-submit': ['POST', /^\/api\/clearspeak\/v1\/accent\/attempts$/, 'userA', 'audio'],
+  'clearspeak.history': ['GET', /^\/api\/clearspeak\/v1\/accent\/attempts(?:\?.*)?$/, 'userA', 'none'],
+  'clearspeak.delete': ['DELETE', /^\/api\/clearspeak\/v1\/accent\/attempts\/[^/]+$/, 'userA', 'none'],
+  'interview.usage-baseline': ['GET', /^\/api\/user\/usage$/, 'userA', 'none'],
+  'interview.create': ['POST', /^\/api\/interview\/sessions$/, 'userA', 'json'],
+  'interview.answer': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'interview.report': ['POST', /^\/api\/interview\/sessions\/[^/]+\/report$/, 'userA', 'json'],
+  'interview.version': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userA', 'none'],
+  'interview.stale': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'concurrency.exactly-once': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'interview.usage-after-concurrency': ['GET', /^\/api\/user\/usage$/, 'userA', 'none'],
+  'interview.interrupted': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userA', 'none'],
+  'replay.response-loss': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'interview.usage-after-response-loss': ['GET', /^\/api\/user\/usage$/, 'userA', 'none'],
+  'interview.complete': ['POST', /^\/api\/interview\/sessions\/[^/]+\/answers$/, 'userA', 'json'],
+  'interview.terminal': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userA', 'none'],
+  'career-context.rebuild': ['POST', /^\/api\/career-context\/rebuild$/, 'userA', 'none'],
+  'career-context.state': ['GET', /^\/api\/career-context$/, 'userA', 'none'],
+  'career-context.create': ['POST', /^\/api\/career-context\/snapshots$/, 'userA', 'json'],
+  'career-context.update': ['POST', /^\/api\/career-context\/preference$/, 'userA', 'json'],
+  'career-context.delete': ['POST', /^\/api\/career-context\/items\/[^/]+\/decision$/, 'userA', 'json'],
+  'career-context.decision-state': ['GET', /^\/api\/career-context$/, 'userA', 'none'],
+  'career-context.decision-stale': ['POST', /^\/api\/career-context\/items\/[^/]+\/decision$/, 'userA', 'json'],
+  'career-context.snapshot': ['GET', /^\/api\/career-context\/snapshots\/[^/]+$/, 'userA', 'none'],
+  'career-context.bridge': ['POST', /^\/api\/career-context\/bridges$/, 'userA', 'json'],
+  'career-context.stale': ['POST', /^\/api\/career-context\/preference$/, 'userA', 'json'],
+  'career-context.cross-user': ['GET', /^\/api\/career-context\/snapshots\/[^/]+$/, 'userB', 'none'],
+  'admin.denied': ['GET', /^\/api\/admin\/usage$/, 'userA', 'none'],
+  'cross-user.denied': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userB', 'none'],
+  'partial-failure.malformed': ['POST', /^\/api\/resume\/score$/, 'userA', 'json'],
+  'partial-failure.oversized': ['POST', /^\/api\/resume\/score$/, 'userA', 'json'],
+  'partial-failure.account-delete': ['DELETE', /^\/api\/me\/data$/, 'userA', 'none'],
+  'account.delete': ['DELETE', /^\/api\/me\/data$/, 'userA', 'none'],
+  'account.owner-aftermath': ['GET', /^\/api\/user\/sessions$/, 'userA', 'none'],
+  'account.cross-user-aftermath': ['GET', /^\/api\/interview\/sessions\/[^/]+$/, 'userB', 'none'],
+}));
+
+const requiredOperations = new Set([
+  'runtime.health', 'pwa.manifest', 'pwa.offline', 'auth.identity',
+  'resume.parse', 'resume.score', 'resume.suggest',
+  'clearspeak.prompt', 'clearspeak.authority', 'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.replay',
+  'clearspeak.cancel-authority', 'clearspeak.cancel', 'clearspeak.cancel-status', 'clearspeak.cancel-submit', 'clearspeak.history', 'clearspeak.delete',
+  'interview.usage-baseline', 'interview.create', 'interview.answer', 'interview.report', 'interview.version', 'interview.stale',
+  'concurrency.exactly-once', 'interview.usage-after-concurrency', 'interview.interrupted', 'replay.response-loss',
+  'interview.usage-after-response-loss', 'interview.complete', 'interview.terminal',
+  'career-context.rebuild', 'career-context.state', 'career-context.create', 'career-context.update', 'career-context.delete',
+  'career-context.decision-state', 'career-context.decision-stale', 'career-context.snapshot', 'career-context.bridge', 'career-context.stale', 'career-context.cross-user',
+  'admin.denied', 'cross-user.denied', 'partial-failure.malformed', 'partial-failure.oversized', 'partial-failure.account-delete',
+  'account.delete', 'account.owner-aftermath', 'account.cross-user-aftermath',
+]);
+
+const operationStatusContracts = new Map(Object.entries({
+  'runtime.health': [200], 'pwa.manifest': [200], 'pwa.offline': [200], 'auth.identity': [200],
+  'resume.parse': [503], 'resume.score': [200], 'resume.suggest': [503],
+  'clearspeak.prompt': [200], 'clearspeak.authority': [201], 'clearspeak.create': [201], 'clearspeak.submit': [200],
+  'clearspeak.result': [200], 'clearspeak.replay': [200], 'clearspeak.cancel-authority': [201], 'clearspeak.cancel': [200],
+  'clearspeak.cancel-status': [200], 'clearspeak.cancel-submit': [422], 'clearspeak.history': [200], 'clearspeak.delete': [204],
+  'interview.usage-baseline': [200], 'interview.create': [200], 'interview.answer': [200], 'interview.report': [200],
+  'interview.version': [200], 'interview.stale': [409], 'concurrency.exactly-once': [200],
+  'interview.usage-after-concurrency': [200], 'interview.interrupted': [200], 'replay.response-loss': [200],
+  'interview.usage-after-response-loss': [200], 'interview.complete': [200], 'interview.terminal': [200],
+  'career-context.rebuild': [200], 'career-context.state': [200], 'career-context.create': [200], 'career-context.update': [200],
+  'career-context.delete': [200], 'career-context.decision-state': [200], 'career-context.decision-stale': [409],
+  'career-context.snapshot': [200], 'career-context.bridge': [200], 'career-context.stale': [409],
+  'career-context.cross-user': [404], 'admin.denied': [403], 'cross-user.denied': [404],
+  'partial-failure.malformed': [400], 'partial-failure.oversized': [400], 'partial-failure.account-delete': [409],
+  'account.delete': [200], 'account.owner-aftermath': [200], 'account.cross-user-aftermath': [404],
+}));
+
+const repetitionContracts = new Map(Object.entries({
+  'concurrency.exactly-once': { mode: 'parallel', minAttempts: 2, maxAttempts: 5 },
+  'replay.response-loss': { mode: 'sequential', minAttempts: 2, maxAttempts: 5 },
+}));
+const interviewRepetitionCanonicalPaths = ['/completedTurnId', '/sessionVersion'];
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const captureNamePattern = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+const captureTokenPattern = /\{\{capture:([A-Za-z][A-Za-z0-9_.-]{0,63})\}\}/g;
+const fullCaptureTokenPattern = /^\{\{capture:([A-Za-z][A-Za-z0-9_.-]{0,63})\}\}$/;
+const GENERATED_OVERSIZED_RAW_TEXT = '{{generated:resume.rawText.500001}}';
+
+if (!manifest || ![3, 4].includes(manifest.schemaVersion) || !Array.isArray(manifest.scenarios) || manifest.scenarios.length === 0 || manifest.scenarios.length > 64) {
+  fail('Scenario manifest must use supported schemaVersion 3 or 4 and contain 1-64 scenarios.');
+}
+const captureSchemaEnabled = manifest.schemaVersion === 4;
+if (JSON.stringify(manifest).includes('__CONTROLLER_REPLACE_')) fail('Scenario manifest still contains controller placeholders.');
+for (const operation of requiredOperations) {
+  if (!manifest.scenarios.some((scenario) => scenario.operation === operation)) fail(`Scenario manifest is missing required governed operation: ${operation}.`);
+}
+
+const tokens = { userA: userAToken, userB: userBToken, admin: adminToken };
+const results = [];
+const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+const mutatingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const allowedAssertionOps = new Set(['exists', 'equals', 'oneOf', 'type', 'matches', 'includes']);
+const allowedJsonTypes = new Set(['string', 'number', 'boolean', 'object', 'array', 'null']);
+const MAX_RESPONSE_BYTES = 256 * 1024;
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+const REQUEST_TIMEOUT_MS = Number(process.env.HOSTED_ACCEPTANCE_TIMEOUT_MS ?? 30_000);
+if (!Number.isInteger(REQUEST_TIMEOUT_MS) || REQUEST_TIMEOUT_MS < 1_000 || REQUEST_TIMEOUT_MS > 120_000) {
+  fail('HOSTED_ACCEPTANCE_TIMEOUT_MS must be an integer between 1000 and 120000.');
+}
+
+function resolveAssertions(assertions) {
+  return assertions?.map((assertion) => ({
+    ...assertion,
+    ...(Object.prototype.hasOwnProperty.call(assertion, 'value') ? { value: captureStore.resolve(assertion.value) } : {}),
+  }));
+}
+
+function materializeGeneratedProbe(spec) {
+  const serialized = JSON.stringify(spec);
+  if (spec?.operation === 'partial-failure.oversized') {
+    if (spec.body?.rawText !== GENERATED_OVERSIZED_RAW_TEXT) fail(`Scenario ${spec.id ?? 'unknown'} must use the registered generated oversized Resume probe marker.`);
+    spec.body = { ...spec.body, rawText: 'x'.repeat(500001) };
+    return spec;
+  }
+  if (serialized.includes(GENERATED_OVERSIZED_RAW_TEXT)) fail(`Scenario ${spec?.id ?? 'unknown'} uses the oversized Resume probe marker outside its registered operation.`);
+  return spec;
+}
+
+function resolveRequestSpec(rawSpec, { allowCaptures = false } = {}) {
+  if (!rawSpec || typeof rawSpec !== 'object' || Array.isArray(rawSpec)) fail('Scenario request specification is invalid.');
+  if (!allowCaptures && rawSpec.captures !== undefined) fail('Capture declarations are not allowed on this request phase.');
+  const resolved = {
+    ...rawSpec,
+    path: captureStore.resolve(rawSpec.path),
+    assertions: resolveAssertions(rawSpec.assertions),
+  };
+  if (rawSpec.body !== undefined) resolved.body = captureStore.resolve(rawSpec.body);
+  if (rawSpec.idempotencyKey !== undefined) resolved.idempotencyKey = captureStore.resolve(rawSpec.idempotencyKey);
+  if (rawSpec.multipart) {
+    resolved.multipart = {
+      ...rawSpec.multipart,
+      fields: captureStore.resolve(rawSpec.multipart.fields ?? {}),
+    };
+  }
+  if (rawSpec.canonicalPaths) resolved.canonicalPaths = captureStore.resolve(rawSpec.canonicalPaths);
+  delete resolved.captures;
+  return materializeGeneratedProbe(resolved);
+}
+
+function validateOperationContract(scenario) {
+  const contract = operationContracts.get(scenario.operation);
+  if (!contract) fail(`Scenario ${scenario.id} names an unregistered governed operation.`);
+  const [method, pathPattern, auth, bodyKind] = contract;
+  if (scenario.method?.toUpperCase() !== method || !pathPattern.test(scenario.path) || (scenario.auth ?? 'none') !== auth) {
+    fail(`Scenario ${scenario.id} does not match the registered method/path/auth contract for ${scenario.operation}.`);
+  }
+  const actualBodyKind = scenario.multipart?.fileField ?? (scenario.body === undefined ? 'none' : 'json');
+  if (actualBodyKind !== bodyKind) fail(`Scenario ${scenario.id} does not match the registered body contract for ${scenario.operation}.`);
+  if (JSON.stringify(scenario.expectedStatuses) !== JSON.stringify(operationStatusContracts.get(scenario.operation))) {
+    fail(`Scenario ${scenario.id} does not match the registered status contract for ${scenario.operation}.`);
+  }
+  if (!Array.isArray(scenario.assertions) || scenario.assertions.length === 0) fail(`Scenario ${scenario.id} does not provide the required semantic oracle for ${scenario.operation}.`);
+  if (bodyKind === 'audio') {
+    const metadata = scenario.multipart?.fields?.metadata;
+    if (typeof metadata !== 'string') fail(`Scenario ${scenario.id} must send ClearSpeak metadata as one JSON multipart field.`);
+    try { JSON.parse(metadata); } catch { fail(`Scenario ${scenario.id} has malformed ClearSpeak metadata.`); }
+  }
+  if (scenario.operation === 'resume.score') {
+    if (!scenario.body?.resumeData || typeof scenario.body.rawText !== 'string' || typeof scenario.body.jdText !== 'string') fail(`Scenario ${scenario.id} does not match the strict Resume score request schema.`);
+  }
+  if (scenario.operation === 'resume.suggest') {
+    if (!scenario.body?.resumeData || typeof scenario.body.jdText !== 'string' || Object.prototype.hasOwnProperty.call(scenario.body, 'rawText')) fail(`Scenario ${scenario.id} does not match the strict Resume suggestion request schema.`);
+  }
+}
+
+function validateResolvedOperationBody(scenario) {
+  try {
+    validateHostedOperationBody(scenario);
+  } catch (error) {
+    fail(`Scenario ${scenario.id} ${error instanceof Error ? error.message : 'failed operation body authority.'}`);
+  }
+}
+
+function exactTargetUrl(scenarioId, scenarioPath) {
+  try {
+    return exactOriginUrl(originUrl, scenarioPath);
+  } catch (error) {
+    fail(`Scenario ${scenarioId} ${error instanceof Error ? error.message : 'has an invalid path.'}`);
+  }
+}
+
+function jsonPointerValue(document, pointer) {
+  if (pointer === '') return { exists: true, value: document };
+  if (typeof pointer !== 'string' || !pointer.startsWith('/')) return { exists: false, value: undefined };
+  let current = document;
+  for (const rawPart of pointer.slice(1).split('/')) {
+    const part = rawPart.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (current === null || typeof current !== 'object' || !Object.prototype.hasOwnProperty.call(current, part)) return { exists: false, value: undefined };
+    current = current[part];
+  }
+  return { exists: true, value: current };
+}
+
+function valueType(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
+function validateAssertions(assertions, responseData, scenarioId, phase) {
+  if (!Array.isArray(assertions) || assertions.length === 0 || assertions.length > 24) fail(`Scenario ${scenarioId} ${phase} must declare semantic assertions.`);
+  assertions.forEach((assertion, index) => {
+    if (!assertion || !['json', 'header', 'text'].includes(assertion.source) || !allowedAssertionOps.has(assertion.op)) fail(`Scenario ${scenarioId} ${phase} assertion ${index + 1} has an invalid shape.`);
+    let exists = true;
+    let actual;
+    if (assertion.source === 'json') {
+      if (responseData.json === undefined) throw new Error(`Scenario ${scenarioId} ${phase} assertion ${index + 1} expected JSON.`);
+      const resolved = jsonPointerValue(responseData.json, assertion.path ?? '');
+      exists = resolved.exists;
+      actual = resolved.value;
+    } else if (assertion.source === 'header') {
+      if (typeof assertion.name !== 'string' || !assertion.name.trim()) fail(`Scenario ${scenarioId} ${phase} assertion ${index + 1} requires a header name.`);
+      actual = responseData.headers.get(assertion.name);
+      exists = actual !== null;
+    } else {
+      actual = responseData.text;
+    }
+    let passed = false;
+    switch (assertion.op) {
+      case 'exists': passed = exists === (assertion.value ?? true); break;
+      case 'equals': passed = exists && JSON.stringify(actual) === JSON.stringify(assertion.value); break;
+      case 'oneOf': passed = exists && Array.isArray(assertion.value) && assertion.value.some((candidate) => JSON.stringify(candidate) === JSON.stringify(actual)); break;
+      case 'type': passed = exists && allowedJsonTypes.has(assertion.value) && valueType(actual) === assertion.value; break;
+      case 'matches':
+        if (typeof assertion.value !== 'string' || assertion.value.length > 500) fail(`Scenario ${scenarioId} ${phase} assertion ${index + 1} has an invalid regex.`);
+        passed = exists && typeof actual === 'string' && new RegExp(assertion.value).test(actual);
+        break;
+      case 'includes': passed = exists && typeof actual === 'string' && typeof assertion.value === 'string' && actual.includes(assertion.value); break;
+      default: passed = false;
+    }
+    if (!passed) throw new Error(`Scenario ${scenarioId} ${phase} semantic assertion ${index + 1} failed.`);
+  });
+}
+
+function validateAssertionDeclarations(assertions, scenarioId, phase) {
+  if (!Array.isArray(assertions) || assertions.length === 0 || assertions.length > 24) fail(`Scenario ${scenarioId} ${phase} must declare 1-24 semantic assertions.`);
+  for (const assertion of assertions) {
+    if (!assertion || !['json', 'header', 'text'].includes(assertion.source) || !allowedAssertionOps.has(assertion.op)) fail(`Scenario ${scenarioId} ${phase} has an invalid assertion.`);
+    if (assertion.source === 'header' && (typeof assertion.name !== 'string' || !assertion.name.trim())) fail(`Scenario ${scenarioId} ${phase} has an invalid header assertion.`);
+    if (assertion.op === 'matches') {
+      if (typeof assertion.value !== 'string' || assertion.value.length > 500) fail(`Scenario ${scenarioId} ${phase} has an invalid regex assertion.`);
+      try { new RegExp(assertion.value); } catch { fail(`Scenario ${scenarioId} ${phase} has an invalid regex assertion.`); }
+    }
+  }
+}
+
+function validateRequestShape(spec, scenarioId, phase) {
+  if (!spec || typeof spec.path !== 'string' || typeof spec.method !== 'string' || !Array.isArray(spec.expectedStatuses)) fail(`Scenario ${scenarioId} ${phase} has an invalid request shape.`);
+  const method = spec.method.toUpperCase();
+  if (!allowedMethods.has(method)) fail(`Scenario ${scenarioId} ${phase} uses an unsupported method.`);
+  if (spec.expectedStatuses.length === 0 || !spec.expectedStatuses.every((status) => Number.isInteger(status) && status >= 100 && status <= 599)) fail(`Scenario ${scenarioId} ${phase} must declare bounded HTTP status expectations.`);
+  const auth = spec.auth ?? 'none';
+  if (!['none', 'userA', 'userB', 'admin'].includes(auth)) fail(`Scenario ${scenarioId} ${phase} has an invalid auth selector.`);
+  if (auth === 'admin' && !adminToken) fail(`Scenario ${scenarioId} ${phase} requires MOCKMATE_TEST_ADMIN_TOKEN.`);
+  if (spec.headers !== undefined) fail(`Scenario ${scenarioId} ${phase} may not supply controller-owned headers.`);
+  validateAssertionDeclarations(spec.assertions, scenarioId, phase);
+  return { method, auth, targetUrl: exactTargetUrl(scenarioId, spec.path) };
+}
+
+function validateMultipartDeclaration(spec, scenarioId, phase) {
+  if (!spec.multipart) return;
+  const { fileEnv, fileField, filename, contentType, fields = {} } = spec.multipart;
+  if (!['RESUME_FIXTURE_PATH', 'CLEARSPEAK_FIXTURE_PATH'].includes(fileEnv) || !['resume', 'audio'].includes(fileField) || typeof filename !== 'string' || typeof contentType !== 'string') fail(`Scenario ${scenarioId} ${phase} has an invalid multipart declaration.`);
+  if (!filename || filename.length > 180 || /[\r\n"]/u.test(filename) || !contentType || contentType.length > 128 || /[\r\n]/u.test(contentType)) fail(`Scenario ${scenarioId} ${phase} has unsafe multipart metadata.`);
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) fail(`Scenario ${scenarioId} ${phase} has invalid multipart fields.`);
+  for (const [key, value] of Object.entries(fields)) {
+    if (!/^[A-Za-z0-9_.-]{1,64}$/u.test(key) || typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 4096) fail(`Scenario ${scenarioId} ${phase} has an invalid multipart field.`);
+  }
+}
+
+function prepareRequest(spec, scenarioId, phase) {
+  const { method, auth, targetUrl } = validateRequestShape(spec, scenarioId, phase);
+  const headers = { Accept: 'application/json', Origin: origin, ...operationOwnedHeaders(spec.operation) };
+  if (auth !== 'none') headers.Authorization = `Bearer ${tokens[auth]}`;
+  if (spec.idempotencyKey) headers['Idempotency-Key'] = spec.idempotencyKey;
+  let requestBody;
+  let uploadBuffer;
+  let multipartBuffer;
+  let multipartPartBuffers = [];
+  let jsonBuffer;
+  if (spec.multipart) {
+    validateMultipartDeclaration(spec, scenarioId, phase);
+    const { fileEnv, fileField, filename, contentType, fields = {} } = spec.multipart;
+    const fixturePath = requireValue(fileEnv);
+    const stat = fs.statSync(fixturePath);
+    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_UPLOAD_BYTES) fail(`Scenario ${scenarioId} ${phase} multipart fixture must be 1-${MAX_UPLOAD_BYTES} bytes.`);
+    uploadBuffer = fs.readFileSync(fixturePath);
+    const boundary = `----mockmate-${crypto.randomBytes(18).toString('hex')}`;
+    const multipartParts = [];
+    const appendTextPart = (value) => {
+      const buffer = Buffer.from(value, 'utf8');
+      multipartPartBuffers.push(buffer);
+      multipartParts.push(buffer);
+    };
+    for (const [key, value] of Object.entries(fields)) {
+      appendTextPart(`--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`);
+    }
+    appendTextPart(`--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`);
+    multipartParts.push(uploadBuffer);
+    appendTextPart(`\r\n--${boundary}--\r\n`);
+    multipartBuffer = Buffer.concat(multipartParts);
+    headers['Content-Type'] = `multipart/form-data; boundary=${boundary}`;
+    requestBody = multipartBuffer;
+  } else if (spec.body !== undefined) {
+    jsonBuffer = Buffer.from(JSON.stringify(spec.body));
+    const jsonLimit = jsonRequestLimitForOperation(spec.operation);
+    if (jsonBuffer.byteLength > jsonLimit) fail(`Scenario ${scenarioId} ${phase} JSON body exceeds its operation-specific ${jsonLimit}-byte authority.`);
+    headers['Content-Type'] = 'application/json';
+    requestBody = jsonBuffer;
+  }
+  const prepared = { method, targetUrl, headers, requestBody, cleanup: undefined };
+  prepared.cleanup = () => {
+    uploadBuffer?.fill(0);
+    multipartBuffer?.fill(0);
+    multipartPartBuffers.forEach((buffer) => buffer.fill(0));
+    multipartPartBuffers = [];
+    jsonBuffer?.fill(0);
+    prepared.requestBody = undefined;
+    uploadBuffer = undefined;
+    multipartBuffer = undefined;
+    jsonBuffer = undefined;
+    requestBody = undefined;
+  };
+  return prepared;
+}
+
+async function executeRequest(spec, scenarioId, phase) {
+  const prepared = prepareRequest(spec, scenarioId, phase);
+  let responseData;
+  try {
+    if (mutatingMethods.has(prepared.method)) mutationsMayHaveStarted = true;
+    responseData = await boundedRequest(prepared.targetUrl, { method: prepared.method, headers: prepared.headers, redirect: 'manual', body: prepared.requestBody }, {
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      maxResponseBytes: MAX_RESPONSE_BYTES,
+    });
+  } finally {
+    prepared.cleanup();
+  }
+  try {
+    const text = responseData.body.toString('utf8');
+    let json;
+    if (text) {
+      try { json = JSON.parse(text); } catch { json = undefined; }
+    }
+    if (!spec.expectedStatuses.includes(responseData.status)) throw new Error(`Scenario ${scenarioId} ${phase} returned unexpected status ${responseData.status}.`);
+    validateAssertions(spec.assertions, { json, headers: responseData.headers, text }, scenarioId, phase);
+    const canonical = (spec.canonicalPaths ?? []).map((pointer) => jsonPointerValue(json, pointer).value);
+    return { status: responseData.status, canonical, json };
+  } finally {
+    responseData.body.fill(0);
+  }
+}
+
+async function executeAbandonedRequest(spec, scenarioId, phase) {
+  const prepared = prepareRequest(spec, scenarioId, phase);
+  try {
+    if (mutatingMethods.has(prepared.method)) mutationsMayHaveStarted = true;
+    const response = await boundedAbandonedRequest(prepared.targetUrl, {
+      method: prepared.method,
+      headers: prepared.headers,
+      redirect: 'manual',
+      body: prepared.requestBody,
+    }, { timeoutMs: REQUEST_TIMEOUT_MS });
+    if (!spec.expectedStatuses.includes(response.status)) throw new Error(`Scenario ${scenarioId} ${phase} returned unexpected status ${response.status}.`);
+    return { status: response.status };
+  } finally {
+    prepared.cleanup();
+  }
+}
+
+function executionPlan(scenario) {
+  const execution = scenario.execution ?? { mode: 'single', attempts: 1 };
+  if (!['single', 'parallel', 'sequential'].includes(execution.mode)) fail(`Scenario ${scenario.id} has an invalid execution mode.`);
+  const attempts = execution.attempts ?? 1;
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > 5) fail(`Scenario ${scenario.id} must use 1-5 bounded attempts.`);
+  const contract = repetitionContracts.get(scenario.operation);
+  if (contract) {
+    if (execution.mode !== contract.mode || attempts < contract.minAttempts || attempts > contract.maxAttempts || !scenario.verification) {
+      fail(`Scenario ${scenario.id} does not match the operation-owned repetition contract for ${scenario.operation}.`);
+    }
+  } else if (execution.mode !== 'single' || attempts !== 1) {
+    fail(`Scenario ${scenario.id} may use repeated execution only for registered repetition operations.`);
+  }
+  return { mode: execution.mode, attempts, repetition: Boolean(contract) };
+}
+
+function validateCapturePlacement(rawScenario, plan) {
+  if (rawScenario.verification?.captures !== undefined) fail(`Scenario ${rawScenario.id} verification cannot declare captures.`);
+  if (rawScenario.captures !== undefined && !captureSchemaEnabled) fail(`Scenario ${rawScenario.id} capture declarations require schemaVersion 4.`);
+  if (rawScenario.captures !== undefined && (plan.mode !== 'single' || plan.attempts !== 1)) {
+    fail(`Scenario ${rawScenario.id} may capture only from an ordinary single successful request.`);
+  }
+}
+
+function validateInterviewRepetitionAuthority(scenario, verificationSpec, plan) {
+  if (!plan.repetition) return;
+  const pathMatch = scenario.path.match(/^\/api\/interview\/sessions\/([^/]+)\/answers$/);
+  if (!pathMatch) fail(`Scenario ${scenario.id} repetition must target an Interview answer endpoint.`);
+  if (!scenario.body || typeof scenario.body !== 'object' || Array.isArray(scenario.body)) fail(`Scenario ${scenario.id} repetition requires an adaptive Interview answer body.`);
+  const { questionId, expectedSessionVersion, clientSubmissionId, answerKind, answerText } = scenario.body;
+  if (typeof questionId !== 'string' || !questionId.trim()) fail(`Scenario ${scenario.id} repetition requires questionId.`);
+  if (!Number.isInteger(expectedSessionVersion) || expectedSessionVersion < 1) fail(`Scenario ${scenario.id} repetition requires expectedSessionVersion >= 1.`);
+  if (typeof clientSubmissionId !== 'string' || !uuidPattern.test(clientSubmissionId)) fail(`Scenario ${scenario.id} repetition requires endpoint-native clientSubmissionId UUID authority.`);
+  if (!['answered', 'skipped'].includes(answerKind)) fail(`Scenario ${scenario.id} repetition requires a valid adaptive answerKind.`);
+  if (answerKind === 'answered' && (typeof answerText !== 'string' || !answerText.trim())) fail(`Scenario ${scenario.id} answered repetition requires non-empty answerText.`);
+  if (answerKind === 'skipped' && answerText !== undefined && answerText !== null && (typeof answerText !== 'string' || answerText.trim())) fail(`Scenario ${scenario.id} skipped repetition must not include answer text.`);
+  if (scenario.idempotencyKey !== undefined) fail(`Scenario ${scenario.id} must use endpoint-native clientSubmissionId rather than Idempotency-Key metadata.`);
+  if (JSON.stringify(scenario.canonicalPaths) !== JSON.stringify(interviewRepetitionCanonicalPaths)) fail(`Scenario ${scenario.id} must compare the registered Interview canonical response paths.`);
+  if (!verificationSpec) fail(`Scenario ${scenario.id} requires same-session post-state verification before execution.`);
+  const sessionId = pathMatch[1];
+  const expectedVerificationPath = `/api/interview/sessions/${sessionId}`;
+  if (verificationSpec.method?.toUpperCase() !== 'GET' || verificationSpec.path !== expectedVerificationPath || (verificationSpec.auth ?? 'none') !== 'userA' || JSON.stringify(verificationSpec.expectedStatuses) !== '[200]' || verificationSpec.body !== undefined || verificationSpec.multipart !== undefined) {
+    fail(`Scenario ${scenario.id} verification must read the same authoritative Interview session.`);
+  }
+  const expectedVersion = expectedSessionVersion + 1;
+  const hasSessionAssertion = verificationSpec.assertions?.some((assertion) => assertion.source === 'json' && assertion.path === '/id' && assertion.op === 'equals' && assertion.value === sessionId);
+  const hasVersionAssertion = verificationSpec.assertions?.some((assertion) => assertion.source === 'json' && assertion.path === '/sessionVersion' && assertion.op === 'equals' && assertion.value === expectedVersion);
+  if (!hasSessionAssertion || !hasVersionAssertion) fail(`Scenario ${scenario.id} verification must prove the same session advanced by exactly one version.`);
+}
+
+function validateCaptureDeclarationForPreflight(rawDeclaration, seenNames) {
+  if (!rawDeclaration || typeof rawDeclaration !== 'object' || Array.isArray(rawDeclaration)) fail('Capture declaration is invalid.');
+  const allowed = new Set(['name', 'path', 'type', 'pattern', 'maxLength']);
+  if (Object.keys(rawDeclaration).some((key) => !allowed.has(key))) fail('Capture declaration contains an unsupported field.');
+  const { name, path: pointer, type, pattern, maxLength } = rawDeclaration;
+  if (typeof name !== 'string' || !captureNamePattern.test(name) || seenNames.has(name)) fail(`Capture ${String(name)} has an invalid or duplicate name.`);
+  if (typeof pointer !== 'string' || pointer.length > 256 || (pointer !== '' && !pointer.startsWith('/'))) fail(`Capture ${name} has an invalid JSON pointer.`);
+  if (!['string', 'number', 'boolean'].includes(type)) fail(`Capture ${name} must declare an explicit scalar type for preflight authority.`);
+  if (pattern !== undefined) {
+    if (type !== 'string' || typeof pattern !== 'string' || !pattern || pattern.length > 256) fail(`Capture ${name} has an invalid pattern.`);
+    try { new RegExp(pattern); } catch { fail(`Capture ${name} has an invalid pattern.`); }
+  }
+  if (maxLength !== undefined && (type !== 'string' || !Number.isInteger(maxLength) || maxLength < 1 || maxLength > 512)) fail(`Capture ${name} has an invalid maxLength.`);
+  return { name, path: pointer, type, pattern, maxLength };
+}
+
+function syntheticCaptureValue(declaration) {
+  if (declaration.type === 'number') return 2;
+  if (declaration.type === 'boolean') return true;
+  const maxLength = declaration.maxLength ?? 512;
+  const candidates = [
+    '00000000-0000-4000-8000-000000000001',
+    'a'.repeat(64),
+    'en-GB-general-v1',
+    'sentence_reading',
+    'preflight-value',
+    'v1',
+    '1',
+  ];
+  const matcher = declaration.pattern ? new RegExp(declaration.pattern) : null;
+  const candidate = candidates.find((value) => Buffer.byteLength(value, 'utf8') <= maxLength && (!matcher || matcher.test(value)));
+  if (!candidate) fail(`Capture ${declaration.name} pattern cannot be safely projected for network-free preflight.`);
+  return candidate;
+}
+
+function resolvePreflightString(input, declarations) {
+  if (!input.includes('{{capture:')) return input;
+  const full = fullCaptureTokenPattern.exec(input);
+  if (full) {
+    const declaration = declarations.get(full[1]);
+    if (!declaration) fail(`Capture reference ${full[1]} is unknown or forward-referenced.`);
+    return syntheticCaptureValue(declaration);
+  }
+  captureTokenPattern.lastIndex = 0;
+  let malformedRemainder = input;
+  const resolved = input.replace(captureTokenPattern, (_match, name) => {
+    const declaration = declarations.get(name);
+    if (!declaration) fail(`Capture reference ${name} is unknown or forward-referenced.`);
+    const value = syntheticCaptureValue(declaration);
+    malformedRemainder = malformedRemainder.replace(`{{capture:${name}}}`, '');
+    return String(value);
+  });
+  if (malformedRemainder.includes('{{capture:')) fail('Manifest contains a malformed capture reference.');
+  if (Buffer.byteLength(resolved, 'utf8') > 8192) fail('Projected capture reference is oversized.');
+  return resolved;
+}
+
+function resolvePreflightValue(input, declarations, depth = 0, state = { nodes: 0 }) {
+  if (depth > 24) fail('Manifest capture projection is too deep.');
+  state.nodes += 1;
+  if (state.nodes > 4096) fail('Manifest capture projection is too complex.');
+  if (typeof input === 'string') return resolvePreflightString(input, declarations);
+  if (Array.isArray(input)) return input.map((value) => resolvePreflightValue(value, declarations, depth + 1, state));
+  if (input && typeof input === 'object') {
+    const output = {};
+    for (const [key, value] of Object.entries(input)) {
+      if (key.includes('{{capture:')) fail('Capture references are forbidden in object keys.');
+      output[key] = resolvePreflightValue(value, declarations, depth + 1, state);
+    }
+    return output;
+  }
+  return input;
+}
+
+function projectRequestSpecForPreflight(rawSpec, declarations, { allowCaptures = false } = {}) {
+  if (!rawSpec || typeof rawSpec !== 'object' || Array.isArray(rawSpec)) fail('Scenario request specification is invalid.');
+  if (!allowCaptures && rawSpec.captures !== undefined) fail('Capture declarations are not allowed on this request phase.');
+  const projected = resolvePreflightValue(rawSpec, declarations);
+  delete projected.captures;
+  return materializeGeneratedProbe(projected);
+}
+
+function validateProjectedJsonSize(spec, scenarioId, phase) {
+  if (spec.body === undefined) return;
+  const encoded = Buffer.from(JSON.stringify(spec.body));
+  try {
+    const limit = jsonRequestLimitForOperation(spec.operation);
+    if (encoded.byteLength > limit) fail(`Scenario ${scenarioId} ${phase} JSON body exceeds its operation-specific ${limit}-byte authority during preflight.`);
+  } finally {
+    encoded.fill(0);
+  }
+}
+
+function validateTerminalAccountOrdering() {
+  const operations = manifest.scenarios.map((scenario) => scenario.operation);
+  const requiredTail = [
+    'partial-failure.account-delete',
+    'account.delete',
+    'account.owner-aftermath',
+    'account.cross-user-aftermath',
+  ];
+  if (operations.length < requiredTail.length || JSON.stringify(operations.slice(-requiredTail.length)) !== JSON.stringify(requiredTail)) {
+    fail('Hosted manifest must keep the non-destructive account-deletion failure seam and real account deletion/aftermath as the terminal sequence.');
+  }
+
+  const ownerAftermath = manifest.scenarios.find((scenario) => scenario.operation === 'account.owner-aftermath');
+  const provesEmptyInterviewHistory = ownerAftermath?.assertions?.some((assertion) =>
+    assertion.source === 'json' && assertion.op === 'equals' && assertion.path === '' &&
+    Array.isArray(assertion.value) && assertion.value.length === 0
+  );
+  const snapshotVerification = ownerAftermath?.verification;
+  const provesCareerSnapshotDeletion =
+    snapshotVerification?.method === 'GET' &&
+    snapshotVerification?.path === '/api/career-context/snapshots/{{capture:career.snapshotId}}' &&
+    snapshotVerification?.auth === 'userA' &&
+    JSON.stringify(snapshotVerification?.expectedStatuses) === '[404]' &&
+    snapshotVerification?.body === undefined && snapshotVerification?.multipart === undefined &&
+    snapshotVerification?.assertions?.some((assertion) =>
+      assertion.source === 'json' && assertion.op === 'exists' && assertion.path === '/error' && assertion.value === true
+    );
+  if (!provesEmptyInterviewHistory || !provesCareerSnapshotDeletion) {
+    fail('Account deletion aftermath must prove empty owner Interview history and missing owner Career Context snapshot state.');
+  }
+}
+
+function validateP0EightLifecycleOrdering() {
+  const operations = manifest.scenarios.map((scenario) => scenario.operation);
+  const requireOrdered = (ordered, label) => {
+    const indices = ordered.map((operation) => operations.indexOf(operation));
+    if (indices.some((index) => index < 0) || indices.some((index, offset) => offset > 0 && index <= indices[offset - 1])) {
+      fail(`Hosted manifest does not preserve the governed ${label} lifecycle ordering.`);
+    }
+  };
+  requireOrdered([
+    'clearspeak.prompt', 'clearspeak.authority', 'clearspeak.create', 'clearspeak.submit', 'clearspeak.result', 'clearspeak.replay',
+    'clearspeak.cancel-authority', 'clearspeak.cancel', 'clearspeak.cancel-status', 'clearspeak.cancel-submit', 'clearspeak.history', 'clearspeak.delete',
+  ], 'ClearSpeak commit/replay and pending-cancellation');
+  requireOrdered([
+    'interview.usage-baseline', 'interview.create', 'interview.version', 'interview.answer', 'interview.stale',
+    'concurrency.exactly-once', 'interview.usage-after-concurrency', 'interview.interrupted', 'replay.response-loss',
+    'interview.usage-after-response-loss', 'interview.complete', 'interview.terminal', 'interview.report', 'cross-user.denied',
+  ], 'Interview root/quota/report');
+  requireOrdered([
+    'career-context.state', 'career-context.update', 'career-context.create', 'career-context.bridge',
+    'career-context.delete', 'career-context.decision-state', 'career-context.decision-stale',
+  ], 'Career Context current/stale decision');
+}
+
+function validateManifestBeforeNetwork() {
+  const captureDeclarations = new Map();
+  const scenarioIds = new Set();
+  const operationCounts = new Map();
+
+  validateTerminalAccountOrdering();
+  validateP0EightLifecycleOrdering();
+
+  for (const rawScenario of manifest.scenarios) {
+    if (!rawScenario || typeof rawScenario.id !== 'string' || !rawScenario.id || rawScenario.id.length > 128 || scenarioIds.has(rawScenario.id)) fail('Scenario manifest contains an invalid or duplicate scenario id.');
+    if (typeof rawScenario.family !== 'string' || typeof rawScenario.operation !== 'string' || typeof rawScenario.path !== 'string' || typeof rawScenario.method !== 'string') fail(`Scenario ${rawScenario.id} has an invalid shape.`);
+    scenarioIds.add(rawScenario.id);
+    operationCounts.set(rawScenario.operation, (operationCounts.get(rawScenario.operation) ?? 0) + 1);
+
+    const plan = executionPlan(rawScenario);
+    validateCapturePlacement(rawScenario, plan);
+
+    const scenario = projectRequestSpecForPreflight(rawScenario, captureDeclarations, { allowCaptures: true });
+    scenario.id = rawScenario.id;
+    scenario.family = rawScenario.family;
+    scenario.operation = rawScenario.operation;
+    scenario.method = rawScenario.method;
+    scenario.auth = rawScenario.auth;
+    scenario.expectedStatuses = rawScenario.expectedStatuses;
+
+    validateOperationContract(scenario);
+    validateRequestShape(scenario, scenario.id, 'request preflight');
+    validateMultipartDeclaration(scenario, scenario.id, 'request preflight');
+    validateResolvedOperationBody(scenario);
+    validateProjectedJsonSize(scenario, scenario.id, 'request preflight');
+
+    let verificationSpec;
+    if (rawScenario.verification) {
+      verificationSpec = projectRequestSpecForPreflight(rawScenario.verification, captureDeclarations, { allowCaptures: false });
+      validateRequestShape(verificationSpec, scenario.id, 'post-state verification preflight');
+      validateMultipartDeclaration(verificationSpec, scenario.id, 'post-state verification preflight');
+      validateProjectedJsonSize(verificationSpec, scenario.id, 'post-state verification preflight');
+    }
+    validateInterviewRepetitionAuthority(scenario, verificationSpec, plan);
+
+    if (rawScenario.captures !== undefined) {
+      if (!Array.isArray(rawScenario.captures) || rawScenario.captures.length === 0 || rawScenario.captures.length > 8) fail(`Scenario ${rawScenario.id} must declare 1-8 bounded captures.`);
+      if (captureDeclarations.size + rawScenario.captures.length > 64) fail('Manifest capture count exceeds the bounded authority.');
+      const pending = rawScenario.captures.map((declaration) => validateCaptureDeclarationForPreflight(declaration, new Set([...captureDeclarations.keys(), ...rawScenario.captures.filter((candidate) => candidate !== declaration).map((candidate) => candidate?.name)])));
+      const names = new Set(pending.map((declaration) => declaration.name));
+      if (names.size !== pending.length || pending.some((declaration) => captureDeclarations.has(declaration.name))) fail(`Scenario ${rawScenario.id} contains duplicate capture names.`);
+      for (const declaration of pending) captureDeclarations.set(declaration.name, declaration);
+    }
+  }
+
+  for (const operation of requiredOperations) {
+    if (operationCounts.get(operation) !== 1) fail(`Scenario manifest must contain exactly one governed operation: ${operation}.`);
+  }
+}
+
+async function requestScenario(rawScenario) {
+  if (!rawScenario || typeof rawScenario.id !== 'string' || typeof rawScenario.family !== 'string' || typeof rawScenario.operation !== 'string' || typeof rawScenario.path !== 'string' || typeof rawScenario.method !== 'string') fail('Scenario manifest contains an invalid scenario shape.');
+  const plan = executionPlan(rawScenario);
+  validateCapturePlacement(rawScenario, plan);
+
+  const scenario = resolveRequestSpec(rawScenario, { allowCaptures: true });
+  scenario.id = rawScenario.id;
+  scenario.family = rawScenario.family;
+  scenario.operation = rawScenario.operation;
+  scenario.method = rawScenario.method;
+  scenario.auth = rawScenario.auth;
+  scenario.expectedStatuses = rawScenario.expectedStatuses;
+
+  validateOperationContract(scenario);
+  validateRequestShape(scenario, scenario.id, 'request');
+  validateMultipartDeclaration(scenario, scenario.id, 'request');
+  validateResolvedOperationBody(scenario);
+  validateProjectedJsonSize(scenario, scenario.id, 'request');
+  let verificationSpec;
+  if (rawScenario.verification) {
+    verificationSpec = resolveRequestSpec(rawScenario.verification, { allowCaptures: false });
+    validateRequestShape(verificationSpec, scenario.id, 'post-state verification');
+    validateMultipartDeclaration(verificationSpec, scenario.id, 'post-state verification');
+    validateProjectedJsonSize(verificationSpec, scenario.id, 'post-state verification');
+  }
+  validateInterviewRepetitionAuthority(scenario, verificationSpec, plan);
+
+  const statuses = [];
+  const canonical = [];
+  let captureJson;
+
+  if (plan.mode === 'parallel') {
+    const attempts = await awaitParallelQuiescence(Array.from({ length: plan.attempts }, (_, index) => executeRequest(scenario, scenario.id, `parallel attempt ${index + 1}`)));
+    statuses.push(...attempts.map((attempt) => attempt.status));
+    canonical.push(...attempts.map((attempt) => attempt.canonical));
+  } else if (scenario.operation === 'replay.response-loss') {
+    const abandoned = await executeAbandonedRequest(scenario, scenario.id, 'abandoned first response');
+    statuses.push(abandoned.status);
+    for (let index = 1; index < plan.attempts; index += 1) {
+      const attempt = await executeRequest(scenario, scenario.id, `recovery attempt ${index + 1}`);
+      statuses.push(attempt.status);
+      canonical.push(attempt.canonical);
+    }
+  } else {
+    for (let index = 0; index < plan.attempts; index += 1) {
+      const attempt = await executeRequest(scenario, scenario.id, `${plan.mode} attempt ${index + 1}`);
+      statuses.push(attempt.status);
+      canonical.push(attempt.canonical);
+      if (plan.attempts === 1) captureJson = attempt.json;
+    }
+  }
+
+  if (rawScenario.captures !== undefined) {
+    if (captureJson === undefined) throw new Error(`Scenario ${scenario.id} capture source was not valid JSON.`);
+    captureStore.captureFromResponse(scenario.id, rawScenario.captures, captureJson);
+  }
+  captureJson = undefined;
+
+  let verificationStatus;
+  if (verificationSpec) {
+    const verification = await executeRequest(verificationSpec, scenario.id, 'post-state verification');
+    verificationStatus = verification.status;
+  }
+
+  if (plan.repetition) {
+    if (canonical.length === 0 || !canonical.every((value) => JSON.stringify(value) === JSON.stringify(canonical[0]))) throw new Error(`Scenario ${scenario.id} canonical responses diverged.`);
+  }
+
+  results.push({ id: scenario.id, family: scenario.family, executionMode: plan.mode, attempts: plan.attempts, statuses, verificationStatus, passed: true });
+}
+
+async function boundedPreflight(pathname, options) {
+  return boundedRequest(exactOriginUrl(originUrl, pathname), options, { timeoutMs: REQUEST_TIMEOUT_MS, maxResponseBytes: MAX_RESPONSE_BYTES });
+}
+
+async function preflight() {
+  const health = await boundedPreflight('/api/health', { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
+  try {
+    if (health.status !== 200) throw new Error(`Preview health returned ${health.status}.`);
+    let body;
+    try { body = JSON.parse(health.body.toString('utf8')); } catch { throw new Error('Preview health did not return valid JSON.'); }
+    if (body?.mode !== 'preview' || body?.authority !== 'configured' || body?.previewTargetId !== previewTargetId || body?.supabaseProjectRef !== supabaseProjectRef || body?.gitHeadSha !== expectedHeadSha) {
+      throw new Error('Preview health authority does not match the explicitly authorized origin, project, target and Git head.');
+    }
+  } finally { health.body.fill(0); }
+
+  const unauthorized = await boundedPreflight('/api/auth/test', { headers: { Accept: 'application/json', Origin: origin }, redirect: 'manual' });
+  try {
+    if (unauthorized.status !== 401) throw new Error(`Protected unauthenticated probe returned ${unauthorized.status}; expected 401.`);
+  } finally { unauthorized.body.fill(0); }
+
+  const hostileOrigin = 'https://mockmate-hostile-origin.invalid';
+  const hostile = await boundedPreflight('/api/health', { headers: { Accept: 'application/json', Origin: hostileOrigin }, redirect: 'manual' });
+  try {
+    const allowOrigin = hostile.headers.get('access-control-allow-origin');
+    if (allowOrigin === hostileOrigin || allowOrigin === '*') throw new Error('Hostile origin was accepted by CORS.');
+  } finally { hostile.body.fill(0); }
+
+  const preflightResponse = await boundedPreflight('/api/health', {
+    method: 'OPTIONS', headers: { Origin: hostileOrigin, 'Access-Control-Request-Method': 'GET' }, redirect: 'manual',
+  });
+  try {
+    const allowOrigin = preflightResponse.headers.get('access-control-allow-origin');
+    if (allowOrigin === hostileOrigin || allowOrigin === '*') throw new Error('Hostile CORS preflight was accepted.');
+  } finally { preflightResponse.body.fill(0); }
+}
+
+let runError;
+let cleanupError;
+let digest;
+try {
+  validateManifestBeforeNetwork();
+  await preflight();
+  for (const scenario of manifest.scenarios) await requestScenario(scenario);
+
+  const evidence = {
+    schemaVersion: manifest.schemaVersion,
+    generatedAt: new Date().toISOString(),
+    expectedHeadSha,
+    previewOriginHost: originUrl.hostname,
+    previewTargetId,
+    supabaseProjectRef,
+    scenarioManifestSha256: crypto.createHash('sha256').update(fs.readFileSync(scenarioFile)).digest('hex'),
+    results,
+    summary: { total: results.length, passed: results.filter((result) => result.passed).length },
+  };
+  digest = finalizeOwnedEvidence({ artifactPath, evidence });
+} catch (error) {
+  runError = error;
+  if (mutationsMayHaveStarted) {
+    try {
+      await compensateTestUserAppData({
+        originUrl,
+        userAToken,
+        userBToken,
+        timeoutMs: REQUEST_TIMEOUT_MS,
+        maxResponseBytes: MAX_RESPONSE_BYTES,
+      });
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
+} finally {
+  captureStore.clear();
+  tokens.userA = undefined;
+  tokens.userB = undefined;
+  tokens.admin = undefined;
+  userAToken = undefined;
+  userBToken = undefined;
+  adminToken = undefined;
+  delete process.env.MOCKMATE_TEST_USER_A_TOKEN;
+  delete process.env.MOCKMATE_TEST_USER_B_TOKEN;
+  delete process.env.MOCKMATE_TEST_ADMIN_TOKEN;
+}
+
+if (runError) {
+  const cleanupStatus = mutationsMayHaveStarted
+    ? (cleanupError ? 'incomplete' : 'complete')
+    : 'not-required';
+  const artifactCleanupStatus = evidenceCleanupStatus(runError) ?? 'not-required';
+  console.error(`[HOSTED_PREVIEW_ACCEPTANCE_FAILED] ${runError instanceof Error ? runError.message : 'Unknown failure'}; compensating_cleanup=${cleanupStatus}; evidence_cleanup=${artifactCleanupStatus}`);
+  process.exit(1);
+}
+
+console.log(`[HOSTED_PREVIEW_ACCEPTANCE_OK] ${results.length} scenarios passed semantic/state acceptance; evidence_sha256=${digest}`);

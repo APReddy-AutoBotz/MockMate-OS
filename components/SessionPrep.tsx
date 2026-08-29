@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { InterviewSessionContext, InterviewPlan, SessionControls, InterviewSetupDraft, completeInterviewSessionContext } from 'mockmate-shared';
+import { completeInterviewSessionContext } from 'mockmate-shared';
+import type { InterviewSessionContext, InterviewPlan, SessionControls, InterviewSetupDraft } from 'mockmate-shared';
 import * as mockGeminiService from '../services/mockGeminiService';
 import PanelSelector from './PanelSelector';
 import SessionBuilder from './SessionBuilder';
@@ -40,61 +41,6 @@ const withSetupTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, time
   }
 };
 
-const buildFallbackInterviewPlan = (
-  intentText: string,
-  controls: SessionControls,
-  panelIDs: string[],
-  candidateRole: string,
-): InterviewPlan => {
-  const safePanelIDs = panelIDs.length ? panelIDs : DEFAULT_PANEL_IDS;
-  const total = Math.max(1, Math.min(controls.totalQuestions || 5, 10));
-  const bank = [
-    { phase: 'introduction', question: `Walk me through your background and key experience relevant to ${candidateRole || 'the role'}.`, expectedSignals: ['Role alignment', 'Clear communication'] },
-    { phase: 'scenario', question: 'Describe a challenging project you took ownership of and how you framed the core problem.', expectedSignals: ['Problem framing', 'Ownership'] },
-    { phase: 'situational', question: 'How do you prioritize competing requirements and manage trade-offs under tight constraints?', expectedSignals: ['Tradeoffs', 'Prioritization'] },
-    { phase: 'behavioral', question: 'Tell me about a situation where you had a disagreement with a team member. How did you handle it?', expectedSignals: ['Conflict resolution', 'Empathy'] },
-    { phase: 'reflection', question: 'Looking back at a major project, what key lesson did you learn and what would you do differently next time?', expectedSignals: ['Growth mindset', 'Self-reflection'] }
-  ];
-
-  const questionSet = Array.from({ length: total }, (_, i) => {
-    const template = bank[i % bank.length];
-    const personaFocus = safePanelIDs[i % safePanelIDs.length];
-    return {
-      id: `q_fallback_${i + 1}`,
-      phase: template.phase,
-      difficulty: controls.difficulty,
-      question: template.question,
-      expectedSignals: template.expectedSignals,
-      personaFocus,
-    };
-  });
-
-  const normalizedControls = { ...controls, totalQuestions: questionSet.length };
-
-  const isTechRole = /engineer|developer|software|coding|backend|frontend|fullstack|devops|data scientist|programmer/i.test(candidateRole || intentText || '');
-  const domains = isTechRole ? ['Software Engineering'] : (candidateRole ? [candidateRole] : []);
-  const tools = isTechRole ? ['Git'] : [];
-
-  return {
-    meta: {
-      intent: intentText,
-      controls: normalizedControls,
-      planSource: 'deterministic_fallback',
-    },
-    jdInsights: {
-      role: candidateRole || 'Candidate',
-      level: 'Mid-Level',
-      mustHaveSkills: ['Problem Solving', 'Communication'],
-      niceToHave: [],
-      domains,
-      tools,
-      softSkills: ['Teamwork', 'Communication'],
-      competencyWeights: { PROBLEM_FRAMING: 0.5, TRADEOFF_CLARITY: 0.5 }
-    },
-    questionSet,
-  };
-};
-
 const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, draft, onGoBack }) => {
   const [currentDraft, setCurrentDraft] = useState<InterviewSetupDraft>(draft);
   const [selectedPanelIDs, setSelectedPanelIDs] = useState<string[]>(draft.selectedPanelIDs?.length ? draft.selectedPanelIDs : DEFAULT_PANEL_IDS);
@@ -104,6 +50,7 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, draft, onGoBa
   const [isPlanReady, setIsPlanReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [matchReasons, setMatchReasons] = useState<Record<string, string>>({});
+  const [planError, setPlanError] = useState('');
 
   useEffect(() => {
     let isActive = true;
@@ -152,6 +99,7 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, draft, onGoBa
 
   const handleGeneratePlan = async () => {
     setIsLoading(true);
+    setPlanError('');
     audioService.playStart();
     try {
       const interviewPlan = await mockGeminiService.generateInterviewPlan({
@@ -165,15 +113,10 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, draft, onGoBa
       });
       setPlan(interviewPlan);
       setIsPlanReady(true);
-    } catch (err) {
-      const fallbackPlan = buildFallbackInterviewPlan(
-        draft.intentText,
-        sessionControls,
-        selectedPanelIDs,
-        currentDraft.candidateRole,
-      );
-      setPlan(fallbackPlan);
-      setIsPlanReady(true);
+    } catch {
+      setPlan(null);
+      setIsPlanReady(false);
+      setPlanError('We could not generate an authoritative interview plan. No session was created. Check your connection and try again.');
     } finally {
       setIsLoading(false);
     }
@@ -197,6 +140,8 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, draft, onGoBa
       <SessionBuilder
         jdInsights={plan.jdInsights}
         questionSet={plan.questionSet}
+        planSource={plan.meta.planSource}
+        sourceMode={plan.meta.controls.sourceMode}
         onAdjustSpecs={() => { audioService.playEnd(); setIsPlanReady(false); }}
         onInitialize={handleStartSession}
       />
@@ -210,7 +155,7 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, draft, onGoBa
           <span className="text-[9px] font-bold text-brand-primary uppercase tracking-[0.2em]">Step 1 of 2</span>
           <h2 className="text-3xl md:text-5xl font-medium text-white tracking-tight mt-1">Configure Session</h2>
         </div>
-        <button onClick={onGoBack} className="text-xs font-bold text-white/50 hover:text-white uppercase tracking-widest transition-colors">
+        <button type="button" onClick={onGoBack} className="text-xs font-bold text-white/50 hover:text-white uppercase tracking-widest transition-colors">
           Back
         </button>
       </div>
@@ -223,10 +168,11 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, draft, onGoBa
         />
 
         <div className="bg-white/[0.02] border border-white/[0.06] rounded-2xl p-6 md:p-8 space-y-4">
-          <label className="text-[10px] font-bold text-white/60 uppercase tracking-widest flex items-center gap-2">
+          <label htmlFor="session-job-description" className="text-[10px] font-bold text-white/60 uppercase tracking-widest flex items-center gap-2">
             <UploadIcon className="w-4 h-4 text-brand-primary" /> Optional: Job Description
           </label>
           <textarea
+            id="session-job-description"
             value={jdText}
             onChange={e => setJdText(e.target.value)}
             placeholder="Paste target job description to tailor questions..."
@@ -241,8 +187,15 @@ const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, draft, onGoBa
         />
       </div>
 
+      {planError && (
+        <div role="alert" className="rounded-xl border border-red-400/25 bg-red-950/30 px-4 py-3 text-sm text-red-200">
+          {planError}
+        </div>
+      )}
+
       <div className="flex justify-end pt-4">
         <button
+          type="button"
           onClick={handleGeneratePlan}
           disabled={isLoading}
           className="w-full sm:w-auto bg-brand-primary hover:bg-brand-primary/90 text-brand-dark font-bold py-4 px-12 rounded-xl text-[10px] uppercase tracking-[0.14em] shadow-xl shadow-brand-primary/10 transition-all disabled:opacity-50"

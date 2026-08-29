@@ -14,6 +14,7 @@ interface RewriteEditorScreenProps {
     onProceed: (data: ResumeData) => void;
     onBack: () => void;
     onSpeakBridge: (summary: string) => void;
+    speakingPracticeAvailable: boolean;
 }
 
 type SuggestionState = 'idle' | 'loading' | 'reviewing';
@@ -22,7 +23,7 @@ const inputCls = "w-full bg-white/[0.04] border border-white/10 rounded-xl px-4 
 const labelCls = "block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-tint mb-2";
 const normalizeSource = (value?: string) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
-export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resumeData, jdText, onProceed, onBack, onSpeakBridge }) => {
+export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resumeData, jdText, onProceed, onBack, onSpeakBridge, speakingPracticeAvailable }) => {
     const [data, setData] = useState<ResumeData>(resumeData);
     const [suggestionState, setSuggestionState] = useState<SuggestionState>('idle');
     const [bulletSuggestions, setBulletSuggestions] = useState<GovernedResumeBulletSuggestion[]>([]);
@@ -66,7 +67,7 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
         setSuggestionError('');
         try {
             const result = await apiClient.post(
-                '/api/resume/suggest',
+                'resume/suggest',
                 GovernedResumeSuggestionResponseSchema,
                 { resumeData: data, jdText },
             );
@@ -150,10 +151,12 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
                             <X className="w-3 h-3" /> Done reviewing
                         </button>
                     )}
-                    <button onClick={() => onSpeakBridge(data.summary || '')}
-                        className="flex items-center text-xs bg-white/5 text-brand-tint border border-white/10 px-3 py-2 rounded-xl hover:bg-white/10 hover:text-white transition gap-1.5 font-semibold">
-                        <Mic className="w-3.5 h-3.5" /> Practice speaking
-                    </button>
+                    {speakingPracticeAvailable && (
+                        <button onClick={() => onSpeakBridge(data.summary || '')}
+                            className="flex items-center text-xs bg-white/5 text-brand-tint border border-white/10 px-3 py-2 rounded-xl hover:bg-white/10 hover:text-white transition gap-1.5 font-semibold">
+                            <Mic className="w-3.5 h-3.5" /> Practice speaking
+                        </button>
+                    )}
                 </div>
             </div>
 

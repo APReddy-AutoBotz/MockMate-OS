@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, netlify-preview]
 
 permissions:
   contents: read
@@ -79,6 +79,11 @@ jobs:
           POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: npm run test:clearspeak-p0-5-db
 
+      - name: 8b. ClearSpeak P0-8 score provenance and authority contract
+        env:
+          POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: npm run test:clearspeak-p0-8-db
+
       - name: 9. Frontend build
         run: npm run build
 
@@ -103,6 +108,9 @@ jobs:
 
       - name: 11e. Adaptive Browser UI Journey
         run: npm run test:adaptive-ui-journey
+
+      - name: 11e2. ClearSpeak UK/US Browser UI Journey
+        run: npm run test:clearspeak-ui-journey
 
       - name: 11g0. Architectural rejection assertions
         run: npm run test:rejection-checks
@@ -148,8 +156,17 @@ jobs:
       - name: 16. Mobile lint
         run: npm run mobile:lint
 
-      - name: 16a. Mobile governed core parity guard
+      - name: 16a. Mobile web bundle and static export guard
+        run: node scripts/test-mobile-web-bundle.mjs
+
+      - name: 16b. Mobile governed core parity guard
         run: npm run test:mobile-governed-parity
+
+      - name: 16c. P0-8 hosted acceptance fail-closed contract
+        run: npm run test:hosted-acceptance-contract
+
+      - name: 16d. P0-8 hosted capture/reference authority guard
+        run: node scripts/test-hosted-capture-authority.mjs
 
       - name: 20. Recognized full-history secret scan
         uses: gitleaks/gitleaks-action@v2

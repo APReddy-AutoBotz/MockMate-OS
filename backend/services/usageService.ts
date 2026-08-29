@@ -1,6 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../supabaseAdmin';
 import { runtimeMode } from '../config/runtimeConfig';
+import {
+  AdaptiveAnswerSubmissionRequestSchema,
+  AnswerSubmissionRequestSchema,
+} from 'mockmate-shared';
 
 export const USAGE_LIMITS = {
   resume_review: 3,
@@ -13,6 +17,32 @@ export type UsageFeature = keyof typeof USAGE_LIMITS;
 
 const friendlyLimitMessage = "You have used today's free practice. Come back tomorrow or continue with saved work.";
 const memoryUsage = new Map<string, { used: number; limit: number }>();
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const RESERVATION_RENEW_MS = 20_000;
+const RESERVATION_WAIT_MS = 25_000;
+
+function reservationPollBaseMs(): number {
+  return runtimeMode() === 'test' ? 1 : 125;
+}
+
+function reservationPollMaxMs(): number {
+  return runtimeMode() === 'test' ? 2 : 750;
+}
+
+type AdaptiveReservationInput = {
+  userId: string;
+  sessionId: string;
+  clientSubmissionId: string;
+  questionId: string;
+  expectedSessionVersion: number;
+  answerKind: 'answered' | 'skipped';
+  answerText: string;
+};
+
+type AdaptiveReservationResult =
+  | { state: 'reserved' | 'pending'; requestHash: string; leaseExpiresAt?: string }
+  | { state: 'quota_exhausted'; requestHash: string; used?: number; reserved?: number; limit?: number }
+  | { state: 'replay'; requestHash: string; response: unknown };
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
@@ -22,14 +52,185 @@ function memoryKey(userId: string, feature: UsageFeature): string {
   return `${userId}:${todayISO()}:${feature}`;
 }
 
+function adaptiveAnswerText(answerKind: 'answered' | 'skipped', answerText: unknown): string {
+  return answerKind === 'skipped' ? '[Question Skipped]' : (typeof answerText === 'string' ? answerText : '');
+}
+
+async function legacyExpectedSessionVersion(userId: string, sessionId: string): Promise<number> {
+  if (!supabaseAdmin) throw new Error('USAGE_AUTHORITY_UNAVAILABLE');
+  const { data, error } = await supabaseAdmin
+    .from('interview_sessions')
+    .select('session_version')
+    .eq('id', sessionId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data || !Number.isInteger(data.session_version) || data.session_version < 1) {
+    const err: any = new Error('Session not found');
+    err.status = 404;
+    throw err;
+  }
+  return Number(data.session_version);
+}
+
+async function reservationInput(req: Request, userId: string): Promise<AdaptiveReservationInput | null> {
+  if (!supabaseAdmin || req.route?.path !== '/sessions/:sessionId/answers') return null;
+  const sessionId = String((req as any).params?.sessionId || '');
+  const body: any = (req as any).body || {};
+  if (!UUID_PATTERN.test(sessionId)) return null;
+
+  const isAdaptive = body.clientSubmissionId !== undefined || body.expectedSessionVersion !== undefined;
+  if (isAdaptive) {
+    const parsed = AdaptiveAnswerSubmissionRequestSchema.safeParse(body);
+    if (!parsed.success || !parsed.data.questionId.trim()) return null;
+    return {
+      userId,
+      sessionId,
+      clientSubmissionId: parsed.data.clientSubmissionId,
+      questionId: parsed.data.questionId,
+      expectedSessionVersion: parsed.data.expectedSessionVersion,
+      answerKind: parsed.data.answerKind,
+      answerText: adaptiveAnswerText(parsed.data.answerKind, parsed.data.answerText),
+    };
+  }
+
+  const parsed = AnswerSubmissionRequestSchema.safeParse(body);
+  if (!parsed.success || !parsed.data.questionId.trim()) return null;
+  if (!Number.isInteger(parsed.data.expectedQuestionIndex) || parsed.data.expectedQuestionIndex < 0) return null;
+  if (parsed.data.answerKind === 'answered' && (typeof parsed.data.answerText !== 'string' || !parsed.data.answerText.trim())) return null;
+  if (parsed.data.answerKind === 'skipped' && parsed.data.answerText != null && parsed.data.answerText.trim()) return null;
+  return {
+    userId,
+    sessionId,
+    clientSubmissionId: 'legacy',
+    questionId: parsed.data.questionId,
+    expectedSessionVersion: await legacyExpectedSessionVersion(userId, sessionId),
+    answerKind: parsed.data.answerKind,
+    answerText: adaptiveAnswerText(parsed.data.answerKind, parsed.data.answerText),
+  };
+}
+
+function reservationRpcArgs(input: AdaptiveReservationInput) {
+  return {
+    p_session_id: input.sessionId,
+    p_user_id: input.userId,
+    p_client_submission_id: input.clientSubmissionId,
+    p_question_id: input.questionId,
+    p_expected_session_version: input.expectedSessionVersion,
+    p_answer_kind: input.answerKind,
+    p_answer_text: input.answerText,
+    p_limit: USAGE_LIMITS.interview_question,
+  };
+}
+
+async function reserveAdaptiveProviderWork(input: AdaptiveReservationInput): Promise<AdaptiveReservationResult> {
+  if (!supabaseAdmin) throw new Error('USAGE_AUTHORITY_UNAVAILABLE');
+  const { data, error } = await supabaseAdmin.rpc('reserve_adaptive_turn_evaluation_tx', reservationRpcArgs(input));
+  if (error || !data) {
+    const message = error?.message || 'USAGE_AUTHORITY_UNAVAILABLE';
+    const err: any = new Error(message);
+    if (message.includes('Stale or mismatched') || message.includes('Idempotency conflict') || message.includes('already reserved') || message.includes('Session is not active')) {
+      err.status = 409;
+    } else if (message.includes('Session not found')) {
+      err.status = 404;
+    } else {
+      err.status = 503;
+    }
+    throw err;
+  }
+  return data as AdaptiveReservationResult;
+}
+
+async function releaseAdaptiveProviderWork(input: AdaptiveReservationInput, requestHash: string): Promise<void> {
+  if (!supabaseAdmin) return;
+  try {
+    await supabaseAdmin.rpc('release_adaptive_turn_evaluation_tx', {
+      p_session_id: input.sessionId,
+      p_user_id: input.userId,
+      p_client_submission_id: input.clientSubmissionId,
+      p_request_hash: requestHash,
+    });
+  } catch {
+    console.warn('[Usage] failed to release adaptive evaluation reservation');
+  }
+}
+
+function attachReservationLease(
+  res: Response,
+  input: AdaptiveReservationInput,
+  requestHash: string,
+): () => Promise<void> {
+  if (!supabaseAdmin) return async () => undefined;
+  let stopped = false;
+  let renewing = false;
+  let finishPromise: Promise<void> | null = null;
+
+  const renew = async () => {
+    if (stopped || renewing || !supabaseAdmin) return;
+    renewing = true;
+    try {
+      const { data, error } = await supabaseAdmin.rpc('renew_adaptive_turn_evaluation_tx', {
+        p_session_id: input.sessionId,
+        p_user_id: input.userId,
+        p_client_submission_id: input.clientSubmissionId,
+        p_request_hash: requestHash,
+      });
+      if (error || !data?.renewed) console.warn('[Usage] adaptive evaluation reservation lease renewal was not confirmed');
+    } catch {
+      console.warn('[Usage] adaptive evaluation reservation lease renewal failed');
+    } finally {
+      renewing = false;
+    }
+  };
+
+  // Keep ownership alive for the entire provider/response lifetime. If this
+  // process crashes or the request is abandoned, renewals stop naturally and
+  // the 90-second DB lease becomes the bounded recovery authority.
+  const renewTimer = setInterval(() => { void renew(); }, RESERVATION_RENEW_MS);
+  renewTimer.unref?.();
+
+  const finish = () => {
+    if (finishPromise) return finishPromise;
+    stopped = true;
+    clearInterval(renewTimer);
+    finishPromise = res.statusCode >= 400
+      ? releaseAdaptiveProviderWork(input, requestHash)
+      : Promise.resolve();
+    return finishPromise;
+  };
+  res.once('finish', () => { void finish(); });
+  res.once('close', () => {
+    // Do not release on an early client disconnect: provider work may still be
+    // running. The renewable lease prevents a retry from becoming a second
+    // provider owner; crash recovery remains bounded by the DB lease.
+    if (res.writableEnded) void finish();
+  });
+  return finish;
+}
+
+export async function completeReservedProviderWork(req: Request): Promise<void> {
+  const finish = (req as any).usage?.finishProviderWork;
+  if (typeof finish === 'function') await finish();
+}
+
+async function waitForAdaptiveProviderOwner(input: AdaptiveReservationInput, first: AdaptiveReservationResult): Promise<AdaptiveReservationResult> {
+  let result = first;
+  let delay = reservationPollBaseMs();
+  const deadline = Date.now() + RESERVATION_WAIT_MS;
+  while (result.state === 'pending' && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    result = await reserveAdaptiveProviderWork(input);
+    delay = Math.min(Math.ceil(delay * 1.6), reservationPollMaxMs());
+  }
+  return result;
+}
+
 export async function consumeUsage(userId: string, feature: UsageFeature): Promise<{ allowed: boolean; used: number; limit: number }> {
   const limit = USAGE_LIMITS[feature];
   const usageDate = todayISO();
 
   const mode = runtimeMode();
-  if (mode === 'test') {
-    return { allowed: true, used: 1, limit };
-  }
+  if (mode === 'test') return { allowed: true, used: 1, limit };
 
   if (!supabaseAdmin) {
     if (mode !== 'development') throw new Error('USAGE_AUTHORITY_UNAVAILABLE');
@@ -53,6 +254,46 @@ export function enforceUsageLimit(feature: UsageFeature) {
     try {
       const userId = (req as any).user?.uid;
       if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+      if (feature === 'interview_question' && supabaseAdmin && req.route?.path === '/sessions/:sessionId/answers') {
+        const input = await reservationInput(req, userId);
+        if (!input) {
+          return res.status(422).json({
+            error: 'Invalid answer submission payload',
+            code: 'invalid_answer_submission',
+          });
+        }
+
+        let reservation = await reserveAdaptiveProviderWork(input);
+        if (reservation.state === 'pending') reservation = await waitForAdaptiveProviderOwner(input, reservation);
+
+        if (reservation.state === 'replay') return res.json(reservation.response);
+        if (reservation.state === 'quota_exhausted') {
+          return res.status(429).json({
+            error: friendlyLimitMessage,
+            code: 'daily_limit_reached',
+            feature,
+            used: Number(reservation.used ?? 0),
+            limit: Number(reservation.limit ?? USAGE_LIMITS.interview_question),
+          });
+        }
+        if (reservation.state === 'pending') {
+          return res.status(409).json({
+            error: 'This answer is already being evaluated. Retry the same submission shortly.',
+            code: 'answer_evaluation_in_progress',
+          });
+        }
+
+        const finishProviderWork = attachReservationLease(res, input, reservation.requestHash);
+        (req as any).usage = {
+          feature,
+          authority: 'atomic_adaptive_turn',
+          reservationRequestHash: reservation.requestHash,
+          finishProviderWork,
+        };
+        return next();
+      }
+
       const result = await consumeUsage(userId, feature);
       if (!result.allowed) {
         return res.status(429).json({
@@ -66,7 +307,10 @@ export function enforceUsageLimit(feature: UsageFeature) {
       (req as any).usage = { feature, used: result.used, limit: result.limit };
       next();
     } catch (err: any) {
-      console.error('[Usage] limit check failed:', err);
+      console.error('[Usage] limit/provider reservation check failed:', err);
+      if (err.status === 409) return res.status(409).json({ error: err.message, code: 'answer_authority_conflict' });
+      if (err.status === 404) return res.status(404).json({ error: err.message });
+      if (err.status === 503) return res.status(503).json({ error: 'Answer evaluation authority unavailable' });
       res.status(500).json({ error: 'Could not check free practice usage' });
     }
   };

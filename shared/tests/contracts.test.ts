@@ -9,8 +9,10 @@ import {
   RawInterviewPlanSchema,
   InterviewSessionStartResponseSchema,
   AnswerSubmissionResponseSchema,
+  AdaptiveClientSubmissionIdSchema,
   ATSDiagnosticsResultSchema,
   ClearSpeakProfileSchema,
+  ClearSpeakGenerateRequestSchema,
   ClearSpeakSessionContentSchema,
   ClearSpeakSessionScoreSchema,
   TranscribeAudioResponseSchema,
@@ -19,6 +21,13 @@ import {
 } from '../src/index';
 
 describe('Shared Canonical Runtime Contracts', () => {
+  it('accepts only submission UUIDs the database preserves as idempotency keys', () => {
+    expect(AdaptiveClientSubmissionIdSchema.safeParse('018f9c2e-7b18-1abc-8def-0123456789ab').success).toBe(true);
+    expect(AdaptiveClientSubmissionIdSchema.safeParse('018f9c2e-7b18-5abc-bdef-0123456789ab').success).toBe(true);
+    expect(AdaptiveClientSubmissionIdSchema.safeParse('018f9c2e-7b18-7abc-8def-0123456789ab').success).toBe(false);
+    expect(AdaptiveClientSubmissionIdSchema.safeParse('00000000-0000-0000-0000-000000000000').success).toBe(false);
+  });
+
   it('validates explicit ApiErrorCode enums and rejects arbitrary strings', () => {
     expect(ApiErrorCodeSchema.safeParse('UNAUTHORIZED').success).toBe(true);
     expect(ApiErrorCodeSchema.safeParse('CONTRACT_RESPONSE_INVALID').success).toBe(true);
@@ -196,6 +205,27 @@ describe('Shared Canonical Runtime Contracts', () => {
       generationArtifactId: '11111111-1111-4111-8111-111111111111',
       generationArtifactHash: 'a'.repeat(64),
     }).success).toBe(true);
+    expect(ClearSpeakSessionContentSchema.safeParse({
+      ...content,
+      passageData: Array.from({ length: 51 }, () => ({
+        text: 'x'.repeat(240),
+        isStressed: false,
+        pauseType: 'none',
+      })),
+    }).success).toBe(false);
+    expect(ClearSpeakSessionContentSchema.safeParse({
+      ...content,
+      keyVocab: Array.from({ length: 33 }, (_, index) => `word-${index}`),
+    }).success).toBe(false);
+
+    expect(ClearSpeakGenerateRequestSchema.safeParse({
+      recentTopics: ['system_design'],
+      sessionAttemptLength: 5,
+    }).success).toBe(true);
+    expect(ClearSpeakGenerateRequestSchema.safeParse({
+      recentTopics: Array.from({ length: 21 }, (_, index) => `topic-${index}`),
+    }).success).toBe(false);
+    expect(ClearSpeakGenerateRequestSchema.safeParse({ attackerAuthority: true }).success).toBe(false);
 
     const score = {
       clarity: 80,
@@ -205,9 +235,24 @@ describe('Shared Canonical Runtime Contracts', () => {
       hardWordBonus: 5,
       feedbackTip: 'Good pacing',
       measuredWpm: 140,
-      retrySuccess: true
+      retrySuccess: true,
+      evidenceBasis: 'transcript_timing_heuristic',
+      pronunciationAssessed: false,
     };
     expect(ClearSpeakSessionScoreSchema.safeParse(score).success).toBe(true);
+    expect(ClearSpeakSessionScoreSchema.safeParse({
+      ...score,
+      evidenceBasis: undefined,
+    }).success).toBe(false);
+    for (const invalidScore of [
+      { ...score, clarity: 101 },
+      { ...score, pacing: Number.NaN },
+      { ...score, hardWordBonus: 6 },
+      { ...score, measuredWpm: -1 },
+      { ...score, feedbackTip: 'x'.repeat(1_001) },
+    ]) {
+      expect(ClearSpeakSessionScoreSchema.safeParse(invalidScore).success).toBe(false);
+    }
   });
 
   it('validates TranscribeAudioResponseSchema discriminated union for valid and invalid combinations', () => {

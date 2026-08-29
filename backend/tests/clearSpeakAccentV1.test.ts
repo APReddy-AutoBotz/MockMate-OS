@@ -8,7 +8,7 @@ const prompt = PracticePromptV1Schema.parse({
   mode: 'sentence_reading', profileId: 'en-US-general-v1', profileVersion: 1,
   referenceSetVersion: 'synthetic-reference.v1', displayText: 'Clear speech supports understanding.',
   expectedText: 'Clear speech supports understanding.', maxDurationMs: 30000, contentHash: 'a'.repeat(64),
-  referenceLabel: 'Synthetic CI fixture — not human- or provider-validated pronunciation.',
+  referenceLabel: 'Practice example — not a pronunciation benchmark.',
 });
 
 describe('ClearSpeak accent V1 truth and authority', () => {
@@ -38,7 +38,7 @@ describe('ClearSpeak accent V1 truth and authority', () => {
     for (const mode of ['word', 'phrase', 'sentence_reading', 'free_response'] as const) {
       const generated = PracticePromptV1Schema.parse(promptFor(profile, mode));
       expect(validatePromptSelector({ ...generated, promptContentHash: generated.contentHash, scoringPolicyVersion: profile.scoringPolicyVersion })).toEqual(generated);
-      expect(generated.referenceLabel).toMatch(/Synthetic CI fixture/);
+      expect(generated.referenceLabel).toMatch(/Practice example/);
     }
     expect(accentCatalog().retention).toBe('derived-results-only');
   });
@@ -70,9 +70,16 @@ describe('ClearSpeak accent V1 truth and authority', () => {
     expect(AccentScoreV1Schema.parse(score)).toEqual(score);
   });
 
-  it('projects each history row with its actual provenance and evidence status', () => {
+  it('replays a non-word history row with its persisted prompt-derived practice mode', () => {
     const result = unsupportedUserAudioResult('10000000-0000-4000-a000-000000000099', prompt);
-    expect(projectAccentHistoryAttempt({ fixture: false, evidence_provenance: 'user_recording_unscored', result })).toMatchObject({
+    const phrasePrompt = promptFor(ACCENT_PROFILES[0], 'phrase');
+    expect(projectAccentHistoryAttempt({
+      prompt_id: phrasePrompt.promptId,
+      fixture: false,
+      evidence_provenance: 'user_recording_unscored',
+      result,
+    })).toMatchObject({
+      practiceMode: 'phrase',
       fixture: false,
       evidenceProvenance: 'user_recording_unscored',
       evidenceStatus: {

@@ -10,7 +10,7 @@ interface HubProps {
     onNavigate: (module: 'RESUME' | 'SPEAK' | 'INTERVIEW') => void;
     onViewHistory: () => void;
     onOpenCareerContext: () => void;
-    onDeleteData: () => Promise<void>;
+    onDeleteData: () => Promise<{ cleanupWarning?: string }>;
 }
 
 const ToolCard: React.FC<{
@@ -49,10 +49,11 @@ const ToolCard: React.FC<{
     </motion.button>
 );
 
-export const Hub: React.FC<HubProps> = ({ userProfile, onNavigate, onViewHistory, onOpenCareerContext, onDeleteData }) => {
+export const Hub: React.FC<HubProps> = ({ userProfile, betaEnabled, onNavigate, onViewHistory, onOpenCareerContext, onDeleteData }) => {
     const [confirmDelete, setConfirmDelete] = React.useState(false);
     const [isDeleting, setIsDeleting] = React.useState(false);
     const [deleteError, setDeleteError] = React.useState('');
+    const [deleteSuccess, setDeleteSuccess] = React.useState('');
 
     const handleDelete = async () => {
         if (!confirmDelete) {
@@ -62,8 +63,13 @@ export const Hub: React.FC<HubProps> = ({ userProfile, onNavigate, onViewHistory
 
         setIsDeleting(true);
         setDeleteError('');
+        setDeleteSuccess('');
         try {
-            await onDeleteData();
+            const result = await onDeleteData();
+            setDeleteSuccess('Your MockMate app data was deleted.');
+            setDeleteError(result.cleanupWarning || '');
+            setConfirmDelete(false);
+            setIsDeleting(false);
         } catch (error: any) {
             setDeleteError(error?.message || 'Could not delete your data.');
             setIsDeleting(false);
@@ -92,7 +98,7 @@ export const Hub: React.FC<HubProps> = ({ userProfile, onNavigate, onViewHistory
                 </motion.div>
             </header>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6 lg:grid-cols-3 lg:gap-8">
+            <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6 lg:gap-8 ${betaEnabled ? 'lg:grid-cols-3' : 'lg:grid-cols-2'}`}>
                 <ToolCard
                     icon={<FileText className="h-6 w-6" />}
                     title="Resume builder"
@@ -102,14 +108,16 @@ export const Hub: React.FC<HubProps> = ({ userProfile, onNavigate, onViewHistory
                     onClick={() => onNavigate('RESUME')}
                 />
 
-                <ToolCard
-                    icon={<Mic className="h-6 w-6" />}
-                    title="Speaking coach"
-                    description="Practice spoken English for interviews and get clear, kind feedback."
-                    action="Start speaking"
-                    delay={0.2}
-                    onClick={() => onNavigate('SPEAK')}
-                />
+                {betaEnabled && (
+                    <ToolCard
+                        icon={<Mic className="h-6 w-6" />}
+                        title="Speaking coach"
+                        description="Practice spoken English for interviews and get transcript- and timing-based feedback."
+                        action="Start speaking"
+                        delay={0.2}
+                        onClick={() => onNavigate('SPEAK')}
+                    />
+                )}
 
                 <ToolCard
                     icon={<Users className="h-6 w-6" />}
@@ -135,6 +143,9 @@ export const Hub: React.FC<HubProps> = ({ userProfile, onNavigate, onViewHistory
                         </div>
                         {deleteError && (
                             <p className="mt-2 text-xs font-medium text-brand-primary">{deleteError}</p>
+                        )}
+                        {deleteSuccess && (
+                            <p role="status" className="mt-2 text-xs font-medium text-emerald-300">{deleteSuccess}</p>
                         )}
                     </div>
 

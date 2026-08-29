@@ -2,7 +2,7 @@ import { InterviewSetupDraftSchema } from 'mockmate-shared';
 import { createUngroundedResumeInterviewDraft } from '../../services/interviewSetupService';
 
 describe('Resume to Interview ungrounded setup', () => {
-  it.each(['no eligible Resume context', 'Continue Without Grounding'])(
+  it.each(['no eligible Resume context', 'Continue Without Saved Context'])(
     'creates the canonical blank draft for %s without false grounding authority',
     () => {
       const draft = createUngroundedResumeInterviewDraft(

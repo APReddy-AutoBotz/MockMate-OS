@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { ClearSpeakLevel, ClearSpeakProfile, ClearSpeakRole, MainStruggle, PracticeDuration } from './types';
 import { saveProfile } from '../../services/clearSpeakService';
+import { readLocalUserProfile } from '../../services/sessionIsolation';
 
 interface ClearSpeakOnboardingProps {
   onComplete: (profile: ClearSpeakProfile) => void;
@@ -35,8 +36,7 @@ const ClearSpeakOnboarding: React.FC<ClearSpeakOnboardingProps> = ({ onComplete 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const storedProfile = localStorage.getItem('mockmate_user_profile');
-  const userProfile = storedProfile ? JSON.parse(storedProfile) : null;
+  const userProfile = readLocalUserProfile();
 
   const [form, setForm] = useState<{
     role: ClearSpeakRole;
@@ -101,7 +101,9 @@ const ClearSpeakOnboarding: React.FC<ClearSpeakOnboardingProps> = ({ onComplete 
                 <span className="px-4 py-2 bg-brand-primary text-brand-dark text-[10px] font-bold uppercase tracking-[0.12em] rounded-xl">Use this</span>
               </button>
             )}
+            <label htmlFor="cs-role-input" className="sr-only">Practice role or scenario</label>
             <input
+              id="cs-role-input"
               type="text"
               placeholder="e.g. Software Engineer, Marketing Lead"
               value={form.role}
@@ -138,6 +140,7 @@ const ClearSpeakOnboarding: React.FC<ClearSpeakOnboardingProps> = ({ onComplete 
         return (
           <fieldset className="flex flex-col gap-5">
             <StepHeader title="What do you want to say more clearly?" body="Write one real situation you want to practice." />
+            <label htmlFor="cs-goal-input" className="sr-only">Speaking goal</label>
             <input
               id="cs-goal-input"
               type="text"
@@ -160,6 +163,7 @@ const ClearSpeakOnboarding: React.FC<ClearSpeakOnboardingProps> = ({ onComplete 
                 </ChoiceButton>
               ))}
             </div>
+            <label htmlFor="cs-audience-input" className="sr-only">Audience or speaking situation</label>
             <input
               id="cs-audience-input"
               type="text"
@@ -190,7 +194,8 @@ const ClearSpeakOnboarding: React.FC<ClearSpeakOnboardingProps> = ({ onComplete 
       case 5:
         return (
           <fieldset className="flex flex-col gap-6">
-            <StepHeader title="Which support language helps you most?" body="Your speaking practice stays in English, but tips can be easier in a familiar language." />
+            <StepHeader title="Which support language helps you most?" body="This preference is saved for future support options. Current practice and tips are in English." />
+            <label htmlFor="cs-comfort-lang" className="sr-only">Support language</label>
             <select id="cs-comfort-lang" value={form.comfortLanguage} onChange={e => setForm(f => ({ ...f, comfortLanguage: e.target.value }))} className={`${inputCls} cursor-pointer`}>
               <option value="en" className="bg-brand-dark text-white">English</option>
               <option value="hi" className="bg-brand-dark text-white">Hindi</option>

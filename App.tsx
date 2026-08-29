@@ -1,6 +1,6 @@
 import { UserProfile } from "./types/ui";
 
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useCallback, useState, useEffect, useRef, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { BookOpen, FileText, Home, Mic, Users } from 'lucide-react';
 
@@ -14,7 +14,7 @@ import AppContainer from './components/AppContainer';
 import SplashScreen from './components/SplashScreen';
 import SimplifiedReport from './components/SimplifiedReport';
 import InterviewOrbit from './components/InterviewOrbit';
-import { FinalReport, InterviewSessionContext as SessionContext, SessionControls, InterviewSetupDraft, ResumeData, createBlankInterviewSetupDraft, createResumeGroundedInterviewDraft, createClearSpeakGroundedInterviewDraft } from "mockmate-shared";
+import { FinalReport, InterviewSessionContext as SessionContext, InterviewSessionResume, SessionControls, InterviewSetupDraft, ResumeData, createBlankInterviewSetupDraft, createResumeGroundedInterviewDraft, createClearSpeakGroundedInterviewDraft } from "mockmate-shared";
 import { createUngroundedResumeInterviewDraft } from './services/interviewSetupService';
 import { Logo } from './components/icons/Logo';
 import LandingPage from './components/LandingPage';
@@ -30,11 +30,14 @@ import { fetchCareerContext, createGroundingSnapshot, createModuleBridge } from 
 import { CareerContextItem, GroundingPurpose, CareerContextModule, CareerContextSnapshot, ModuleBridgeSession, GroundingConflict } from 'mockmate-shared';
 import SystemStatus from './components/SystemStatus';
 import type { ClearSpeakBridgePayload } from './components/clearspeak/types';
-import { checkBetaAccess } from './services/clearSpeakService';
+import { checkBetaAccess, getCapabilities } from './services/clearSpeakService';
 import { saveSessionToHistory } from './services/storageService';
 import { audioService } from './services/audioService';
 import { auth, signOut } from './services/supabaseClient';
 import { clearLocalPracticeData, deleteMyData } from './services/accountService';
+import { bindLocalPracticeDataOwner, deleteAppDataThenAttemptSignOut, readLocalUserProfile, signOutPreservingLocalPracticeData } from './services/sessionIsolation';
+import { clearActiveInterviewReference, readActiveInterviewReference, saveActiveInterviewReference } from './services/activeInterviewRecovery';
+import { getInterviewSession } from './services/mockGeminiService';
 
 // Lazy load heavy components
 const LazyGrowthDashboard = React.lazy(() => import('./components/GrowthDashboard'));
@@ -57,9 +60,14 @@ const App: React.FC = () => {
     const [appState, setAppState] = useState<AppState>('SPLASH');
     const [showSplash, setShowSplash] = useState(true);
     const [sessionContext, setSessionContext] = useState<SessionContext | null>(null);
+    const [restoredInterview, setRestoredInterview] = useState<InterviewSessionResume | null>(null);
     const [finalReport, setFinalReport] = useState<FinalReport | null>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+    const [setupDraft, setSetupDraft] = useState<InterviewSetupDraft | null>(null);
     const [betaEnabled, setBetaEnabled] = useState(false);
+    const [clearSpeakStandardSessionAvailable, setClearSpeakStandardSessionAvailable] = useState(false);
+    const [clearSpeakCommitInFlight, setClearSpeakCommitInFlight] = useState(false);
+    const [authActionError, setAuthActionError] = useState('');
     const [pendingGroundingLaunch, setPendingGroundingLaunch] = useState<{
         purpose: GroundingPurpose;
         sourceModules: CareerContextModule[];
@@ -68,37 +76,164 @@ const App: React.FC = () => {
         conflicts: GroundingConflict[];
         snapshotClientRequestId: string;
         bridgeClientRequestId: string;
+        ownerId: string;
+        authEpoch: number;
+        launchToken: number;
+        isSubmitting: boolean;
         onSuccess: (snapshot: CareerContextSnapshot, bridge?: ModuleBridgeSession) => void;
         onSkip: () => void;
     } | null>(null);
     const [clearSpeakGrounding, setClearSpeakGrounding] = useState<{ snapshot: CareerContextSnapshot; bridge: ModuleBridgeSession } | null>(null);
+    const authenticatedOwnerRef = useRef<string | null>(null);
+    const authEpochRef = useRef(0);
+    const groundingLaunchTokenRef = useRef(0);
+    const groundingSubmissionRef = useRef<number | null>(null);
+
+    const clearSensitiveReactState = useCallback(() => {
+        groundingLaunchTokenRef.current += 1;
+        groundingSubmissionRef.current = null;
+        setUserProfile(null);
+        setSessionContext(null);
+        setRestoredInterview(null);
+        setFinalReport(null);
+        setSetupDraft(null);
+        setPendingGroundingLaunch(null);
+        setClearSpeakGrounding(null);
+        setClearSpeakCommitInFlight(false);
+        setBetaEnabled(false);
+        setClearSpeakStandardSessionAvailable(false);
+    }, []);
+
+    const authContextIsCurrent = useCallback((ownerId: string, epoch: number) => (
+        authenticatedOwnerRef.current === ownerId && authEpochRef.current === epoch
+    ), []);
 
     useEffect(() => {
         // Use the auth listener to determine starting state
-        const unsubscribe = auth.onAuthStateChanged((user: any) => {
+        let active = true;
+        const unsubscribe = auth.onAuthStateChanged(async (user: any) => {
+            const epoch = ++authEpochRef.current;
             if (user) {
+                const userId = String(user.id || user.uid || '');
+                // Legacy web storage was not user-scoped. Fail closed on the
+                // first upgraded login and whenever the authenticated owner
+                // changes, then bind all new local data to this identity.
+                if (!userId) {
+                    authenticatedOwnerRef.current = null;
+                    clearSensitiveReactState();
+                    const localDataCleared = clearLocalPracticeData();
+                    setAuthActionError('Your signed-in identity could not be verified. Please sign in again.');
+                    if (!localDataCleared) {
+                        setAuthActionError('Your signed-in identity could not be verified, and browser storage is unavailable. Please sign in again.');
+                    }
+                    setAppState('LANDING');
+                    return;
+                }
+                const previousOwner = authenticatedOwnerRef.current;
+                const ownerBinding = bindLocalPracticeDataOwner(userId);
+                if (previousOwner !== userId || ownerBinding !== 'preserved') clearSensitiveReactState();
+                authenticatedOwnerRef.current = userId;
+                if (ownerBinding === 'storage_unavailable') {
+                    setAuthActionError('Browser storage is unavailable. You can continue, but local profile, recovery, and journal updates will not be saved.');
+                } else {
+                    setAuthActionError('');
+                }
+
+                const enabled = await checkBetaAccess();
+                let standardSessionAvailable = false;
+                if (enabled) {
+                    try {
+                        standardSessionAvailable = (await getCapabilities()).standardSessionScoringAvailable;
+                    } catch {
+                        // A grounded Resume -> ClearSpeak handoff must fail closed
+                        // unless the server explicitly advertises scored delivery.
+                    }
+                }
+                if (!active || !authContextIsCurrent(userId, epoch)) return;
+                setBetaEnabled(enabled);
+                setClearSpeakStandardSessionAvailable(standardSessionAvailable);
                 const requestedAction = new URLSearchParams(window.location.search).get('action');
-                const storedProfile = localStorage.getItem('mockmate_user_profile');
+                const storedProfile = ownerBinding === 'storage_unavailable' ? null : readLocalUserProfile();
                 if (storedProfile) {
-                    setUserProfile(JSON.parse(storedProfile));
+                    setUserProfile(storedProfile);
+                    if (!requestedAction) {
+                        const activeReference = readActiveInterviewReference();
+                        if (activeReference) {
+                            try {
+                                const recovered = await getInterviewSession(activeReference.sessionId);
+                                if (!active || !authContextIsCurrent(userId, epoch)) return;
+                                setSessionContext(recovered.context);
+                                if (recovered.status === 'completed' && recovered.report) {
+                                    clearActiveInterviewReference();
+                                    setRestoredInterview(null);
+                                    if (!saveSessionToHistory(
+                                        recovered.report,
+                                        recovered.context.candidateRole,
+                                        recovered.context.sessionType,
+                                        recovered.id,
+                                    )) {
+                                        setAuthActionError('Your completed interview was restored, but browser storage could not update the local journal.');
+                                    }
+                                    setFinalReport(recovered.report);
+                                    setAppState('REPORT_VIEW');
+                                    return;
+                                }
+                                if (recovered.status === 'active' && !recovered.pendingQuestion) {
+                                    clearActiveInterviewReference();
+                                    setAuthActionError('The saved interview no longer has a question to resume. Start a new interview when you are ready.');
+                                } else if (recovered.status === 'active' || recovered.status === 'awaiting_report') {
+                                    setRestoredInterview(recovered);
+                                    setAppState('SESSION_ACTIVE');
+                                    return;
+                                } else if (recovered.status === 'completed') {
+                                    clearActiveInterviewReference();
+                                    setAuthActionError('The saved interview is complete, but its report could not be restored. Start a new interview or check your practice journal.');
+                                }
+                                clearActiveInterviewReference();
+                            } catch (error: any) {
+                                if (error?.status === 404 || error?.status === 422) clearActiveInterviewReference();
+                                else setAuthActionError('Your active interview could not be restored yet. Check your connection and reload to retry.');
+                            }
+                        }
+                    }
                     if (requestedAction === 'interview') setAppState('ROLE_SELECTION');
-                    else if (requestedAction === 'speaking') setAppState('CLEARSPEAK');
+                    else if (requestedAction === 'speaking' && enabled) setAppState('CLEARSPEAK');
                     else if (requestedAction === 'resume') setAppState('RESUME_BUILDER');
                     else setAppState('HUB');
                 } else {
                     // Logged in but no profile -> Go to onboarding
-                    setUserProfile({ name: user.displayName || user.email.split('@')[0], experienceLevel: 'mid', primaryGoal: 'skill_building' });
+                    setUserProfile({
+                      name: user.displayName || user.user_metadata?.full_name || user.email?.split('@')[0] || 'Candidate',
+                      experienceLevel: 'mid',
+                      primaryGoal: 'skill_building',
+                    });
                     setAppState('ONBOARDING');
                 }
-                // Check ClearSpeak beta access. Fire-and-forget; UI stays hidden until confirmed.
-                checkBetaAccess().then(setBetaEnabled).catch(() => setBetaEnabled(false));
             } else {
+                if (!active || epoch !== authEpochRef.current) return;
+                authenticatedOwnerRef.current = null;
+                clearSensitiveReactState();
                 setAppState('LANDING');
-                setBetaEnabled(false);
             }
         });
-        return () => unsubscribe();
-    }, []);
+        return () => { active = false; unsubscribe(); };
+    }, [authContextIsCurrent, clearSensitiveReactState]);
+
+    useEffect(() => {
+        if (!clearSpeakCommitInFlight) return;
+        const protectScoreCommit = (event: BeforeUnloadEvent) => {
+            event.preventDefault();
+            event.returnValue = '';
+        };
+        window.addEventListener('beforeunload', protectScoreCommit);
+        return () => window.removeEventListener('beforeunload', protectScoreCommit);
+    }, [clearSpeakCommitInFlight]);
+
+    const canLeaveClearSpeak = useCallback(() => {
+        if (appState !== 'CLEARSPEAK' || !clearSpeakCommitInFlight) return true;
+        setAuthActionError('Your recording is still being scored. Wait for the result before leaving speaking practice.');
+        return false;
+    }, [appState, clearSpeakCommitInFlight]);
 
     const handleSplashComplete = () => {
         setShowSplash(false);
@@ -122,45 +257,65 @@ const App: React.FC = () => {
 
     const handleOnboardingComplete = (profile: UserProfile, targetRole: string) => {
         audioService.playConfirm();
+        const enrichedProfile: UserProfile = {
+            ...profile,
+            targetRole: targetRole || undefined
+        };
         try {
-            const enrichedProfile: UserProfile = {
-                ...profile,
-                targetRole: targetRole || undefined
-            };
             localStorage.setItem('mockmate_user_profile', JSON.stringify(enrichedProfile));
-            setUserProfile(enrichedProfile);
-            setAppState('HUB');
         } catch (error) {
             console.error("Failed to save user profile", error);
+            setAuthActionError('Your profile is available for this session, but browser storage could not save it locally.');
         }
+        setUserProfile(enrichedProfile);
+        setAppState('HUB');
     };
 
     const handleLogout = async () => {
+        if (!canLeaveClearSpeak()) return;
+        setAuthActionError('');
         try {
-            await signOut(auth);
-            localStorage.removeItem('mockmate_user_profile');
+            await signOutPreservingLocalPracticeData(() => signOut(auth));
         } catch (error) {
             console.error("Failed to logout", error);
+            setAuthActionError('Sign out did not finish. You are still signed in; check your connection and retry.');
+            return;
         }
-        setUserProfile(null);
-        setAppState('LANDING');
-        setSessionContext(null);
-        setFinalReport(null);
-    };
-
-    const handleDeleteData = async () => {
-        await deleteMyData();
-        await signOut(auth);
-        setUserProfile(null);
-        setSessionContext(null);
-        setFinalReport(null);
+        authEpochRef.current += 1;
+        authenticatedOwnerRef.current = null;
+        clearSensitiveReactState();
         setAppState('LANDING');
     };
 
-    const [setupDraft, setSetupDraft] = useState<InterviewSetupDraft | null>(null);
+    const handleDeleteData = async (): Promise<{ cleanupWarning?: string }> => {
+        const outcome = await deleteAppDataThenAttemptSignOut(
+            () => deleteMyData(),
+            () => signOut(auth),
+        );
+        authEpochRef.current += 1;
+        clearSensitiveReactState();
+        if (outcome.signedOut) {
+            authenticatedOwnerRef.current = null;
+            setAppState('LANDING');
+            if (!outcome.localDataCleared) {
+                const cleanupWarning = 'Your app data was deleted and you are signed out, but browser storage could not be cleared. Clear this site’s storage before another person signs in.';
+                setAuthActionError(cleanupWarning);
+                return { cleanupWarning };
+            }
+            return {};
+        }
+        const cleanupWarning = outcome.localDataCleared
+            ? 'Your MockMate app data was deleted, but sign out did not finish. You are still signed in; retry Sign out.'
+            : 'Your MockMate app data was deleted, but sign out and browser cleanup did not finish. You are still signed in; retry Sign out, then clear this site’s storage.';
+        setAuthActionError(cleanupWarning);
+        setAppState('HUB');
+        return { cleanupWarning };
+    };
 
     const handleRoleSubmit = (intent: string, sessionType: 'structured' | 'conversational') => {
         audioService.playConfirm();
+        clearActiveInterviewReference();
+        setRestoredInterview(null);
         const draft = createBlankInterviewSetupDraft(intent, intent, sessionType);
         setSetupDraft(draft);
         setAppState('CONTEXT_UPLOAD');
@@ -168,20 +323,26 @@ const App: React.FC = () => {
 
     const handleContextReady = (context: SessionContext) => {
         audioService.playStart();
+        setRestoredInterview(null);
         setSessionContext(context);
         setAppState('SESSION_ACTIVE');
     }
 
-    const handleReportGenerated = (report: FinalReport) => {
+    const handleReportGenerated = (report: FinalReport, serverSessionId?: string) => {
         audioService.playNotify();
+        clearActiveInterviewReference();
+        setRestoredInterview(null);
         if (sessionContext) {
-            saveSessionToHistory(report, sessionContext.candidateRole, sessionContext.sessionType);
+            if (!saveSessionToHistory(report, sessionContext.candidateRole, sessionContext.sessionType, serverSessionId)) {
+                setAuthActionError('Your report is ready, but browser storage could not update the local journal.');
+            }
         }
         setFinalReport(report);
         setAppState('REPORT_VIEW');
     };
 
     const handleRestart = () => {
+        if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
         setAppState('HUB');
         setSetupDraft(null);
@@ -211,6 +372,7 @@ const App: React.FC = () => {
     };
 
     const toggleHistory = () => {
+        if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
         if (appState === 'HISTORY_VIEW') {
             setAppState('HUB');
@@ -220,6 +382,8 @@ const App: React.FC = () => {
     }
 
     const toggleClearSpeak = () => {
+        if (!betaEnabled) return;
+        if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
         if (appState === 'CLEARSPEAK') {
             setAppState('HUB');
@@ -229,6 +393,7 @@ const App: React.FC = () => {
     };
 
     const toggleResumeBuilder = () => {
+        if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
         if (appState === 'RESUME_BUILDER') {
             setAppState('HUB');
@@ -240,7 +405,7 @@ const App: React.FC = () => {
     const handleHubNavigate = (module: 'RESUME' | 'SPEAK' | 'INTERVIEW') => {
         audioService.playConfirm();
         if (module === 'RESUME') setAppState('RESUME_BUILDER');
-        if (module === 'SPEAK') setAppState('CLEARSPEAK');
+        if (module === 'SPEAK' && betaEnabled) setAppState('CLEARSPEAK');
         if (module === 'INTERVIEW') setAppState('ROLE_SELECTION');
     };
 
@@ -251,8 +416,13 @@ const App: React.FC = () => {
         onSuccess: (snapshot: CareerContextSnapshot, bridge?: ModuleBridgeSession) => void,
         onSkip: () => void
     ) => {
+        const ownerId = authenticatedOwnerRef.current;
+        const authEpoch = authEpochRef.current;
+        if (!ownerId) return;
+        const launchToken = ++groundingLaunchTokenRef.current;
         try {
             const contextData = await fetchCareerContext();
+            if (!authContextIsCurrent(ownerId, authEpoch) || groundingLaunchTokenRef.current !== launchToken) return;
             const activeItems = (contextData.activeItems || []).filter(i => i.status === 'active' && i.sensitivity !== 'personal_contact' && sourceModules.includes(i.source.module));
             if (activeItems.length === 0) {
                 onSkip();
@@ -269,6 +439,10 @@ const App: React.FC = () => {
                 // lost HTTP response recovers the canonical snapshot/bridge.
                 snapshotClientRequestId: `req_snap_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
                 bridgeClientRequestId: `req_br_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+                ownerId,
+                authEpoch,
+                launchToken,
+                isSubmitting: false,
                 onSuccess,
                 onSkip,
             });
@@ -277,9 +451,20 @@ const App: React.FC = () => {
         }
     };
 
-    const handleModalConfirm = async (selectedItemIds: string[], scope: 'one_time' | 'future_sessions', conflictSelections: Record<string, string>) => {
-        if (!pendingGroundingLaunch) return;
-        const { purpose, sourceModules, targetModule, items, snapshotClientRequestId, bridgeClientRequestId, onSuccess } = pendingGroundingLaunch;
+    const handleModalConfirm = async (selectedItemIds: string[], scope: 'one_time', conflictSelections: Record<string, string>) => {
+        const launch = pendingGroundingLaunch;
+        if (
+            !launch
+            || launch.isSubmitting
+            || groundingSubmissionRef.current !== null
+            || !authContextIsCurrent(launch.ownerId, launch.authEpoch)
+            || groundingLaunchTokenRef.current !== launch.launchToken
+        ) return;
+        groundingSubmissionRef.current = launch.launchToken;
+        setPendingGroundingLaunch(current => current?.launchToken === launch.launchToken
+            ? { ...current, isSubmitting: true }
+            : current);
+        const { purpose, sourceModules, targetModule, items, snapshotClientRequestId, bridgeClientRequestId, onSuccess } = launch;
         const excludedItemIds = items.filter(i => !selectedItemIds.includes(i.id)).map(i => i.id);
 
         try {
@@ -298,6 +483,11 @@ const App: React.FC = () => {
                 },
                 clientRequestId: snapshotClientRequestId,
             });
+            if (
+                !authContextIsCurrent(launch.ownerId, launch.authEpoch)
+                || groundingLaunchTokenRef.current !== launch.launchToken
+                || groundingSubmissionRef.current !== launch.launchToken
+            ) return;
 
             const bridgeRes = await createModuleBridge({
                 sourceModule: sourceModules[0],
@@ -306,14 +496,52 @@ const App: React.FC = () => {
                 snapshotId: snapshotRes.snapshot.id,
                 clientRequestId: bridgeClientRequestId,
             });
+            if (
+                !authContextIsCurrent(launch.ownerId, launch.authEpoch)
+                || groundingLaunchTokenRef.current !== launch.launchToken
+                || groundingSubmissionRef.current !== launch.launchToken
+            ) return;
 
+            groundingLaunchTokenRef.current += 1;
+            groundingSubmissionRef.current = null;
             setPendingGroundingLaunch(null);
             onSuccess(snapshotRes.snapshot, bridgeRes.bridge);
         } catch (err: any) {
             console.error('[Grounding Launch] Failed to create grounding snapshot/bridge:', err);
             // An explicit grounded launch is fail-closed. Keep the consent modal
             // open so retry/cancel remains the user's decision; never downgrade it.
+            if (
+                authContextIsCurrent(launch.ownerId, launch.authEpoch)
+                && groundingLaunchTokenRef.current === launch.launchToken
+            ) {
+                setAuthActionError('Grounded practice could not be prepared. Retry or close the context selection.');
+            }
+        } finally {
+            if (groundingSubmissionRef.current === launch.launchToken) groundingSubmissionRef.current = null;
+            setPendingGroundingLaunch(current => current?.launchToken === launch.launchToken
+                ? { ...current, isSubmitting: false }
+                : current);
         }
+    };
+
+    const closeGroundingLaunch = () => {
+        const launch = pendingGroundingLaunch;
+        if (!launch || launch.isSubmitting || groundingSubmissionRef.current === launch.launchToken) return;
+        groundingLaunchTokenRef.current += 1;
+        setPendingGroundingLaunch(null);
+    };
+
+    const skipGroundingLaunch = () => {
+        const launch = pendingGroundingLaunch;
+        if (
+            !launch
+            || launch.isSubmitting
+            || groundingSubmissionRef.current === launch.launchToken
+            || !authContextIsCurrent(launch.ownerId, launch.authEpoch)
+        ) return;
+        groundingLaunchTokenRef.current += 1;
+        setPendingGroundingLaunch(null);
+        launch.onSkip();
     };
 
     const handleInterviewBridge = (payload: ClearSpeakBridgePayload) => {
@@ -343,7 +571,11 @@ const App: React.FC = () => {
         );
     };
 
-    const handleResumeSpeakBridge = (summary: string) => {
+    const handleResumeSpeakBridge = (_summary: string) => {
+        if (!betaEnabled || !clearSpeakStandardSessionAvailable) {
+            setAuthActionError('Grounded speaking practice is not available in this preview. Your resume was not shared and no practice bridge was created.');
+            return;
+        }
         triggerGroundedLaunch(
             'resume_to_clearspeak',
             ['resume'],
@@ -407,6 +639,7 @@ const App: React.FC = () => {
     };
 
     const handleMobileTabClick = (tabId: MobileTabId) => {
+        if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
         if (tabId === 'home') {
             handleRestart();
@@ -417,7 +650,7 @@ const App: React.FC = () => {
             return;
         }
         if (tabId === 'speak') {
-            setAppState('CLEARSPEAK');
+            if (betaEnabled) setAppState('CLEARSPEAK');
             return;
         }
         if (tabId === 'interview') {
@@ -491,7 +724,7 @@ const App: React.FC = () => {
                                 <RoleCapture
                                     userProfile={userProfile}
                                     onRoleSubmit={handleRoleSubmit}
-                                    onBack={handleLogout}
+                                    onBack={handleRestart}
                                     onViewHistory={toggleHistory}
                                 />
                             </ErrorBoundary>
@@ -543,6 +776,13 @@ const App: React.FC = () => {
                             <ErrorBoundary>
                                 <LazyMockSession
                                     sessionContext={sessionContext!}
+                                    restoredSession={restoredInterview}
+                                    onSessionStarted={(sessionId) => {
+                                        if (!saveActiveInterviewReference(sessionId)) {
+                                            setAuthActionError('This interview is active, but browser storage could not save a recovery reference. Keep this tab open.');
+                                        }
+                                        setRestoredInterview(null);
+                                    }}
                                     onReportGenerated={handleReportGenerated}
                                     onCancel={handleCancelSession}
                                 />
@@ -573,11 +813,21 @@ const App: React.FC = () => {
                     </motion.div>
                 );
             case 'CLEARSPEAK':
+                if (!betaEnabled) {
+                    return (
+                        <div className="mx-auto flex min-h-[45dvh] max-w-lg flex-col items-center justify-center gap-5 text-center">
+                            <h1 className="text-3xl font-semibold text-white">Speaking coach is not enabled</h1>
+                            <p className="text-brand-tint">This controlled beta is available only to approved tester accounts.</p>
+                            <button type="button" onClick={() => setAppState('HUB')} className="rounded-xl bg-brand-primary px-6 py-3 font-bold text-brand-dark">Back to practice home</button>
+                        </div>
+                    );
+                }
                 return (
                     <motion.div key="clearspeak" {...pageAnimation} className="w-full max-w-2xl px-0 sm:px-4">
                         <ErrorBoundary>
                             <ClearSpeakDashboard
                                 onInterviewBridge={handleInterviewBridge}
+                                onScoreCommitStateChange={setClearSpeakCommitInFlight}
                                 grounding={clearSpeakGrounding || undefined}
                                 onGroundingConsumed={(bridgeId) => {
                                     // A Resume -> ClearSpeak authorization is single use. Clear it
@@ -597,6 +847,7 @@ const App: React.FC = () => {
                             <ResumeBuilderFlow
                                 onSpeakBridge={handleResumeSpeakBridge}
                                 onInterviewBridge={handleResumeInterviewBridge}
+                                speakingPracticeAvailable={betaEnabled && clearSpeakStandardSessionAvailable}
                             />
                         </ErrorBoundary>
                     </motion.div>
@@ -630,25 +881,27 @@ const App: React.FC = () => {
                     {showSplash ? null : (
                         <>
                             {showAppHeader && (
-                                <motion.header {...headerAnimation} className="fixed left-0 top-0 z-40 flex w-full items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] sm:px-8 lg:px-12 lg:pb-0 lg:pt-10 pointer-events-none">
-                                    <div onClick={handleRestart} className="cursor-pointer transition-transform hover:scale-[1.02] pointer-events-auto">
+                                <motion.header {...headerAnimation} className="fixed left-0 top-0 z-40 flex w-full items-center justify-between border-b border-white/[0.06] bg-brand-navy px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] shadow-lg sm:px-8 lg:border-b-0 lg:bg-transparent lg:px-12 lg:pb-0 lg:pt-10 lg:shadow-none pointer-events-none">
+                                    <button type="button" onClick={handleRestart} aria-label="Go to practice home" className="cursor-pointer transition-transform hover:scale-[1.02] pointer-events-auto">
                                         <Logo className="h-10 w-auto sm:h-12 lg:h-16" />
-                                    </div>
+                                    </button>
                                     <div className="hidden items-center gap-8 pointer-events-auto lg:flex">
                                         {/* Nav links hidden on HUB — the cards themselves are the navigation */}
                                         {appState !== 'HUB' && (
                                             <>
-                                                <button
-                                                    id="nav-speak"
-                                                    onClick={toggleClearSpeak}
-                                                    className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
-                                                        appState === 'CLEARSPEAK'
-                                                            ? 'text-brand-primary'
-                                                            : 'text-white/50 hover:text-white'
-                                                    }`}
-                                                >
-                                                    Speak
-                                                </button>
+                                                {betaEnabled && (
+                                                    <button
+                                                        id="nav-speak"
+                                                        onClick={toggleClearSpeak}
+                                                        className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
+                                                            appState === 'CLEARSPEAK'
+                                                                ? 'text-brand-primary'
+                                                                : 'text-white/70 hover:text-white'
+                                                        }`}
+                                                    >
+                                                        Speak
+                                                    </button>
+                                                )}
                                                 <button
                                                     onClick={toggleResumeBuilder}
                                                     className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
@@ -668,17 +921,19 @@ const App: React.FC = () => {
                                             </>
                                         )}
                                         <button
+                                            type="button"
                                             onClick={handleLogout}
                                             className="text-[8px] sm:text-[10px] font-bold bg-white/5 hover:bg-white/10 text-white border border-white/10 rounded-lg sm:rounded-xl px-3 sm:px-6 py-2 sm:py-3 transition-all backdrop-blur-md uppercase tracking-widest"
                                         >
-                                            {appState === 'HUB' ? 'Sign Out' : 'End Session'}
+                                            Sign out
                                         </button>
                                     </div>
                                     <button
+                                        type="button"
                                         onClick={handleLogout}
                                         className="pointer-events-auto rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.1em] text-white backdrop-blur-md transition-all hover:bg-white/10 lg:hidden"
                                     >
-                                        {appState === 'HUB' ? 'Sign out' : 'Exit'}
+                                        Sign out
                                     </button>
                                 </motion.header>
                             )}
@@ -693,10 +948,15 @@ const App: React.FC = () => {
                                     {renderPageContent()}
                                 </AnimatePresence>
                             </main>
+                            {authActionError && (
+                                <div role="alert" className="fixed left-1/2 top-24 z-[80] w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 rounded-xl border border-amber-300/30 bg-brand-dark px-5 py-4 text-sm text-amber-100 shadow-2xl">
+                                    {authActionError}
+                                </div>
+                            )}
                             {showMobileTabs && (
                                 <nav className="fixed bottom-0 left-0 z-40 w-full border-t border-white/10 bg-brand-dark/95 px-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-2 shadow-[0_-20px_50px_rgba(0,0,0,0.4)] backdrop-blur-2xl lg:hidden" aria-label="Primary">
-                                    <div className="mx-auto grid max-w-md grid-cols-5 gap-1">
-                                        {MOBILE_TABS.map((tab) => {
+                                    <div className={`mx-auto grid max-w-md gap-1 ${betaEnabled ? 'grid-cols-5' : 'grid-cols-4'}`}>
+                                        {MOBILE_TABS.filter(tab => betaEnabled || tab.id !== 'speak').map((tab) => {
                                             const Icon = tab.icon;
                                             const isActive = activeMobileTab === tab.id;
                                             return (
@@ -720,21 +980,20 @@ const App: React.FC = () => {
                                     </div>
                                 </nav>
                             )}
-                            {pendingGroundingLaunch && (
+                            {pendingGroundingLaunch
+                                && pendingGroundingLaunch.ownerId === authenticatedOwnerRef.current
+                                && pendingGroundingLaunch.authEpoch === authEpochRef.current
+                                && (
                                 <GroundingPreviewModal
                                     purpose={pendingGroundingLaunch.purpose}
                                     items={pendingGroundingLaunch.items}
                                     conflicts={pendingGroundingLaunch.conflicts}
                                     onConfirm={handleModalConfirm}
-                                    onSkip={() => {
-                                        const skipFn = pendingGroundingLaunch.onSkip;
-                                        setPendingGroundingLaunch(null);
-                                        skipFn();
-                                    }}
-                                    onClose={() => setPendingGroundingLaunch(null)}
+                                    onSkip={skipGroundingLaunch}
+                                    onClose={closeGroundingLaunch}
                                 />
                             )}
-                            <SystemStatus />
+                            <SystemStatus avoidMobileTabs={showMobileTabs} />
                         </>
                     )}
                 </div>

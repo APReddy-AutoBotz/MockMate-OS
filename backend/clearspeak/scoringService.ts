@@ -1,9 +1,9 @@
 /**
  * backend/clearspeak/scoringService.ts
- * Mockmate ClearSpeak — transcription + 3-pillar scoring pipeline.
+ * MockMate ClearSpeak — transcript/timing practice-feedback pipeline.
  *
  * Scoring model (source of truth: implementation_plan.md §11):
- *   Clarity  50%  — Levenshtein phonetic tolerance vs. expected passage text
+ *   Match    50%  — Normalised transcript similarity vs. expected passage text
  *   Pacing   25%  — WPM against level-specific band (not a flat threshold)
  *   Rhythm   25%  — Pause adherence mapped from word timestamps
  *   HardWord +5   — Additive modifier only (never subtracts from base score)
@@ -16,12 +16,52 @@
 
 import OpenAI from 'openai';
 import { Readable } from 'stream';
-import type {
-  ClearSpeakSessionContent,
-  ClearSpeakSessionScore,
-  HardWordEntry,
+import {
+  ClearSpeakSessionScoreSchema,
+  type ClearSpeakSessionContent,
+  type ClearSpeakSessionScore,
+  type HardWordEntry,
 } from 'mockmate-shared';
+import { runtimeMode } from '../config/runtimeConfig';
 import { WPM_BANDS } from './contentSchema';
+
+export const CLEAR_SPEAK_SCORE_EVIDENCE_BASIS = 'transcript_timing_heuristic' as const;
+export const CLEAR_SPEAK_SCORING_UNAVAILABLE_MESSAGE =
+  'Scored delivery practice is temporarily unavailable. UK / US reference-style practice is still available without a delivery score.';
+
+export class ClearSpeakScoringUnavailableError extends Error {
+  readonly code = 'SERVICE_UNAVAILABLE';
+  readonly status = 503;
+
+  constructor(message = CLEAR_SPEAK_SCORING_UNAVAILABLE_MESSAGE) {
+    super(message);
+    this.name = 'ClearSpeakScoringUnavailableError';
+  }
+}
+
+export function isClearSpeakScoringAvailable(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return Boolean(env.GROQ_API_KEY?.trim());
+}
+
+/**
+ * User-facing scored practice stays fail-closed until generation and scoring
+ * can reserve quota atomically before provider work. The isolated test runtime
+ * may still exercise the adapter; development, preview and production cannot.
+ */
+export function isGovernedClearSpeakScoringAvailable(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  try {
+    return runtimeMode(env) === 'test' && isClearSpeakScoringAvailable(env);
+  } catch {
+    return false;
+  }
+}
+
+const MAX_TRANSCRIPT_TEXT_CHARS = 12_000;
+const MAX_TRANSCRIPT_WORDS = 4_096;
 
 // ─── Transcript Shape ─────────────────────────────────────────────────────────
 
@@ -36,6 +76,41 @@ interface TranscriptResult {
   words: TranscriptWord[];
 }
 
+export function validateTranscriptEvidence(input: unknown): TranscriptResult {
+  if (!input || typeof input !== 'object') {
+    throw new ClearSpeakScoringUnavailableError('Speech timing evidence was unavailable. Please try the recording again.');
+  }
+  const candidate = input as { text?: unknown; words?: unknown };
+  if (typeof candidate.text !== 'string' || candidate.text.trim().length === 0 ||
+      candidate.text.length > MAX_TRANSCRIPT_TEXT_CHARS || !Array.isArray(candidate.words) ||
+      candidate.words.length < 2 || candidate.words.length > MAX_TRANSCRIPT_WORDS) {
+    throw new ClearSpeakScoringUnavailableError('Speech timing evidence was unavailable. Please try the recording again.');
+  }
+
+  const words: TranscriptWord[] = [];
+  let previousStart = -1;
+  let previousEnd = -1;
+  for (const rawWord of candidate.words) {
+    if (!rawWord || typeof rawWord !== 'object') {
+      throw new ClearSpeakScoringUnavailableError('Speech timing evidence was unavailable. Please try the recording again.');
+    }
+    const { word, start, end } = rawWord as { word?: unknown; start?: unknown; end?: unknown };
+    if (typeof word !== 'string' || word.trim().length === 0 || word.length > 240 ||
+        typeof start !== 'number' || typeof end !== 'number' ||
+        !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start ||
+        start < previousStart || end < previousEnd) {
+      throw new ClearSpeakScoringUnavailableError('Speech timing evidence was unavailable. Please try the recording again.');
+    }
+    words.push({ word, start, end });
+    previousStart = start;
+    previousEnd = end;
+  }
+  if (words[words.length - 1].end <= words[0].start) {
+    throw new ClearSpeakScoringUnavailableError('Speech timing evidence was unavailable. Please try the recording again.');
+  }
+  return { text: candidate.text, words };
+}
+
 // ─── Transcribe Audio ─────────────────────────────────────────────────────────
 
 /**
@@ -48,9 +123,9 @@ interface TranscriptResult {
  * Response format: verbose_json (required for word timestamps)
  */
 async function transcribeAudio(audioBuffer: Buffer): Promise<TranscriptResult> {
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error('GROQ_API_KEY is required for live transcription');
+    throw new ClearSpeakScoringUnavailableError();
   }
 
   const client = new OpenAI({
@@ -67,23 +142,25 @@ async function transcribeAudio(audioBuffer: Buffer): Promise<TranscriptResult> {
   // Slice to a plain ArrayBuffer via Uint8Array to satisfy the File constructor's
   // BlobPart typing, which requires ArrayBuffer | ArrayBufferView<ArrayBuffer>.
   const uint8 = new Uint8Array(audioBuffer);
-  const audioFile = new File([uint8], 'recording.webm', { type: 'audio/webm' });
+  try {
+    const audioFile = new File([uint8], 'recording.webm', { type: 'audio/webm' });
 
-  const response = await client.audio.transcriptions.create({
-    model: 'whisper-large-v3',
-    file: audioFile,
-    response_format: 'verbose_json',
-    timestamp_granularities: ['word'],
-  });
+    const response = await client.audio.transcriptions.create({
+      model: 'whisper-large-v3',
+      file: audioFile,
+      response_format: 'verbose_json',
+      timestamp_granularities: ['word'],
+    });
 
-  // verbose_json returns `words` array with { word, start, end }
-  const words: TranscriptWord[] = (response as any).words?.map((w: any) => ({
-    word:  w.word,
-    start: w.start,
-    end:   w.end,
-  })) ?? [];
-
-  return { text: response.text ?? '', words };
+    return validateTranscriptEvidence({
+      text: response.text,
+      words: (response as any).words,
+    });
+  } finally {
+    // File construction requires a plain typed-array copy. Erase that copy on
+    // every provider outcome; the caller separately erases the source buffer.
+    uint8.fill(0);
+  }
 }
 
 
@@ -92,8 +169,8 @@ async function transcribeAudio(audioBuffer: Buffer): Promise<TranscriptResult> {
 //
 // Design contract (R1 — external beta hardening):
 //   Goal:  Reduce false-negative clarity penalties caused by ASR formatting
-//          differences and common L2/accent-driven phonetic substitutions —
-//          NOT to flatten genuine pronunciation errors.
+//          differences and common ASR renderings. This normalisation is not a
+//          detector of pronunciation errors.
 //
 //   Rules:
 //   1. Case and punctuation normalisation ALWAYS runs.
@@ -175,7 +252,7 @@ export function expandContractions(text: string): string {
  *
  * CRITERIA for inclusion:
  *   - The substitution must be a well-documented ASR output variant OR
- *     a common L2 phonetic reduction that does not change the intended word.
+ *     a common ASR rendering that does not change the intended word.
  *   - The substitution must have near-zero false-positive risk:
  *     the mapped form is essentially never the correct word in a business context.
  *   - Only function words or function-word clusters are mapped.
@@ -242,40 +319,46 @@ export function normaliseForScoring(text: string): string {
   return stripApostrophes(applyAsrEquivalences(expandContractions(stripAndLower(text))));
 }
 
-// ─── Levenshtein Clarity Score ────────────────────────────────────────────────
+// ─── Levenshtein Transcript-Match Score ───────────────────────────────────────
 
-function levenshtein(a: string, b: string): number {
-  const m = a.length, n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
-    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
-  );
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      dp[i][j] = a[i - 1] === b[j - 1]
-        ? dp[i - 1][j - 1]
-        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+export function boundedLevenshteinDistance(a: string, b: string): number {
+  // Retain only two rows and place the shorter string on the columns. Memory is
+  // O(min(m,n)); request/schema limits separately bound CPU work.
+  const [longer, shorter] = a.length >= b.length ? [a, b] : [b, a];
+  let previous = new Uint32Array(shorter.length + 1);
+  let current = new Uint32Array(shorter.length + 1);
+  for (let column = 0; column <= shorter.length; column++) previous[column] = column;
+
+  for (let row = 1; row <= longer.length; row++) {
+    current[0] = row;
+    for (let column = 1; column <= shorter.length; column++) {
+      current[column] = longer[row - 1] === shorter[column - 1]
+        ? previous[column - 1]
+        : 1 + Math.min(previous[column], current[column - 1], previous[column - 1]);
     }
+    [previous, current] = [current, previous];
   }
-  return dp[m][n];
+  return previous[shorter.length];
 }
 
 /**
- * Calculates clarity score (0–100) using normalised Levenshtein distance.
+ * Calculates transcript-match score (0–100) using normalised Levenshtein distance.
  *
  * Both expected and actual are run through the full normalisation pipeline
  * before comparison. This removes ASR formatting noise and conservative L2
- * equivalences without masking genuine pronunciation errors.
+ * equivalences. This is an ASR text comparison, not a pronunciation or accent
+ * assessment.
  *
  * Scoring is character-level Levenshtein on the full passage string.
- * A speaker who says every word but in a slightly different form scores 85–95.
- * A speaker who skips or substitutes content words scores proportionally lower.
+ * A transcript containing the expected words scores highly; omissions and text
+ * substitutions score proportionally lower.
  */
 function calcClarity(expected: string, actual: string): number {
   const e = normaliseForScoring(expected);
   const a = normaliseForScoring(actual);
   if (!e) return 100;
   if (!a) return 0;
-  const dist = levenshtein(e, a);
+  const dist = boundedLevenshteinDistance(e, a);
   const maxLen = Math.max(e.length, a.length);
   return Math.round(Math.max(0, (1 - dist / maxLen) * 100));
 }
@@ -294,7 +377,10 @@ function calcPacing(
   if (words.length < 2) return { score: 0, measuredWpm: 0 };
 
   const durationSeconds = words[words.length - 1].end - words[0].start;
-  const measuredWpm = Math.round((words.length / durationSeconds) * 60);
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return { score: 0, measuredWpm: 0 };
+  }
+  const measuredWpm = Math.min(1_000, Math.max(0, Math.round((words.length / durationSeconds) * 60)));
 
   const band = WPM_BANDS[level];
   const [low, high] = band.target;
@@ -431,7 +517,7 @@ function buildFeedbackTip(
 ): string {
   // Priority order: address the lowest pillar first.
   if (clarity < 70) {
-    return "Your phrasing was almost there. Try slowing down on the trickier words — saying them clearly matters more than speed.";
+    return "The transcript differed from the passage on several words. Try again slowly and keep each word distinct for the microphone.";
   }
   if (rhythm < 70) {
     return "Great effort! Next time, take a short breath when you see a pause mark — it helps your listener absorb each point.";
@@ -439,7 +525,7 @@ function buildFeedbackTip(
   if (pacing < 70) {
     return "You nailed the vocabulary! Try matching a steadier rhythm — aim for a calm, measured pace, not a race.";
   }
-  return "Strong session. Your delivery was clear and well-paced. Keep this up before your next interview.";
+  return "Strong session. The transcript matched the passage and the measured pace was steady. Keep practicing before your next interview.";
 }
 
 // ─── Public Scorer ────────────────────────────────────────────────────────────
@@ -449,14 +535,12 @@ export interface ScoreInput {
   content: ClearSpeakSessionContent;
   userLevel: 1 | 2 | 3;
   hardWords: HardWordEntry[];
-  /** Whether the user retried the retry_sentence and succeeded */
-  retryAttempted: boolean;
 }
 
 /**
  * Full scoring pipeline:
- * 1. Transcribe (gpt-4o-mini-transcribe with word timestamps)
- * 2. Score Clarity, Pacing, Rhythm
+ * 1. Transcribe (Groq Whisper with word timestamps)
+ * 2. Calculate transcript match, pace, and pause-timing heuristics
  * 3. Apply Hard-Word modifier
  * 4. Build composite
  * 5. Destroy audio buffer (enforce privacy policy)
@@ -464,63 +548,53 @@ export interface ScoreInput {
  * The caller must NOT store the audioBuffer after this returns.
  */
 export async function scoreSession(input: ScoreInput): Promise<ClearSpeakSessionScore> {
-  const { audioBuffer, content, userLevel, hardWords, retryAttempted } = input;
+  const { audioBuffer, content, userLevel, hardWords } = input;
 
-  // Local Dev Fallback: If no Groq key is set, return a mock score
-  // so the developer can verify the UI flows without spending API credits.
-  if (!process.env.GROQ_API_KEY) {
-    console.warn('[ClearSpeak] GROQ_API_KEY missing - using MOCK scoring (88 composite)');
-    // Explicit buffer destruction
+  try {
+    if (!isClearSpeakScoringAvailable()) {
+      throw new ClearSpeakScoringUnavailableError();
+    }
+
+    // 1. Transcribe — the buffer remains memory-only.
+    const transcript = await transcribeAudio(audioBuffer);
+    const transcriptText = transcript.text.slice(0, MAX_TRANSCRIPT_TEXT_CHARS);
+    const transcriptWords = transcript.words.slice(0, MAX_TRANSCRIPT_WORDS);
+
+    // Build expected full text from passageData tokens.
+    const expectedText = content.passageData.map(t => t.text).join(' ');
+
+    // 2. Calculate bounded practice heuristics.
+    const clarity = calcClarity(expectedText, transcriptText);
+    const { score: pacing, measuredWpm } = calcPacing(transcriptWords, userLevel);
+    const rhythm = calcRhythm(transcriptWords, content, pacing);
+
+    // 3. Hard-word modifier.
+    const hardWordBonus = calcHardWordBonus(transcriptText, hardWords);
+
+    // 4. Composite: transcript match×0.5 + pace×0.25 + pause timing×0.25.
+    const composite = Math.min(
+      100,
+      Math.round(clarity * 0.5 + pacing * 0.25 + rhythm * 0.25 + hardWordBonus)
+    );
+
+    return ClearSpeakSessionScoreSchema.parse({
+      clarity,
+      pacing,
+      rhythm,
+      composite,
+      hardWordBonus,
+      feedbackTip: buildFeedbackTip(clarity, pacing, rhythm),
+      measuredWpm,
+      // A browser boolean cannot prove that a distinct retry was performed.
+      retrySuccess: false,
+      evidenceBasis: CLEAR_SPEAK_SCORE_EVIDENCE_BASIS,
+      pronunciationAssessed: false,
+    });
+  } finally {
+    // Zero the actual allocation on success, provider failure, timeout, or
+    // unavailable configuration. Nulling a reference alone does not erase audio.
+    audioBuffer.fill(0);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (input as any).audioBuffer = null;
-    return {
-      clarity: 88,
-      pacing: 90,
-      rhythm: 85,
-      composite: 88,
-      hardWordBonus: 1,
-      feedbackTip: "Mock Dev Mode: Strong session. Your delivery was clear and well-paced.",
-      measuredWpm: 125,
-      retrySuccess: retryAttempted,
-    };
   }
-
-  // 1. Transcribe — buffer is used then released
-  const transcript = await transcribeAudio(audioBuffer);
-
-  // Explicit buffer destruction — Node GC will reclaim, but we zero the reference
-  // to signal intent clearly to reviewers.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (input as any).audioBuffer = null;
-
-  // Build expected full text from passageData tokens
-  const expectedText = content.passageData.map(t => t.text).join(' ');
-
-  // 2. Score pillars
-  const clarity = calcClarity(expectedText, transcript.text);
-  const { score: pacing, measuredWpm } = calcPacing(transcript.words, userLevel);
-  const rhythm = calcRhythm(transcript.words, content, pacing);
-
-  // 3. Hard-word modifier
-  const hardWordBonus = calcHardWordBonus(transcript.text, hardWords);
-
-  // 4. Composite: Clarity×0.5 + Pacing×0.25 + Rhythm×0.25
-  const composite = Math.min(
-    100,
-    Math.round(clarity * 0.5 + pacing * 0.25 + rhythm * 0.25 + hardWordBonus)
-  );
-
-  // 5. Feedback tip
-  const feedbackTip = buildFeedbackTip(clarity, pacing, rhythm);
-
-  return {
-    clarity,
-    pacing,
-    rhythm,
-    composite,
-    hardWordBonus,
-    feedbackTip,
-    measuredWpm,
-    retrySuccess: retryAttempted && clarity >= 70,
-  };
 }

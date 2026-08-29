@@ -1,4 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { canUseMobileMockAuth, isMobileProductionLike } from './runtimeMode';
 import { isValidRuntimeUrl } from 'mockmate-shared';
@@ -27,10 +28,31 @@ const ExpoSecureStoreAdapter = {
   removeItem: async (key: string) => SecureStore.deleteItemAsync(key),
 };
 
+// Expo static rendering runs the web bundle in Node, where the native
+// SecureStore module is not available. Browser builds use origin-scoped web
+// storage, while native builds keep the encrypted SecureStore adapter. During
+// static rendering there is intentionally no persisted auth state to recover.
+const WebAuthStorageAdapter = {
+  getItem: async (key: string) => {
+    if (typeof window === 'undefined') return null;
+    try { return window.localStorage.getItem(key); } catch { return null; }
+  },
+  setItem: async (key: string, value: string) => {
+    if (typeof window === 'undefined') return;
+    try { window.localStorage.setItem(key, value); } catch { /* fail closed */ }
+  },
+  removeItem: async (key: string) => {
+    if (typeof window === 'undefined') return;
+    try { window.localStorage.removeItem(key); } catch { /* fail closed */ }
+  },
+};
+
+const authStorage = Platform.OS === 'web' ? WebAuthStorageAdapter : ExpoSecureStoreAdapter;
+
 export const supabase: SupabaseClient | null = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
-        storage: ExpoSecureStoreAdapter,
+        storage: authStorage,
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: false,

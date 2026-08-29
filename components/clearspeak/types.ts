@@ -59,6 +59,8 @@ export interface ClearSpeakSessionScore {
   feedbackTip: string;
   measuredWpm: number;
   retrySuccess: boolean;
+  evidenceBasis: 'transcript_timing_heuristic';
+  pronunciationAssessed: false;
 }
 
 export interface ClearSpeakProgress {
@@ -70,6 +72,7 @@ export interface ClearSpeakProgress {
   bestPerformingTopic: string;
   hardWordCount: number;
   totalSessionsCompleted: number;
+  scoreEvidenceBasis: 'transcript_timing_heuristic' | null;
   updatedAt: string;
 }
 

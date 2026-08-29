@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { verifyAuthToken } from '../middleware/authMiddleware';
-import { consumeUsage, enforceUsageLimit } from '../services/usageService';
+import { completeReservedProviderWork, consumeUsage, enforceUsageLimit } from '../services/usageService';
 import * as aiService from '../services/aiService';
 import * as sessionService from '../services/sessionService';
 import { createAndBindAuthoritativeSession, finalizeAuthoritativePlanGeneration, getAuthoritativePlan, getAuthoritativePlanForBridge, hashInterviewPlan, releaseAuthoritativePlanGeneration, reserveAuthoritativePlanGeneration, waitForAuthoritativePlan, withAuthoritativePlanLease } from '../services/interviewPlanService';
@@ -275,7 +275,19 @@ router.post('/sessions/:sessionId/answers', enforceUsageLimit('interview_questio
     if (error.status === 404) {
       return res.status(404).json({ error: error.message });
     }
+    if (error.status === 429) {
+      return res.status(429).json({
+        error: error.message,
+        code: error.code || 'daily_limit_reached',
+        feature: 'interview_question',
+      });
+    }
     res.status(500).json({ error: error.message || 'Could not review this answer' });
+  } finally {
+    // Response close alone cannot prove provider work ended. Explicitly finish
+    // the renewable reservation after every downstream success/failure path so
+    // a disconnected failed request cannot pin ownership indefinitely.
+    await completeReservedProviderWork(req);
   }
 });
 

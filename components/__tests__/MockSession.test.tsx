@@ -230,6 +230,7 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
 
   // 10. Question-count mismatch between plan and controls never produces undefined nextQuestion
   test('10. Question-count mismatch returns null nextQuestion on last turn safely', async () => {
+    const onReportGenerated = jest.fn();
     (startInterviewSession as jest.Mock).mockResolvedValueOnce({
       sessionId: 'sess_1',
       openingMessage: 'Welcome',
@@ -238,7 +239,7 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
       totalQuestions: 1
     });
 
-    render(<MockSession sessionContext={mockContext} onReportGenerated={jest.fn()} onCancel={jest.fn()} />);
+    render(<MockSession sessionContext={mockContext} onReportGenerated={onReportGenerated} onCancel={jest.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByText(/What is Virtual DOM\?/i)).toBeInTheDocument();
@@ -292,6 +293,7 @@ describe('MockSession Frontend Suite (P0-1F)', () => {
         expect.any(String),
         'skipped'
       );
+      expect(onReportGenerated).toHaveBeenCalledWith(expect.objectContaining({ simplifiedScore: null }), 'sess_1');
     });
   });
 

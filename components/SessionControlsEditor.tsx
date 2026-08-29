@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { SessionControls } from 'mockmate-shared';
+import type { SessionControls } from 'mockmate-shared';
 
 interface SessionControlsEditorProps {
     controls: SessionControls;
@@ -8,11 +8,13 @@ interface SessionControlsEditorProps {
 }
 
 /* ─── Micro Toggle ──────────────────────────────────────────────────────── */
-const Toggle: React.FC<{ on: boolean; onToggle: () => void }> = ({ on, onToggle }) => (
+const Toggle: React.FC<{ label: string; on: boolean; onToggle: () => void }> = ({ label, on, onToggle }) => (
     <button
+        type="button"
         onClick={onToggle}
         role="switch"
         aria-checked={on}
+        aria-label={label}
         className={`relative w-11 h-6 rounded-full transition-all duration-300 focus:outline-none ${
             on ? 'bg-brand-primary shadow-[0_0_12px_rgba(255,188,3,0.5)]' : 'bg-white/10'
         }`}
@@ -100,6 +102,7 @@ const SessionControlsEditor: React.FC<SessionControlsEditorProps> = ({ controls,
                         const active = (controls.reasoningMode || 'classic_behavioral') === rm.key;
                         return (
                             <button
+                                type="button"
                                 key={rm.key}
                                 onClick={() => onChange({ ...controls, reasoningMode: rm.key })}
                                 className={`flex flex-col items-start p-3.5 rounded-xl border text-left transition-all duration-200 ${
@@ -129,6 +132,7 @@ const SessionControlsEditor: React.FC<SessionControlsEditorProps> = ({ controls,
                 <div className="grid grid-cols-2 gap-1.5 bg-black/30 p-1.5 rounded-xl">
                     {MODE_OPTIONS.map(opt => (
                         <button
+                            type="button"
                             key={opt.key}
                             onClick={() => onChange({ ...controls, sourceMode: opt.key })}
                             className={`py-2.5 px-3 rounded-[10px] text-[10px] font-bold uppercase tracking-[0.3em] transition-all duration-200 text-center ${
@@ -162,12 +166,13 @@ const SessionControlsEditor: React.FC<SessionControlsEditorProps> = ({ controls,
                         const active = controls.difficulty === opt.key;
                         return (
                             <button
+                                type="button"
                                 key={opt.key}
                                 onClick={() => setDifficulty(opt.key)}
                                 className={`relative flex flex-col items-center gap-2 pt-4 pb-3 rounded-xl border transition-all duration-250 overflow-hidden ${
                                     active
                                         ? 'border-brand-primary/60 bg-brand-primary/8 text-brand-primary'
-                                        : 'border-white/[0.07] bg-white/[0.02] text-white/25 hover:border-white/15 hover:text-white/50'
+                                        : 'border-white/[0.12] bg-white/[0.03] text-white/70 hover:border-white/25 hover:text-white'
                                 }`}
                             >
                                 {/* Active top accent bar */}
@@ -191,14 +196,14 @@ const SessionControlsEditor: React.FC<SessionControlsEditorProps> = ({ controls,
 
             {/* ── Toggle Options ────────────────────────────────────── */}
             {TOGGLE_OPTIONS.map((opt, i) => (
-                <div key={i} className="px-5 md:px-7 py-4 flex items-center gap-4 hover:bg-white/[0.02] transition-colors cursor-pointer" onClick={opt.onToggle}>
+                <div key={i} className="px-5 md:px-7 py-4 flex items-center gap-4 hover:bg-white/[0.02] transition-colors">
                     <div className="flex-1 min-w-0">
                         <p className={`text-xs font-bold uppercase tracking-[0.3em] transition-colors ${opt.checked ? 'text-white' : 'text-white/40'}`}>
                             {opt.label}
                         </p>
-                        <p className="text-[10px] text-white/25 mt-0.5 leading-relaxed font-normal">{opt.desc}</p>
+                        <p className="text-[10px] text-white/70 mt-0.5 leading-relaxed font-normal">{opt.desc}</p>
                     </div>
-                    <Toggle on={opt.checked} onToggle={opt.onToggle} />
+                    <Toggle label={opt.label} on={opt.checked} onToggle={opt.onToggle} />
                 </div>
             ))}
         </div>

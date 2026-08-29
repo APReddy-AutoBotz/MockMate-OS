@@ -1,4 +1,9 @@
-import { ClearSpeakProfile, ClearSpeakSessionScore, CareerContextItemDraft } from 'mockmate-shared';
+import {
+  ClearSpeakProfile,
+  ClearSpeakSessionScore,
+  ClearSpeakSessionScoreSchema,
+  CareerContextItemDraft,
+} from 'mockmate-shared';
 import { AccentScoreV2Schema, type AccentScoreV2 } from 'mockmate-shared/accent-evidence';
 import crypto from 'crypto';
 
@@ -23,6 +28,7 @@ function computeHash(content: string): string {
 export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): CareerContextItemDraft[] {
   const { profile, sessionRecordId, sessionScore, practicedWords, topicTag, revision = 'v1' } = input;
   const items: CareerContextItemDraft[] = [];
+  const verifiedSessionScore = ClearSpeakSessionScoreSchema.safeParse(sessionScore);
 
   // 1. Profile Role
   if (profile?.role) {
@@ -120,7 +126,13 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
   // 4. Legacy Speech Delivery Score (practice_metric - NEVER enters
   // clearspeak_to_interview projection). This remains for legacy browser source
   // compatibility only; P0-5 Accent evidence below never creates a composite.
-  if (sessionScore && sessionRecordId) {
+  if (
+    verifiedSessionScore.success &&
+    sessionRecordId &&
+    verifiedSessionScore.data.evidenceBasis === 'transcript_timing_heuristic' &&
+    verifiedSessionScore.data.pronunciationAssessed === false
+  ) {
+    const score = verifiedSessionScore.data;
     items.push({
       kind: 'practice_metric',
       canonicalKey: 'clearspeak.delivery_composite_score',
@@ -128,7 +140,7 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
       value: {
         type: 'metric',
         metric: 'clearspeak_composite',
-        value: sessionScore.composite,
+        value: score.composite,
         scale: '100',
         measuredAt: new Date().toISOString(),
       },
@@ -137,10 +149,10 @@ export function buildClearSpeakContextItems(input: ClearSpeakAdapterInput): Care
         recordId: sessionRecordId,
         fieldPath: 'score.composite',
         sourceRevision: revision,
-        sourceHash: computeHash(String(sessionScore.composite)),
+        sourceHash: computeHash(String(score.composite)),
         capturedAt: new Date().toISOString(),
       },
-      exactExcerpt: `Pacing: ${sessionScore.pacing}, Clarity: ${sessionScore.clarity}`,
+      exactExcerpt: `Pace: ${score.pacing}, transcript match: ${score.clarity}, pause timing: ${score.rhythm}`,
       provenance: 'system_observed',
       status: 'active',
       sensitivity: 'standard',

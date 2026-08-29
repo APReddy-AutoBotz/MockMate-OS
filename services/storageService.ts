@@ -5,38 +5,41 @@ const HISTORY_KEY = 'mockmate_session_history';
 const QUESTION_TRACKER_KEY = 'mockmate_question_usage';
 const FIFTEEN_DAYS_MS = 15 * 24 * 60 * 60 * 1000;
 
-export const saveSessionToHistory = (report: FinalReport, role: string, type: 'structured' | 'conversational') => {
+export const saveSessionToHistory = (
+  report: FinalReport,
+  role: string,
+  type: 'structured' | 'conversational',
+  serverSessionId?: string,
+): boolean => {
   try {
-    if (!report) return;
+    if (!report) return false;
 
     const historyJson = localStorage.getItem(HISTORY_KEY);
-    const history: SessionHistoryRecord[] = historyJson ? JSON.parse(historyJson) : [];
-
-    const allScores: number[] = [];
-    if (report.quantitativeAnalysis?.dimension_scores) {
-      report.quantitativeAnalysis.dimension_scores.forEach(s => {
-        if (s.normalized_score !== null && s.normalized_score !== undefined) {
-          allScores.push(s.normalized_score);
-        }
-      });
-    }
-    const avgScore = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : null;
+    const parsedHistory = historyJson ? JSON.parse(historyJson) : [];
+    const history: SessionHistoryRecord[] = Array.isArray(parsedHistory) ? parsedHistory : [];
+    const canonicalScore = typeof report.simplifiedScore === 'number' && Number.isFinite(report.simplifiedScore)
+      ? report.simplifiedScore
+      : null;
+    const stableId = serverSessionId ? `interview_${serverSessionId}` : `session_${Date.now()}`;
+    const existingRecord = history.find(record => record.id === stableId);
 
     const newRecord: SessionHistoryRecord = {
-      id: `session_${Date.now()}`,
-      timestamp: Date.now(),
+      id: stableId,
+      timestamp: existingRecord?.timestamp ?? Date.now(),
       role: role || 'Unknown Role',
-      avgScore: avgScore !== null ? parseFloat(avgScore.toFixed(1)) : null,
+      avgScore: canonicalScore,
       readinessStatus: report.readiness?.status || 'NOT_READY',
       biggestRisk: report.biggestRiskArea?.title || 'No major risk identified',
       sessionType: type,
       fullReport: report
     };
 
-    const updatedHistory = [newRecord, ...history].slice(0, 50);
+    const updatedHistory = [newRecord, ...history.filter(record => record.id !== stableId)].slice(0, 50);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+    return true;
   } catch (e) {
     console.error("Failed to save session history:", e);
+    return false;
   }
 };
 

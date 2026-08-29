@@ -19,7 +19,12 @@ import { verifyAuthToken } from '../middleware/authMiddleware';
 import { consumeUsage } from '../services/usageService';
 import { supabaseAdmin } from '../supabaseAdmin';
 import { generateSession } from './generateService';
-import { scoreSession } from './scoringService';
+import {
+  CLEAR_SPEAK_SCORING_UNAVAILABLE_MESSAGE,
+  ClearSpeakScoringUnavailableError,
+  isGovernedClearSpeakScoringAvailable,
+  scoreSession,
+} from './scoringService';
 import {
   recordSessionResult,
   evaluateBridgeTrigger,
@@ -27,10 +32,16 @@ import {
   getOrCreateLedger,
 } from './progressService';
 import {
+  ClearSpeakPersistenceUnavailableError,
   saveProfileToStore,
   getProfileFromStore,
 } from './supabaseStoreService';
-import type { ClearSpeakProfile } from 'mockmate-shared';
+import {
+  ClearSpeakGenerateRequestSchema,
+  ClearSpeakSessionContentSchema,
+  ClearSpeakSessionScoreSchema,
+  type ClearSpeakProfile,
+} from 'mockmate-shared';
 import { getModuleBridgeById } from '../services/moduleBridgeService';
 import { getSnapshotById } from '../services/groundingSnapshotService';
 import crypto from 'crypto';
@@ -80,6 +91,8 @@ const betaFeedbackLimiter = csRateLimit(10,  60_000);  // 10 / min / IP
 // /beta/access  — checked once on login; generous
 const betaAccessLimiter   = csRateLimit(30,  60_000);  // 30 / min / IP
 const accentLifecycleLimiter = csRateLimit(30, 60_000);
+const scoreLimiter = csRateLimit(10, 60_000);
+const generateLimiter = csRateLimit(12, 60_000);
 
 
 // ─── Multer — memory storage only ────────────────────────────────────────────
@@ -116,7 +129,13 @@ function wipeUploadedAudio(req: Request): void {
 
 const upload = multer({
   storage: ephemeralMemoryStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB — max ~5 min WebM/Opus
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10 MB — max ~5 min WebM/Opus
+    fieldSize: 64 * 1024,
+    fields: 8,
+    files: 1,
+    parts: 10,
+  },
   fileFilter: (_req, file, cb) => {
     //
     // STRICT ALLOWLIST — no audio/* wildcard.
@@ -167,6 +186,10 @@ function handleMulterError(
       res.status(413).json({ error: 'Audio file exceeds the 10 MB limit. Please record a shorter clip.' });
       return;
     }
+    if (['LIMIT_FIELD_VALUE', 'LIMIT_FIELD_COUNT', 'LIMIT_FILE_COUNT', 'LIMIT_PART_COUNT'].includes(err.code)) {
+      res.status(413).json({ error: 'Upload fields exceed the ClearSpeak request limits.' });
+      return;
+    }
     res.status(400).json({ error: `Upload error: ${err.message}` });
     return;
   }
@@ -179,6 +202,68 @@ function handleMulterError(
 
 // All ClearSpeak routes require auth
 router.use(verifyAuthToken);
+
+async function userHasClearSpeakBetaAccess(userId: string | undefined): Promise<boolean> {
+  if (!userId || !supabaseAdmin) return false;
+  const { data, error } = await supabaseAdmin
+    .from('profiles')
+    .select('clearspeak_beta_enabled')
+    .eq('user_id', userId)
+    .maybeSingle();
+  return !error && data?.clearspeak_beta_enabled === true;
+}
+
+async function getAuthoritativeGenerationHistory(userId: string): Promise<{
+  recentTopics: string[];
+  sessionAttemptLength: number;
+}> {
+  // Without database authority, keep the generator on its static fast path.
+  if (!supabaseAdmin) return { recentTopics: [], sessionAttemptLength: 0 };
+
+  const { data, error, count } = await supabaseAdmin
+    .from('clearspeak_sessions')
+    .select('topic_tag', { count: 'exact' })
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(20);
+  if (error) throw new ClearSpeakPersistenceUnavailableError(error);
+
+  const recentTopics = (data || [])
+    .map(row => row.topic_tag)
+    .filter((topic): topic is string => typeof topic === 'string' && topic.length > 0)
+    .slice(0, 20);
+  return {
+    recentTopics,
+    // generateSession only distinguishes the first five completed sessions.
+    sessionAttemptLength: Math.min(Math.max(count ?? data?.length ?? 0, 0), 5),
+  };
+}
+
+// All product routes are allowlist-only in controlled previews. The access
+// probe itself must remain reachable so the UI can hide the module. There is no
+// environment-based bypass: authorization remains fail-closed in every runtime.
+router.use(async (req: Request, res: Response, next: NextFunction) => {
+  if (req.path === '/beta/access') return next();
+  try {
+    const enabled = await userHasClearSpeakBetaAccess((req as any).user?.uid);
+    if (!enabled) return res.status(403).json({ error: 'feature_not_available' });
+    return next();
+  } catch {
+    return res.status(403).json({ error: 'feature_not_available' });
+  }
+});
+
+// The client checks this before offering standard scored practice. Availability
+// is server-authoritative so missing provider configuration cannot fall through
+// to quota consumption, persistence, or a fabricated score.
+router.get('/capabilities', (_req: Request, res: Response) => {
+  const standardSessionScoringAvailable = isGovernedClearSpeakScoringAvailable();
+  return res.json({
+    standardSessionScoringAvailable,
+    scoreEvidenceBasis: standardSessionScoringAvailable ? 'transcript_timing_heuristic' : null,
+    pronunciationAssessmentAvailable: false,
+  });
+});
 
 // Accent Practice V1 is deliberately separate from legacy /score. Its policy,
 // references and deterministic adapter are selected exclusively by the server.
@@ -251,7 +336,7 @@ router.get('/v1/accent/attempts', async (req, res) => {
   const userId = (req as any).user?.uid;
   if (!supabaseAdmin) return res.status(503).json({ error: 'Authoritative persistence unavailable' });
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
-  const { data, error } = await supabaseAdmin.from('clearspeak_accent_attempts').select('attempt_id,result,fixture,evidence_provenance,duration_ms,mime_type,created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(limit);
+  const { data, error } = await supabaseAdmin.from('clearspeak_accent_attempts').select('attempt_id,prompt_id,result,fixture,evidence_provenance,duration_ms,mime_type,created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(limit);
   if (error) return res.status(500).json({ error: 'History unavailable' });
   const attempts = (data || []).map(projectAccentHistoryAttempt);
   return res.json({ attempts, retention: 'derived-results-only' });
@@ -302,7 +387,10 @@ router.post('/profile', async (req: Request, res: Response) => {
     return res.status(201).json({ profile });
   } catch (err: any) {
     console.error('[ClearSpeak] POST /profile error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to save profile' });
+    if (err instanceof ClearSpeakPersistenceUnavailableError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    return res.status(500).json({ error: 'Failed to save profile' });
   }
 });
 
@@ -321,16 +409,24 @@ router.get('/profile', async (req: Request, res: Response) => {
     return res.json({ profile });
   } catch (err: any) {
     console.error('[ClearSpeak] GET /profile error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to load profile' });
+    if (err instanceof ClearSpeakPersistenceUnavailableError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    return res.status(500).json({ error: 'Failed to load profile' });
   }
 });
 
 // ─── POST /api/clearspeak/generate ────────────────────────────────────────────
 
-router.post('/generate', async (req: Request, res: Response) => {
+router.post('/generate', generateLimiter, async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const requestResult = ClearSpeakGenerateRequestSchema.safeParse(req.body ?? {});
+    if (!requestResult.success) {
+      return res.status(422).json({ error: 'generation request does not match the ClearSpeak contract' });
+    }
 
     const profile = await getProfileFromStore(userId);
     if (!profile) {
@@ -339,7 +435,7 @@ router.post('/generate', async (req: Request, res: Response) => {
       });
     }
 
-    const { recentTopics = [], sessionAttemptLength = 0, grounding } = req.body as { recentTopics?: string[], sessionAttemptLength?: number, grounding?: { snapshotId?: string, bridgeSessionId?: string } };
+    const { grounding } = requestResult.data;
     let snapshot: Awaited<ReturnType<typeof getSnapshotById>> = null;
     let existingArtifact: any = null;
     if (grounding) {
@@ -360,7 +456,15 @@ router.post('/generate', async (req: Request, res: Response) => {
       summary: references.map((r: any) => `${r.label}: ${r.exactExcerpt || ''}`).join('\n'),
       vocabulary: references.flatMap((r: any) => String(r.label || '').split(/\s+/)).filter(Boolean).slice(0, 3),
     } : undefined;
-    const content = await generateSession(profile, recentTopics, sessionAttemptLength, groundingInput);
+    const generationHistory = await getAuthoritativeGenerationHistory(userId);
+    const content = await generateSession(
+      profile,
+      generationHistory.recentTopics,
+      // Static governed content remains usable for provider-free grounding,
+      // but paid generation stays off wherever paired scoring is unavailable.
+      isGovernedClearSpeakScoringAvailable() ? generationHistory.sessionAttemptLength : 0,
+      groundingInput,
+    );
 
     if (grounding && snapshot && supabaseAdmin) {
       const canonical = canonicalJsonValue(content);
@@ -382,7 +486,10 @@ router.post('/generate', async (req: Request, res: Response) => {
     return res.json({ content });
   } catch (err: any) {
     console.error('[ClearSpeak] POST /generate error:', err);
-    return res.status(500).json({ error: err.message || 'Generation failed' });
+    if (err instanceof ClearSpeakPersistenceUnavailableError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    return res.status(500).json({ error: 'Generation failed' });
   }
 });
 
@@ -392,7 +499,7 @@ router.post('/generate', async (req: Request, res: Response) => {
 //   content        (JSON string of ClearSpeakSessionContent, required)
 //   retryAttempted (JSON boolean string, optional, default false)
 
-router.post('/score', upload.single('audio'), async (req: Request, res: Response) => {
+router.post('/score', scoreLimiter, upload.single('audio'), async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.uid;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -407,26 +514,38 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
       return res.status(400).json({ error: 'content field is required' });
     }
 
+    if (!isGovernedClearSpeakScoringAvailable()) {
+      return res.status(503).json({
+        error: CLEAR_SPEAK_SCORING_UNAVAILABLE_MESSAGE,
+        code: 'SERVICE_UNAVAILABLE',
+      });
+    }
+
+    // Parse and validate all client-controlled fields before consuming quota.
+    let submittedContent: unknown;
+    try {
+      submittedContent = JSON.parse(req.body.content);
+    } catch {
+      return res.status(400).json({ error: 'content must be valid JSON' });
+    }
+    const contentResult = ClearSpeakSessionContentSchema.safeParse(submittedContent);
+    if (!contentResult.success) {
+      return res.status(422).json({ error: 'content does not match the ClearSpeak session contract' });
+    }
+    let content = contentResult.data;
+
     const bridgeSessionId = req.body.bridgeSessionId as string | undefined;
     const snapshotId = req.body.snapshotId as string | undefined;
     if ((bridgeSessionId && !snapshotId) || (!bridgeSessionId && snapshotId)) {
       return res.status(422).json({ error: 'Grounded ClearSpeak scoring requires both snapshotId and bridgeSessionId' });
     }
 
-    if (!bridgeSessionId) {
-      const usage = await consumeUsage(userId, 'clearspeak_session');
-      if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached' });
-    }
-
     const profile = await getProfileFromStore(userId);
     if (!profile) return res.status(400).json({ error: 'Profile not found. Complete onboarding.' });
 
-    // Parse JSON fields from multipart body
-    let content: any;
-    try {
-      content = JSON.parse(req.body.content);
-    } catch {
-      return res.status(400).json({ error: 'content must be valid JSON' });
+    if (!bridgeSessionId) {
+      const usage = await consumeUsage(userId, 'clearspeak_session');
+      if (!usage.allowed) return res.status(429).json({ error: "You have used today's free practice. Come back tomorrow or continue with saved work.", code: 'daily_limit_reached' });
     }
 
     let reservedArtifact: any = null;
@@ -451,22 +570,19 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
       content = reservedArtifact.content;
     }
 
-    const retryAttempted = req.body.retryAttempted === 'true' || req.body.retryAttempted === true;
-
     // Audio buffer lives in req.file.buffer (in-memory only)
-    let audioBuffer: Buffer = req.file.buffer;
+    const audioBuffer: Buffer = req.file.buffer;
 
     const ledger = await getOrCreateLedger(userId);
 
     let score;
     try {
-      score = await scoreSession({
+      score = ClearSpeakSessionScoreSchema.parse(await scoreSession({
         audioBuffer,
         content,
         userLevel: profile.level,
         hardWords: ledger.entries.filter(e => !e.resolved),
-        retryAttempted,
-      });
+      }));
     } catch (error) {
       if (reservedArtifact && supabaseAdmin) {
         await supabaseAdmin.from('clearspeak_generated_artifacts').update({ status: 'generated', reservation_token: null, scoring_lease_expires_at: null, updated_at: new Date().toISOString() })
@@ -475,10 +591,6 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
       }
       throw error;
     }
-
-    // Explicitly clear buffer reference — privacy policy (raw audio never persisted)
-    audioBuffer = Buffer.alloc(0);
-    (req.file as any).buffer = null;
 
     // Route-level low-confidence guard.
     // If both clarity AND composite are near zero, transcription almost certainly
@@ -491,8 +603,8 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
           .eq('reservation_token', reservedArtifact.reservationToken);
       }
       return res.status(422).json({
-        error: 'low_confidence_transcription',
-        message: "We couldn't clearly hear your recording. Please check your microphone and try again.",
+        error: "We couldn't clearly hear your recording. Please check your microphone and try again.",
+        code: 'low_confidence_transcription',
         score,
       });
     }
@@ -511,7 +623,14 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
         p_topic_tag: content.topicTag,
         p_practiced_words: Array.isArray(content.keyVocab) ? content.keyVocab : [],
       });
-      if (error || !data) return res.status(error?.message?.includes('already') ? 409 : 503).json({ error: error?.message || 'Grounded ClearSpeak session could not be created' });
+      if (error || !data) {
+        const alreadyConsumed = error?.message?.includes('already') === true;
+        return res.status(alreadyConsumed ? 409 : 503).json({
+          error: alreadyConsumed
+            ? 'Grounded ClearSpeak authority is missing, mismatched, or already consumed'
+            : 'Grounded ClearSpeak session could not be created',
+        });
+      }
       persistedSessionId = (data as any).sessionId;
       groundingReplayed = Boolean((data as any).replayed);
       canonicalGroundedTrigger = (data as any).response?.bridgeTrigger;
@@ -537,12 +656,26 @@ router.post('/score', upload.single('audio'), async (req: Request, res: Response
       : await recordSessionResult(userId, score, content.topicTag);
 
     // Evaluate bridge trigger against persisted data
-    const bridgeTrigger = canonicalGroundedTrigger ?? await evaluateBridgeTrigger(userId, score, content.bridgeReady);
+    // Ungrounded content is client-submitted and cannot authorize bridge
+    // readiness. Grounded readiness comes only from the canonical DB result.
+    const bridgeTrigger = canonicalGroundedTrigger ?? await evaluateBridgeTrigger(userId, score, false);
 
     return res.json({ score, progress: updatedProgress, bridgeTrigger, sessionId: persistedSessionId, groundingReplayed });
   } catch (err: any) {
     console.error('[ClearSpeak] POST /score error:', err);
-    return res.status(500).json({ error: err.message || 'Scoring failed' });
+    if (err instanceof ClearSpeakScoringUnavailableError) {
+      return res.status(err.status).json({
+        error: err.message,
+        code: err.code,
+      });
+    }
+    if (err instanceof ClearSpeakPersistenceUnavailableError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    return res.status(500).json({ error: 'Scoring failed' });
+  } finally {
+    wipeUploadedAudio(req);
+    if (req.file) (req.file as any).buffer = null;
   }
 }, handleMulterError);
 
@@ -557,7 +690,10 @@ router.get('/progress', async (req: Request, res: Response) => {
     return res.json({ progress });
   } catch (err: any) {
     console.error('[ClearSpeak] GET /progress error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to load progress' });
+    if (err instanceof ClearSpeakPersistenceUnavailableError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    return res.status(500).json({ error: 'Failed to load progress' });
   }
 });
 
@@ -696,18 +832,7 @@ router.post('/beta/feedback', betaFeedbackLimiter, async (req: Request, res: Res
 router.get('/beta/access', betaAccessLimiter, async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.uid;
-    if (!userId) return res.json({ enabled: false });
-
-    if (!supabaseAdmin) return res.json({ enabled: false });
-
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .select('clearspeak_beta_enabled')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (error || !data) return res.json({ enabled: false });
-    return res.json({ enabled: data.clearspeak_beta_enabled === true });
+    return res.json({ enabled: await userHasClearSpeakBetaAccess(userId) });
   } catch (err: any) {
     console.error('[ClearSpeak] GET /beta/access error:', err);
     // Fail-closed — beta hidden on any error

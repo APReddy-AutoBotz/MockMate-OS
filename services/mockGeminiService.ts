@@ -11,6 +11,8 @@ import {
   CalibrateResponse,
   InterviewSessionStartResponseSchema,
   InterviewSessionStartResponse,
+  InterviewSessionResumeSchema,
+  InterviewSessionResume,
   AnswerSubmissionResponseSchema,
   AnswerSubmissionResponse,
   AdaptiveAnswerSubmissionResponseSchema,
@@ -64,6 +66,10 @@ export const startInterviewSession = async (
   context: InterviewSessionContext
 ): Promise<InterviewSessionStartResponse> => {
   return apiClient.post('interview/sessions', InterviewSessionStartResponseSchema, { context });
+};
+
+export const getInterviewSession = async (sessionId: string): Promise<InterviewSessionResume> => {
+  return apiClient.get(`interview/sessions/${encodeURIComponent(sessionId)}`, InterviewSessionResumeSchema);
 };
 
 export const submitAdaptiveTurn = async (
@@ -154,6 +160,7 @@ export default {
   calibrateIntent,
   generateInterviewPlan,
   startInterviewSession,
+  getInterviewSession,
   submitAdaptiveTurn,
   submitAnswerAndGetNext,
   analyzeCode,

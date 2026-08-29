@@ -1,4 +1,5 @@
-import React, { useCallback, useMemo } from 'react';
+import * as React from 'react';
+import { useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { getSessionHistory } from '../services/storageService';
@@ -17,6 +18,7 @@ const ReadinessMap: Record<string, number> = {
 };
 
 const readinessCopy = (status: string) => status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+export const journalScoreLabel = (score: number | null) => score === null ? 'Not scored' : `${score} /100`;
 
 const GrowthDashboard: React.FC<GrowthDashboardProps> = React.memo(({ onBack, onViewReport }) => {
     const isMobile = useIsMobile();
@@ -87,7 +89,11 @@ const GrowthDashboard: React.FC<GrowthDashboardProps> = React.memo(({ onBack, on
                                         </div>
                                         <span className="text-[9px] font-bold uppercase text-brand-tint tracking-[0.1em] pl-4">Readiness</span>
                                     </div>
-                                    <div className="text-2xl font-bold text-brand-primary leading-none">{session.avgScore} <span className="text-[10px] text-brand-tint">/100</span></div>
+                                    <div className="text-2xl font-bold text-brand-primary leading-none">
+                                        {session.avgScore === null
+                                            ? <span className="text-base text-brand-tint">Not scored</span>
+                                            : <>{session.avgScore} <span className="text-[10px] text-brand-tint">/100</span></>}
+                                    </div>
                                 </div>
 
                                 <div className="flex items-center justify-between mt-6 pt-4 border-t border-white/5">

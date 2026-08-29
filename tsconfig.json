@@ -38,6 +38,8 @@
     "backend/**",
     "api",
     "api/**",
+    "netlify",
+    "netlify/**",
     "mobile",
     "mobile/**",
     "scripts",

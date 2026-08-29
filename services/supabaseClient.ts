@@ -33,19 +33,22 @@ const createMockUser = (email: string, pass: string) => ({
   user_metadata: { full_name: email.split('@')[0] }
 });
 
+const browserOrigin = () => {
+  if (typeof window === 'undefined') return undefined;
+  const origin = window.location?.origin;
+  return origin && /^https?:\/\//.test(origin) ? origin : undefined;
+};
+
 export const auth = {
   get currentUser() {
     if (isUsingMockAuth && devMockUser) {
       return devMockUser;
     }
-    // We do NOT return a cached Supabase user synchronously.
-    // Callers relying on synchronous currentUser should use onAuthStateChanged or getSession().
-    // We return null and let onAuthStateChanged push updates.
     return null;
   },
   onAuthStateChanged: (callback: (user: any) => void) => {
     subscribers.add(callback);
-    
+
     if (isUsingMockAuth) {
       callback(devMockUser);
       return () => subscribers.delete(callback);
@@ -65,7 +68,7 @@ export const auth = {
         subscribers.delete(callback);
       };
     }
-    
+
     return () => subscribers.delete(callback);
   },
 };
@@ -78,29 +81,37 @@ export const createUserWithEmailAndPassword = async (_authObj: any, email: strin
     }
     devMockUser = createMockUser(lowerEmail, pass);
     notify(devMockUser);
-    return { user: devMockUser };
+    return { user: devMockUser, session: { access_token: 'test-token' }, confirmationRequired: false };
   }
 
-  if (!supabase) throw new Error("Supabase is not configured.");
-  const { data, error } = await supabase.auth.signUp({ email: lowerEmail, password: pass });
+  if (!supabase) throw new Error('Supabase is not configured.');
+  const emailRedirectTo = browserOrigin();
+  const { data, error } = await supabase.auth.signUp({
+    email: lowerEmail,
+    password: pass,
+    ...(emailRedirectTo ? { options: { emailRedirectTo } } : {}),
+  });
   if (error) throw Object.assign(error, { code: error.status === 422 ? 'auth/weak-password' : 'auth/signup-failed' });
-  return { user: data.user };
+  return {
+    user: data.user,
+    session: data.session,
+    confirmationRequired: Boolean(data.user && !data.session),
+  };
 };
 
 export const signInWithEmailAndPassword = async (_authObj: any, email: string, pass: string) => {
   const lowerEmail = email.toLowerCase().trim();
   if (isUsingMockAuth) {
     if (devMockUser && devMockUser.email === lowerEmail && devMockUser.pass === pass) {
-       notify(devMockUser);
-       return { user: devMockUser };
+      notify(devMockUser);
+      return { user: devMockUser };
     }
-    // Automatically create if not found in mock mode to simulate a simple login
     devMockUser = createMockUser(lowerEmail, pass);
     notify(devMockUser);
     return { user: devMockUser };
   }
 
-  if (!supabase) throw new Error("Supabase is not configured.");
+  if (!supabase) throw new Error('Supabase is not configured.');
   const { data, error } = await supabase.auth.signInWithPassword({ email: lowerEmail, password: pass });
   if (error) throw Object.assign(error, { code: 'auth/invalid-credential' });
   return { user: data.user };
@@ -110,10 +121,11 @@ export const signInWithGoogle = async () => {
   if (isUsingMockAuth) {
     throw Object.assign(new Error('Google sign-in is unavailable in practice mode'), { code: 'mock/google-disabled' });
   }
-  if (!supabase) throw new Error("Supabase is not configured.");
+  if (!supabase) throw new Error('Supabase is not configured.');
+  const redirectTo = browserOrigin();
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.origin },
+    options: redirectTo ? { redirectTo } : undefined,
   });
   if (error) throw Object.assign(error, { code: 'auth/google-failed' });
 };
@@ -125,7 +137,8 @@ export const signOut = async (_authObj?: any) => {
     return;
   }
   if (supabase) {
-    await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut();
+    if (error) throw Object.assign(error, { code: 'auth/signout-failed' });
   }
 };
 

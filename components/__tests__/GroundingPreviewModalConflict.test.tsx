@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import GroundingPreviewModal from '../GroundingPreviewModal';
 
@@ -46,5 +46,56 @@ describe('GroundingPreviewModal conflict authority', () => {
       'one_time',
       { 'resume.target_role': winner.id },
     );
+  });
+
+  it('focuses the first control and traps reverse tab navigation', () => {
+    render(<GroundingPreviewModal
+      purpose="resume_to_interview"
+      items={[contextItem('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Platform Engineer')] as any}
+      conflicts={[]}
+      onConfirm={jest.fn()}
+      onSkip={jest.fn()}
+      onClose={jest.fn()}
+    />);
+
+    const close = screen.getByRole('button', { name: 'Close context selection' });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(screen.getByRole('button', { name: /continue with selected context/i })).toHaveFocus();
+  });
+
+  it('locks close, skip, Escape, and duplicate confirmation while submitting', async () => {
+    let resolveSubmission!: () => void;
+    const pendingSubmission = new Promise<void>(resolve => { resolveSubmission = resolve; });
+    const onConfirm = jest.fn(() => pendingSubmission);
+    const onClose = jest.fn();
+    const onSkip = jest.fn();
+    render(<GroundingPreviewModal
+      purpose="resume_to_interview"
+      items={[contextItem('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Platform Engineer')] as any}
+      conflicts={[]}
+      onConfirm={onConfirm}
+      onSkip={onSkip}
+      onClose={onClose}
+    />);
+
+    const confirm = screen.getByRole('button', { name: /continue with selected context/i });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    fireEvent.click(screen.getByRole('button', { name: /continue without saved context/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close context selection/i }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onSkip).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent(/temporarily locked/i);
+
+    await act(async () => {
+      resolveSubmission();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByRole('status')).toBeEmptyDOMElement());
   });
 });

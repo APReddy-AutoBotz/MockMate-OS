@@ -301,7 +301,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted, onOpenPr
                             <span className="font-mono text-6xl md:text-8xl font-bold text-brand-primary tracking-tighter">
                                 84%
                             </span>
-                            <div className="text-[9px] uppercase tracking-widest text-brand-tint/40 mt-2 font-mono">
+                            <div className="text-[9px] uppercase tracking-widest text-brand-tint/80 mt-2 font-mono">
                                 READINESS INDEX // PASS
                             </div>
                             <span className="mt-1 text-[10px] font-medium text-brand-primary/80">Ready to Apply</span>
@@ -470,7 +470,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted, onOpenPr
                             </button>
                         </div>
 
-                        <p className="text-[10px] text-brand-tint/40 tracking-wider font-mono">
+                        <p className="text-[10px] text-brand-tint/80 tracking-wider font-mono">
                             NO CREDIT CARD // PRIVATE WORKSPACE
                         </p>
                     </div>
@@ -480,7 +480,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted, onOpenPr
             {/* FOOTER */}
             <footer className="z-10 w-full max-w-7xl border-t border-white/5 py-8 px-6 text-center md:px-12">
                 <div className="flex flex-col items-center justify-between gap-4 sm:flex-row">
-                    <span className="text-[9px] font-mono uppercase tracking-[0.1em] text-brand-tint/40">
+                    <span className="text-[9px] font-mono uppercase tracking-[0.1em] text-brand-tint/80">
                         © 2026 MOCKMATE. ALL RIGHTS RESERVED.
                     </span>
                     <div className="flex items-center gap-5">
