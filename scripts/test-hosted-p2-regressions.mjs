@@ -10,6 +10,8 @@ const clearSpeakOnboarding = read('../components/clearspeak/ClearSpeakOnboarding
 const careerContext = read('../components/CareerContextPanel.tsx');
 const contextPreview = read('../components/GroundingPreviewModal.tsx');
 const uploadSetup = read('../components/resume/UploadSetupScreen.tsx');
+const rewriteEditor = read('../components/resume/RewriteEditorScreen.tsx');
+const careerContextService = read('../services/careerContextService.ts');
 const sessionControls = read('../components/SessionControlsEditor.tsx');
 const sessionPrep = read('../components/SessionPrep.tsx');
 const sessionBuilder = read('../components/SessionBuilder.tsx');
@@ -27,6 +29,7 @@ assert.match(uploadSetup, /aria-label="Choose resume file"/, 'the resume file in
 assert.match(uploadSetup, /type="button" onClick=\{openFilePicker\}/, 'resume browsing must expose a keyboard-operable native button');
 assert.match(uploadSetup, /aria-label="Remove selected resume"/, 'the icon-only resume removal control must have an accessible name');
 assert.doesNotMatch(uploadSetup, /document\.getElementById\('file-input'\)/, 'resume browsing must not depend on a mouse-only clickable container');
+assert.doesNotMatch(`${uploadSetup}\n${rewriteEditor}\n${careerContextService}`, /apiClient\.(?:get|post|put|delete)\(\s*[`'"]\/api\//, 'apiClient callers must not duplicate the configured /api base path');
 
 for (const [source, requiredLabel] of [
   [onboarding, 'htmlFor="onboarding-target-role"'],

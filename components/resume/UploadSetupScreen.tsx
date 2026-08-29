@@ -80,8 +80,8 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
         const formData = new FormData();
         formData.append('resume', file);
         try {
-            const parsed = await apiClient.post('/api/resume/parse', ResumeParseResponseSchema, formData);
-            const score = await apiClient.post('/api/resume/score', GovernedResumeScoreResponseSchema, {
+            const parsed = await apiClient.post('resume/parse', ResumeParseResponseSchema, formData);
+            const score = await apiClient.post('resume/score', GovernedResumeScoreResponseSchema, {
                 resumeData: parsed.resumeData,
                 rawText: parsed.rawText,
                 jdText,
@@ -109,7 +109,7 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
                 education,
                 projects: [],
             };
-            const score = await apiClient.post('/api/resume/score', GovernedResumeScoreResponseSchema, {
+            const score = await apiClient.post('resume/score', GovernedResumeScoreResponseSchema, {
                 resumeData: builtData,
                 rawText: '',
                 jdText,

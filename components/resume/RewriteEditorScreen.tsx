@@ -67,7 +67,7 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
         setSuggestionError('');
         try {
             const result = await apiClient.post(
-                '/api/resume/suggest',
+                'resume/suggest',
                 GovernedResumeSuggestionResponseSchema,
                 { resumeData: data, jdText },
             );

@@ -17,12 +17,12 @@ import {
 } from 'mockmate-shared';
 
 export async function fetchCareerContext(): Promise<CareerContextGetResponse> {
-  return apiClient.get('/api/career-context', CareerContextGetResponseSchema);
+  return apiClient.get('career-context', CareerContextGetResponseSchema);
 }
 
 export async function rebuildCareerContext(): Promise<CareerContextRebuildResponse> {
   return apiClient.post(
-    '/api/career-context/rebuild',
+    'career-context/rebuild',
     CareerContextRebuildResponseSchema,
     {}
   );
@@ -33,7 +33,7 @@ export async function setPersonalizationPreference(
   expectedContextVersion?: number
 ): Promise<CareerContextPreferenceResponse> {
   return apiClient.post(
-    '/api/career-context/preference',
+    'career-context/preference',
     CareerContextPreferenceResponseSchema,
     { personalizationEnabled, expectedContextVersion }
   );
@@ -46,7 +46,7 @@ export async function applyItemDecision(
   replacementValue?: string
 ): Promise<CareerContextItemDecisionResponse> {
   return apiClient.post(
-    `/api/career-context/items/${itemId}/decision`,
+    `career-context/items/${itemId}/decision`,
     CareerContextItemDecisionResponseSchema,
     { decision, expectedContextVersion, replacementValue }
   );
@@ -56,7 +56,7 @@ export async function createGroundingSnapshot(
   request: GroundingSnapshotCreateRequest
 ): Promise<GroundingSnapshotCreateResponse> {
   return apiClient.post(
-    '/api/career-context/snapshots',
+    'career-context/snapshots',
     GroundingSnapshotCreateResponseSchema,
     request
   );
@@ -66,7 +66,7 @@ export async function createModuleBridge(
   request: ModuleBridgeCreateRequest
 ): Promise<ModuleBridgeCreateResponse> {
   return apiClient.post(
-    '/api/career-context/bridges',
+    'career-context/bridges',
     ModuleBridgeCreateResponseSchema,
     request
   );
