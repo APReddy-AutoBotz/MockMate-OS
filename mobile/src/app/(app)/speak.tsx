@@ -2,13 +2,21 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Audio } from 'expo-av';
+import {
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+  useAudioPlayer,
+  useAudioPlayerStatus,
+  useAudioRecorder,
+} from 'expo-audio';
 import { z } from 'zod';
 import {
   AccentProfileV1Schema,
@@ -107,7 +115,16 @@ type PendingAttempt = {
   metadata: Record<string, unknown>;
 };
 
+type RecordingPreview = {
+  uri: string;
+  durationMs: number;
+};
+
 type CancelOutcome = 'none' | 'cancelled' | 'committed' | 'missing' | 'failed';
+
+const RECORDING_UPLOAD = Platform.OS === 'web'
+  ? { name: 'recording.webm', type: 'audio/webm' }
+  : { name: 'recording.m4a', type: 'audio/mp4' };
 
 const DIMENSIONS = [
   ['intelligibility', 'Intelligibility'],
@@ -158,13 +175,16 @@ function resultLabel(score: AccentScore): string {
     if (score.evidenceProvenance === 'synthetic_fixture_scored' || score.fixture) {
       return 'Synthetic fixture — test evidence only';
     }
-    return 'Scorer unavailable — recording saved as unscored';
+    return 'No reliable score was created';
   }
-  if (score.evidenceProvenance === 'user_recording_scored') return 'Evidence-scored recording';
-  return 'Evaluated recording — evidence insufficient for scoring';
+  if (score.evidenceProvenance === 'user_recording_scored') return 'Evidence-backed feedback';
+  return 'No reliable score was created';
 }
 
 export default function SpeakScreen() {
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const previewPlayer = useAudioPlayer(null);
+  const previewStatus = useAudioPlayerStatus(previewPlayer);
   const [profiles, setProfiles] = useState<AccentProfileV1[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<AccentProfileV1['profileId']>('en-GB-general-v1');
   const [mode, setMode] = useState<PracticeMode>('sentence_reading');
@@ -173,8 +193,8 @@ export default function SpeakScreen() {
   const [realSpeechScoringAvailable, setRealSpeechScoringAvailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [consented, setConsented] = useState(false);
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
-  const recordingRef = useRef<Audio.Recording | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [recordingPreview, setRecordingPreview] = useState<RecordingPreview | null>(null);
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -194,6 +214,33 @@ export default function SpeakScreen() {
     resultRef.current = score;
     setResult(score);
   }, []);
+
+  const stopPreviewPlayback = useCallback(async () => {
+    previewPlayer.pause();
+    await previewPlayer.seekTo(0).catch(() => undefined);
+  }, [previewPlayer]);
+
+  const playRecordingPreview = useCallback(async () => {
+    if (!recordingPreview) return;
+    await stopPreviewPlayback();
+    try {
+      previewPlayer.play();
+    } catch (error: any) {
+      setErrorText(error?.message || 'Could not play this recording.');
+    }
+  }, [previewPlayer, recordingPreview, stopPreviewPlayback]);
+
+  const discardRecordingPreview = useCallback(async () => {
+    await stopPreviewPlayback();
+    setRecordingPreview(null);
+    setSeconds(0);
+    setErrorText('');
+  }, [stopPreviewPlayback]);
+
+  useEffect(() => {
+    previewPlayer.pause();
+    previewPlayer.replace(recordingPreview ? { uri: recordingPreview.uri } : null);
+  }, [previewPlayer, recordingPreview]);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -364,17 +411,14 @@ export default function SpeakScreen() {
   }, [authorizePendingAttempt, loadHistory, recoverCommittedAttempt, setGovernedResult]);
 
   useEffect(() => () => {
-    const active = recordingRef.current;
-    if (active) {
-      void active.stopAndUnloadAsync().catch(() => undefined);
-      recordingRef.current = null;
-    }
+    if (audioRecorder.isRecording) void audioRecorder.stop().catch(() => undefined);
+    previewPlayer.pause();
     if (pendingAttemptRef.current && !resultRef.current) void cancelPendingAuthority(true);
-  }, [cancelPendingAuthority]);
+  }, [audioRecorder, cancelPendingAuthority, previewPlayer]);
 
   const blockSettingChangeIfBusy = (): boolean => {
-    if (recording || isSubmitting) {
-      Alert.alert('Attempt in progress', 'Finish the current recording or submission before changing the target or practice mode.');
+    if (recording || recordingPreview || isSubmitting) {
+      Alert.alert('Recording in progress', 'Finish or discard the current recording before changing the target or practice mode.');
       return true;
     }
     if (pendingAttemptRef.current) {
@@ -397,7 +441,7 @@ export default function SpeakScreen() {
   const askForConsent = () => {
     Alert.alert(
       'Microphone consent',
-      'Your recording is uploaded only for this governed practice attempt. MockMate does not persist raw audio; only derived results and bounded metadata are retained.',
+      'Your recording stays on this device for listen-back. If reliable scoring is available and you choose Check recording, it is uploaded for that check; MockMate does not persist raw audio.',
       [
         { text: 'Not now', style: 'cancel' },
         { text: 'I consent', onPress: () => setConsented(true) },
@@ -416,17 +460,16 @@ export default function SpeakScreen() {
       return;
     }
     try {
-      const permission = await Audio.requestPermissionsAsync();
-      if (permission.status !== 'granted') {
+      await discardRecordingPreview();
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
+      if (!permission.granted) {
         Alert.alert('Microphone permission required', 'Allow microphone access to record this practice attempt.');
         return;
       }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording: nextRecording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
-      recordingRef.current = nextRecording;
-      setRecording(nextRecording);
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
+      setRecording(true);
       setRecordingStartedAt(Date.now());
       setSeconds(0);
       setErrorText('');
@@ -465,8 +508,8 @@ export default function SpeakScreen() {
       const formData = new FormData();
       formData.append('audio', {
         uri: pending.uri,
-        name: 'recording.m4a',
-        type: 'audio/mp4',
+        name: RECORDING_UPLOAD.name,
+        type: RECORDING_UPLOAD.type,
       } as any);
       formData.append('metadata', JSON.stringify({
         ...pending.metadata,
@@ -519,22 +562,30 @@ export default function SpeakScreen() {
   }, [buildSelector, processPendingAttempt]);
 
   const handleStopRecording = useCallback(async () => {
-    const active = recordingRef.current ?? recording;
-    if (!active || !prompt) return;
+    if (!recording || !prompt) return;
     const startedAt = recordingStartedAt ?? Date.now();
-    recordingRef.current = null;
-    setRecording(null);
+    setRecording(false);
     setRecordingStartedAt(null);
     try {
-      await active.stopAndUnloadAsync();
-      const uri = active.getURI();
+      await audioRecorder.stop();
+      const uri = audioRecorder.uri;
       const durationMs = Math.max(250, Math.min(prompt.maxDurationMs, Date.now() - startedAt));
       if (!uri) throw new Error('Recording file is unavailable.');
-      await issueAuthorityAndSubmit(uri, durationMs);
+      setRecordingPreview({ uri, durationMs });
     } catch (error: any) {
-      setErrorText(error?.message || 'Could not finish the governed recording attempt.');
+      setErrorText(error?.message || 'Could not finish this recording.');
+    } finally {
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => undefined);
     }
-  }, [issueAuthorityAndSubmit, prompt, recording, recordingStartedAt]);
+  }, [audioRecorder, prompt, recording, recordingStartedAt]);
+
+  const checkRecordingPreview = useCallback(async () => {
+    if (!recordingPreview || !realSpeechScoringAvailable) return;
+    const preview = recordingPreview;
+    await stopPreviewPlayback();
+    setRecordingPreview(null);
+    await issueAuthorityAndSubmit(preview.uri, preview.durationMs);
+  }, [issueAuthorityAndSubmit, realSpeechScoringAvailable, recordingPreview, stopPreviewPlayback]);
 
   useEffect(() => {
     if (!recording) return undefined;
@@ -579,16 +630,16 @@ export default function SpeakScreen() {
     return (
       <View style={styles.centerContainer}>
         <ActivityIndicator size="large" color="#d4af37" />
-        <Text style={styles.muted}>Loading governed accent practice…</Text>
+        <Text style={styles.muted}>Loading speaking practice…</Text>
       </View>
     );
   }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.scrollContainer}>
-      <Text style={styles.title}>ClearSpeak Accent Practice</Text>
+      <Text style={styles.title}>ClearSpeak practice</Text>
       <Text style={styles.subtitle}>
-        Choose a learner-controlled UK or US reference target. Feedback is about speaking evidence, not nationality, identity, native-ness, or employability.
+        Choose a UK or US reference style, record yourself, and listen back. This is communication practice, not a measure of identity, nationality, or employability.
       </Text>
 
       <View style={styles.card}>
@@ -599,7 +650,7 @@ export default function SpeakScreen() {
               key={profile.profileId}
               style={[styles.choice, selectedProfileId === profile.profileId && styles.choiceActive]}
               onPress={() => chooseProfile(profile.profileId)}
-              disabled={Boolean(recording) || isSubmitting || hasPendingAttempt}
+              disabled={Boolean(recording) || Boolean(recordingPreview) || isSubmitting || hasPendingAttempt}
             >
               <Text style={selectedProfileId === profile.profileId ? styles.choiceTextActive : styles.choiceText}>
                 {profile.displayName}
@@ -614,7 +665,7 @@ export default function SpeakScreen() {
               key={item}
               style={[styles.choice, mode === item && styles.choiceActive]}
               onPress={() => chooseMode(item)}
-              disabled={Boolean(recording) || isSubmitting || hasPendingAttempt}
+              disabled={Boolean(recording) || Boolean(recordingPreview) || isSubmitting || hasPendingAttempt}
             >
               <Text style={mode === item ? styles.choiceTextActive : styles.choiceText}>
                 {item.replace(/_/g, ' ')}
@@ -633,11 +684,11 @@ export default function SpeakScreen() {
       )}
 
       <View style={styles.noticeCard}>
-        <Text style={styles.noticeTitle}>{realSpeechScoringAvailable ? 'Authorized scorer available' : 'Real-speech scorer not authorized yet'}</Text>
+        <Text style={styles.noticeTitle}>{realSpeechScoringAvailable ? 'Speech feedback available' : 'Record and listen back'}</Text>
         <Text style={styles.muted}>
           {realSpeechScoringAvailable
-            ? 'Only validated evidence-backed dimensions will receive scores.'
-            : 'Your recording can still complete the governed lifecycle, but ordinary user audio will truthfully return No score rather than a synthetic estimate.'}
+            ? 'Check a recording when you want feedback. Only dimensions supported by reliable evidence receive scores.'
+            : 'Automatic scoring is unavailable right now. Your recording stays on this device for listen-back and MockMate will not invent a score.'}
         </Text>
       </View>
 
@@ -651,7 +702,31 @@ export default function SpeakScreen() {
         <View style={styles.centerBlock}>
           <Text style={styles.timer}>{seconds}s</Text>
           <TouchableOpacity style={styles.stopButton} onPress={() => void handleStopRecording()}>
-            <Text style={styles.stopButtonText}>Stop & submit</Text>
+            <Text style={styles.stopButtonText}>Stop recording</Text>
+          </TouchableOpacity>
+        </View>
+      ) : recordingPreview ? (
+        <View style={styles.previewCard}>
+          <Text style={styles.resultTitle}>Listen to your recording</Text>
+          <Text style={styles.muted}>
+            Notice one thing that felt clear and one thing you want to try again.
+          </Text>
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={() => void (previewStatus.playing ? stopPreviewPlayback() : playRecordingPreview())}
+          >
+            <Text style={styles.secondaryButtonText}>{previewStatus.playing ? 'Stop playback' : 'Play recording'}</Text>
+          </TouchableOpacity>
+          {realSpeechScoringAvailable && (
+            <TouchableOpacity style={styles.primaryButton} onPress={() => void checkRecordingPreview()}>
+              <Text style={styles.primaryButtonText}>Check recording</Text>
+            </TouchableOpacity>
+          )}
+          {!realSpeechScoringAvailable && (
+            <Text style={styles.localOnlyText}>No upload is needed for listen-back practice.</Text>
+          )}
+          <TouchableOpacity style={styles.cancelButton} onPress={() => void discardRecordingPreview()}>
+            <Text style={styles.cancelButtonText}>Discard and try again</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -660,14 +735,14 @@ export default function SpeakScreen() {
           disabled={!prompt || isSubmitting || hasPendingAttempt}
           onPress={() => void handleStartRecording()}
         >
-          <Text style={styles.primaryButtonText}>Record governed attempt</Text>
+          <Text style={styles.primaryButtonText}>Start recording</Text>
         </TouchableOpacity>
       )}
 
       {isSubmitting && (
         <View style={styles.centerBlock}>
           <ActivityIndicator size="large" color="#d4af37" />
-          <Text style={styles.muted}>Validating authoritative attempt state…</Text>
+          <Text style={styles.muted}>Checking your recording…</Text>
         </View>
       )}
 
@@ -723,9 +798,9 @@ export default function SpeakScreen() {
       )}
 
       <View style={styles.card}>
-        <Text style={styles.resultTitle}>Recent derived results</Text>
+        <Text style={styles.resultTitle}>Recent feedback checks</Text>
         {history.length === 0 ? (
-          <Text style={styles.muted}>No governed accent attempts saved yet.</Text>
+          <Text style={styles.muted}>No checked recordings saved yet.</Text>
         ) : history.map((item) => (
           <View key={item.attempt_id} style={styles.historyItem}>
             <View style={{ flex: 1 }}>
@@ -750,6 +825,7 @@ const styles = StyleSheet.create({
   subtitle: { color: '#94a3b8', fontSize: 14, lineHeight: 21, marginTop: 8, marginBottom: 20 },
   card: { backgroundColor: '#1a233d', borderRadius: 18, padding: 18, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
   promptCard: { backgroundColor: '#111c36', borderRadius: 18, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(212,175,55,0.25)' },
+  previewCard: { backgroundColor: '#111c36', borderRadius: 18, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(212,175,55,0.25)' },
   noticeCard: { backgroundColor: 'rgba(59,130,246,0.08)', borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(59,130,246,0.18)' },
   noticeTitle: { color: '#ffffff', fontWeight: '700', marginBottom: 6 },
   sectionLabel: { color: '#94a3b8', fontSize: 11, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 10 },
@@ -765,6 +841,7 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: '#0b1329', fontSize: 14, fontWeight: '800' },
   secondaryButton: { borderRadius: 12, borderWidth: 1, borderColor: 'rgba(212,175,55,0.35)', paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center', marginBottom: 14 },
   secondaryButtonText: { color: '#d4af37', fontSize: 13, fontWeight: '700' },
+  localOnlyText: { color: '#94a3b8', fontSize: 12, lineHeight: 18, marginBottom: 14, textAlign: 'center' },
   cancelButton: { borderRadius: 12, borderWidth: 1, borderColor: 'rgba(248,113,113,0.45)', paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center' },
   cancelButtonText: { color: '#f87171', fontSize: 13, fontWeight: '700' },
   disabled: { opacity: 0.45 },

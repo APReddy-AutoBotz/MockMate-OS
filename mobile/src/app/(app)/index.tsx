@@ -183,66 +183,71 @@ export default function DashboardScreen() {
           </View>
         )}
 
-        <Text style={styles.sectionTitle}>Your practice home</Text>
+        <Text style={styles.sectionTitle}>Choose a practice area</Text>
+        <Text style={styles.sectionIntro}>ClearSpeak is included with every signed-in account.</Text>
 
         <View style={styles.cardsContainer}>
           <TouchableOpacity
-            style={[styles.card, { borderColor: 'rgba(212,175,55,0.15)' }]}
-            onPress={() => router.push('/(app)/interview')}
+            style={[styles.card, { borderColor: 'rgba(59,130,246,0.18)' }]}
+            onPress={() => router.push('/(app)/resume')}
+          >
+            <View style={styles.cardHeader}>
+              <View style={[styles.badgeContainer, { backgroundColor: 'rgba(59,130,246,0.1)' }]}>
+                <Text style={[styles.badgeText, { color: '#60a5fa' }]}>RESUME</Text>
+              </View>
+              <Text style={styles.cardTitle}>Resume builder</Text>
+            </View>
+            <Text style={styles.cardDesc}>
+              Build or upload a resume, review ATS diagnostics, and compare it with a job description.
+            </Text>
+            <View style={styles.actionRow}>
+              <Text style={[styles.actionText, { color: '#60a5fa' }]}>Prepare your resume</Text>
+              <Text style={[styles.actionArrow, { color: '#60a5fa' }]}>→</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.card, { borderColor: 'rgba(212,175,55,0.2)' }]}
+            onPress={() => router.push('/(app)/speak')}
           >
             <View style={styles.cardHeader}>
               <View style={styles.badgeContainer}>
-                <Text style={styles.badgeText}>POPULAR</Text>
+                <Text style={styles.badgeText}>INCLUDED</Text>
               </View>
-              <Text style={styles.cardTitle}>Interview practice</Text>
+              <Text style={styles.cardTitle}>ClearSpeak</Text>
             </View>
             <Text style={styles.cardDesc}>
-              Practice role-based questions with the server-authoritative adaptive interview engine. Career Context can be added explicitly during setup.
+              Choose a UK or US reference style, record yourself, and listen back. MockMate shows a score only when reliable speech evidence is available.
             </Text>
             <View style={styles.actionRow}>
-              <Text style={styles.actionText}>Start interview practice</Text>
+              <Text style={styles.actionText}>Open speaking practice</Text>
               <Text style={styles.actionArrow}>→</Text>
             </View>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.card, { borderColor: 'rgba(16,185,129,0.15)' }]}
-            onPress={() => router.push('/(app)/speak')}
+            style={[styles.card, { borderColor: 'rgba(16,185,129,0.18)' }]}
+            onPress={() => router.push('/(app)/interview')}
           >
             <View style={styles.cardHeader}>
               <View style={[styles.badgeContainer, { backgroundColor: 'rgba(16,185,129,0.1)' }]}>
-                <Text style={[styles.badgeText, { color: '#10b981' }]}>VOICE</Text>
+                <Text style={[styles.badgeText, { color: '#34d399' }]}>INTERVIEW</Text>
               </View>
-              <Text style={styles.cardTitle}>ClearSpeak Coach</Text>
+              <Text style={styles.cardTitle}>Mock interviews</Text>
             </View>
             <Text style={styles.cardDesc}>
-              Practice spoken English with governed UK/US reference targets and evidence-labelled feedback.
+              Practice role-based questions that adapt to your answers. Add Career Context only when you choose.
             </Text>
             <View style={styles.actionRow}>
-              <Text style={[styles.actionText, { color: '#10b981' }]}>Open speaking practice</Text>
-              <Text style={[styles.actionArrow, { color: '#10b981' }]}>→</Text>
+              <Text style={[styles.actionText, { color: '#34d399' }]}>Start interview practice</Text>
+              <Text style={[styles.actionArrow, { color: '#34d399' }]}>→</Text>
             </View>
           </TouchableOpacity>
+        </View>
 
-          <TouchableOpacity
-            style={[styles.card, { borderColor: 'rgba(59,130,246,0.15)' }]}
-            onPress={() => router.push('/(app)/resume')}
-          >
-            <View style={styles.cardHeader}>
-              <View style={[styles.badgeContainer, { backgroundColor: 'rgba(59,130,246,0.1)' }]}>
-                <Text style={[styles.badgeText, { color: '#3b82f6' }]}>ATS</Text>
-              </View>
-              <Text style={styles.cardTitle}>ATS Resume Review</Text>
-            </View>
-            <Text style={styles.cardDesc}>
-              Upload your resume for governed ATS diagnostics and evidence-grounded job-description matching.
-            </Text>
-            <View style={styles.actionRow}>
-              <Text style={[styles.actionText, { color: '#3b82f6' }]}>Review resume</Text>
-              <Text style={[styles.actionArrow, { color: '#3b82f6' }]}>→</Text>
-            </View>
-          </TouchableOpacity>
+        <Text style={styles.supportTitle}>Your workspace</Text>
 
+        <View style={styles.cardsContainer}>
           <TouchableOpacity
             style={[styles.card, { borderColor: 'rgba(168,85,247,0.15)' }]}
             onPress={() => router.push('/(app)/career-context')}
@@ -254,7 +259,7 @@ export default function DashboardScreen() {
               <Text style={styles.cardTitle}>Career Context</Text>
             </View>
             <Text style={styles.cardDesc}>
-              Review the career facts MockMate may reuse. Confirm or reject pending facts and control personalization explicitly.
+              Review and confirm the career facts MockMate may reuse for personalization.
             </Text>
             <View style={styles.actionRow}>
               <Text style={[styles.actionText, { color: '#c084fc' }]}>Manage Career Context</Text>
@@ -369,6 +374,20 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     marginBottom: 16,
     letterSpacing: 0.5,
+  },
+  sectionIntro: {
+    color: '#94a3b8',
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: 18,
+    marginTop: -8,
+  },
+  supportTitle: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 16,
+    marginTop: 30,
   },
   cardsContainer: {
     gap: 16,

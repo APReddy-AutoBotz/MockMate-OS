@@ -1,59 +1,50 @@
-import { UserProfile } from "../types/ui";
-import React from 'react';
+import type { UserProfile } from '../types/ui';
+import { useState, type FC, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, BookOpen, FileText, Mic, Trash2, Users } from 'lucide-react';
-;
 
 interface HubProps {
     userProfile: UserProfile | null;
-    betaEnabled: boolean;
     onNavigate: (module: 'RESUME' | 'SPEAK' | 'INTERVIEW') => void;
     onViewHistory: () => void;
     onOpenCareerContext: () => void;
     onDeleteData: () => Promise<{ cleanupWarning?: string }>;
 }
 
-const ToolCard: React.FC<{
-    icon: React.ReactNode;
+const ToolCard: FC<{
+    icon: ReactNode;
     title: string;
     description: string;
     action: string;
-    badge?: string;
-    delay: number;
     onClick: () => void;
-}> = ({ icon, title, description, action, badge, onClick }) => (
+}> = ({ icon, title, description, action, onClick }) => (
     <motion.button
         onClick={onClick}
         initial={false}
-        className="group relative flex min-h-[220px] w-full flex-col justify-between overflow-hidden rounded-[22px] border border-brand-tint/15 bg-white/[0.035] p-6 text-left shadow-[0_22px_60px_-32px_rgba(0,0,0,0.75)] transition-all duration-300 hover:-translate-y-1 hover:border-brand-primary/30 hover:bg-white/[0.055] md:min-h-[300px] md:rounded-[24px] md:p-9"
+        className="group flex min-h-[210px] w-full flex-col justify-between border-b border-white/10 p-6 text-left transition-colors hover:bg-white/[0.045] focus-visible:z-10 md:min-h-[250px] md:border-b-0 md:border-r md:p-8 last:border-b-0 md:last:border-r-0"
     >
         <div>
-            <div className="mb-5 flex items-start justify-between md:mb-7">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-brand-primary/25 bg-brand-primary/10 text-brand-primary transition-all group-hover:bg-brand-primary group-hover:text-brand-dark">
+            <div className="mb-6 flex items-start justify-between">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full border border-brand-primary/25 bg-brand-primary/10 text-brand-primary transition-colors group-hover:bg-brand-primary group-hover:text-brand-dark">
                     {icon}
                 </div>
-                {badge && (
-                    <span className="rounded-full border border-brand-primary/30 bg-brand-primary/10 px-3 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-brand-primary">
-                        {badge}
-                    </span>
-                )}
             </div>
-            <h3 className="mb-3 text-xl font-medium tracking-tight text-white md:mb-4 md:text-2xl">{title}</h3>
+            <h3 className="mb-3 text-xl font-semibold tracking-tight text-white md:text-2xl">{title}</h3>
             <p className="text-sm leading-relaxed text-brand-tint">{description}</p>
         </div>
 
-        <div className="mt-10 flex items-center text-[11px] font-bold uppercase tracking-[0.12em] text-brand-primary">
-            <span className="transition-all group-hover:mr-3">{action}</span>
-            <ArrowRight className="h-4 w-4 opacity-0 transition-all group-hover:translate-x-0 group-hover:opacity-100" />
+        <div className="mt-8 flex items-center gap-2 text-sm font-semibold text-brand-primary">
+            <span>{action}</span>
+            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
         </div>
     </motion.button>
 );
 
-export const Hub: React.FC<HubProps> = ({ userProfile, betaEnabled, onNavigate, onViewHistory, onOpenCareerContext, onDeleteData }) => {
-    const [confirmDelete, setConfirmDelete] = React.useState(false);
-    const [isDeleting, setIsDeleting] = React.useState(false);
-    const [deleteError, setDeleteError] = React.useState('');
-    const [deleteSuccess, setDeleteSuccess] = React.useState('');
+export const Hub: FC<HubProps> = ({ userProfile, onNavigate, onViewHistory, onOpenCareerContext, onDeleteData }) => {
+    const [confirmDelete, setConfirmDelete] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [deleteError, setDeleteError] = useState('');
+    const [deleteSuccess, setDeleteSuccess] = useState('');
 
     const handleDelete = async () => {
         if (!confirmDelete) {
@@ -98,33 +89,28 @@ export const Hub: React.FC<HubProps> = ({ userProfile, betaEnabled, onNavigate, 
                 </motion.div>
             </header>
 
-            <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6 lg:gap-8 ${betaEnabled ? 'lg:grid-cols-3' : 'lg:grid-cols-2'}`}>
+            <div className="grid grid-cols-1 overflow-hidden rounded-[24px] border border-brand-tint/15 bg-white/[0.025] shadow-[0_24px_70px_-40px_rgba(0,0,0,0.8)] md:grid-cols-3">
                 <ToolCard
                     icon={<FileText className="h-6 w-6" />}
                     title="Resume builder"
                     description="Build an ATS-friendly resume with guided support and simple wording."
                     action="Start resume"
-                    delay={0.1}
                     onClick={() => onNavigate('RESUME')}
                 />
 
-                {betaEnabled && (
-                    <ToolCard
-                        icon={<Mic className="h-6 w-6" />}
-                        title="Speaking coach"
-                        description="Practice spoken English for interviews and get transcript- and timing-based feedback."
-                        action="Start speaking"
-                        delay={0.2}
-                        onClick={() => onNavigate('SPEAK')}
-                    />
-                )}
+                <ToolCard
+                    icon={<Mic className="h-6 w-6" />}
+                    title="ClearSpeak"
+                    description="Record and listen back in private. Evidence-backed feedback appears only when reliable scoring is available."
+                    action="Open speaking practice"
+                    onClick={() => onNavigate('SPEAK')}
+                />
 
                 <ToolCard
                     icon={<Users className="h-6 w-6" />}
                     title="Mock interview"
                     description="Practice real interview questions and learn how to improve your answers."
                     action="Start interview practice"
-                    delay={0.3}
                     onClick={() => onNavigate('INTERVIEW')}
                 />
             </div>

@@ -30,7 +30,7 @@ import { fetchCareerContext, createGroundingSnapshot, createModuleBridge } from 
 import { CareerContextItem, GroundingPurpose, CareerContextModule, CareerContextSnapshot, ModuleBridgeSession, GroundingConflict } from 'mockmate-shared';
 import SystemStatus from './components/SystemStatus';
 import type { ClearSpeakBridgePayload } from './components/clearspeak/types';
-import { checkBetaAccess, getCapabilities } from './services/clearSpeakService';
+import { getCapabilities } from './services/clearSpeakService';
 import { saveSessionToHistory } from './services/storageService';
 import { audioService } from './services/audioService';
 import { auth, signOut } from './services/supabaseClient';
@@ -64,7 +64,6 @@ const App: React.FC = () => {
     const [finalReport, setFinalReport] = useState<FinalReport | null>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [setupDraft, setSetupDraft] = useState<InterviewSetupDraft | null>(null);
-    const [betaEnabled, setBetaEnabled] = useState(false);
     const [clearSpeakStandardSessionAvailable, setClearSpeakStandardSessionAvailable] = useState(false);
     const [clearSpeakCommitInFlight, setClearSpeakCommitInFlight] = useState(false);
     const [authActionError, setAuthActionError] = useState('');
@@ -100,7 +99,6 @@ const App: React.FC = () => {
         setPendingGroundingLaunch(null);
         setClearSpeakGrounding(null);
         setClearSpeakCommitInFlight(false);
-        setBetaEnabled(false);
         setClearSpeakStandardSessionAvailable(false);
     }, []);
 
@@ -139,18 +137,14 @@ const App: React.FC = () => {
                     setAuthActionError('');
                 }
 
-                const enabled = await checkBetaAccess();
                 let standardSessionAvailable = false;
-                if (enabled) {
-                    try {
-                        standardSessionAvailable = (await getCapabilities()).standardSessionScoringAvailable;
-                    } catch {
-                        // A grounded Resume -> ClearSpeak handoff must fail closed
-                        // unless the server explicitly advertises scored delivery.
-                    }
+                try {
+                    standardSessionAvailable = (await getCapabilities()).standardSessionScoringAvailable;
+                } catch {
+                    // ClearSpeak stays visible, while scored delivery and grounded
+                    // Resume handoffs fail closed unless the server advertises them.
                 }
                 if (!active || !authContextIsCurrent(userId, epoch)) return;
-                setBetaEnabled(enabled);
                 setClearSpeakStandardSessionAvailable(standardSessionAvailable);
                 const requestedAction = new URLSearchParams(window.location.search).get('action');
                 const storedProfile = ownerBinding === 'storage_unavailable' ? null : readLocalUserProfile();
@@ -197,7 +191,7 @@ const App: React.FC = () => {
                         }
                     }
                     if (requestedAction === 'interview') setAppState('ROLE_SELECTION');
-                    else if (requestedAction === 'speaking' && enabled) setAppState('CLEARSPEAK');
+                    else if (requestedAction === 'speaking') setAppState('CLEARSPEAK');
                     else if (requestedAction === 'resume') setAppState('RESUME_BUILDER');
                     else setAppState('HUB');
                 } else {
@@ -382,7 +376,6 @@ const App: React.FC = () => {
     }
 
     const toggleClearSpeak = () => {
-        if (!betaEnabled) return;
         if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
         if (appState === 'CLEARSPEAK') {
@@ -405,7 +398,7 @@ const App: React.FC = () => {
     const handleHubNavigate = (module: 'RESUME' | 'SPEAK' | 'INTERVIEW') => {
         audioService.playConfirm();
         if (module === 'RESUME') setAppState('RESUME_BUILDER');
-        if (module === 'SPEAK' && betaEnabled) setAppState('CLEARSPEAK');
+        if (module === 'SPEAK') setAppState('CLEARSPEAK');
         if (module === 'INTERVIEW') setAppState('ROLE_SELECTION');
     };
 
@@ -572,8 +565,8 @@ const App: React.FC = () => {
     };
 
     const handleResumeSpeakBridge = (_summary: string) => {
-        if (!betaEnabled || !clearSpeakStandardSessionAvailable) {
-            setAuthActionError('Grounded speaking practice is not available in this preview. Your resume was not shared and no practice bridge was created.');
+        if (!clearSpeakStandardSessionAvailable) {
+            setAuthActionError('Scored speaking practice is not available right now. Your resume was not shared and no practice bridge was created. You can still use record-and-listen practice from ClearSpeak.');
             return;
         }
         triggerGroundedLaunch(
@@ -650,7 +643,7 @@ const App: React.FC = () => {
             return;
         }
         if (tabId === 'speak') {
-            if (betaEnabled) setAppState('CLEARSPEAK');
+            setAppState('CLEARSPEAK');
             return;
         }
         if (tabId === 'interview') {
@@ -707,7 +700,6 @@ const App: React.FC = () => {
                         <ErrorBoundary>
                             <Hub
                                 userProfile={userProfile}
-                                 betaEnabled={betaEnabled}
                                 onNavigate={handleHubNavigate}
                                 onViewHistory={toggleHistory}
                                 onOpenCareerContext={() => setAppState('CAREER_CONTEXT')}
@@ -813,15 +805,6 @@ const App: React.FC = () => {
                     </motion.div>
                 );
             case 'CLEARSPEAK':
-                if (!betaEnabled) {
-                    return (
-                        <div className="mx-auto flex min-h-[45dvh] max-w-lg flex-col items-center justify-center gap-5 text-center">
-                            <h1 className="text-3xl font-semibold text-white">Speaking coach is not enabled</h1>
-                            <p className="text-brand-tint">This controlled beta is available only to approved tester accounts.</p>
-                            <button type="button" onClick={() => setAppState('HUB')} className="rounded-xl bg-brand-primary px-6 py-3 font-bold text-brand-dark">Back to practice home</button>
-                        </div>
-                    );
-                }
                 return (
                     <motion.div key="clearspeak" {...pageAnimation} className="w-full max-w-2xl px-0 sm:px-4">
                         <ErrorBoundary>
@@ -847,7 +830,7 @@ const App: React.FC = () => {
                             <ResumeBuilderFlow
                                 onSpeakBridge={handleResumeSpeakBridge}
                                 onInterviewBridge={handleResumeInterviewBridge}
-                                speakingPracticeAvailable={betaEnabled && clearSpeakStandardSessionAvailable}
+                                speakingPracticeAvailable={clearSpeakStandardSessionAvailable}
                             />
                         </ErrorBoundary>
                     </motion.div>
@@ -889,19 +872,17 @@ const App: React.FC = () => {
                                         {/* Nav links hidden on HUB — the cards themselves are the navigation */}
                                         {appState !== 'HUB' && (
                                             <>
-                                                {betaEnabled && (
-                                                    <button
-                                                        id="nav-speak"
-                                                        onClick={toggleClearSpeak}
-                                                        className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
-                                                            appState === 'CLEARSPEAK'
-                                                                ? 'text-brand-primary'
-                                                                : 'text-white/70 hover:text-white'
-                                                        }`}
-                                                    >
-                                                        Speak
-                                                    </button>
-                                                )}
+                                                <button
+                                                    id="nav-speak"
+                                                    onClick={toggleClearSpeak}
+                                                    className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
+                                                        appState === 'CLEARSPEAK'
+                                                            ? 'text-brand-primary'
+                                                            : 'text-white/70 hover:text-white'
+                                                    }`}
+                                                >
+                                                    Speak
+                                                </button>
                                                 <button
                                                     onClick={toggleResumeBuilder}
                                                     className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
@@ -955,8 +936,8 @@ const App: React.FC = () => {
                             )}
                             {showMobileTabs && (
                                 <nav className="fixed bottom-0 left-0 z-40 w-full border-t border-white/10 bg-brand-dark/95 px-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-2 shadow-[0_-20px_50px_rgba(0,0,0,0.4)] backdrop-blur-2xl lg:hidden" aria-label="Primary">
-                                    <div className={`mx-auto grid max-w-md gap-1 ${betaEnabled ? 'grid-cols-5' : 'grid-cols-4'}`}>
-                                        {MOBILE_TABS.filter(tab => betaEnabled || tab.id !== 'speak').map((tab) => {
+                                    <div className="mx-auto grid max-w-md grid-cols-5 gap-1">
+                                        {MOBILE_TABS.map((tab) => {
                                             const Icon = tab.icon;
                                             const isActive = activeMobileTab === tab.id;
                                             return (

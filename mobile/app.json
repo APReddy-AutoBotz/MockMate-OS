@@ -43,11 +43,19 @@
       ],
       "expo-secure-store",
       [
-        "expo-av",
+        "expo-audio",
         {
-          "microphonePermission": "Allow MockMate to access your microphone for speaking practice."
+          "microphonePermission": "Allow MockMate to access your microphone for speaking practice.",
+          "recordAudioAndroid": true,
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
         }
-      ]
+      ],
+      "expo-image",
+      "expo-web-browser",
+      "expo-font",
+      "expo-status-bar",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

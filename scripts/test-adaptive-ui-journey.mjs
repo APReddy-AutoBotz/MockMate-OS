@@ -405,7 +405,7 @@ try {
     loginAttempts++;
     await page.evaluate(() => {
       const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find(b => b.innerText.includes('Sign In') || b.innerText.includes('START FREE PRACTICE') || b.innerText.includes('Start Free'));
+      const target = btns.find(b => /sign in|start free practice|start free/i.test(b.innerText));
       if (target) target.click();
     });
     await page.waitForTimeout(500);
@@ -448,7 +448,8 @@ try {
 
   // Ensure Hub is rendered
   try {
-    await page.locator('h3', { hasText: 'Mock interview' }).first().waitFor({ state: 'attached', timeout: 20000 });
+    await page.getByRole('heading', { name: /welcome back/i }).waitFor({ state: 'visible', timeout: 20000 });
+    await page.getByRole('heading', { name: 'Mock interview', exact: true }).waitFor({ state: 'visible', timeout: 20000 });
   } catch (err) {
     const text = await page.evaluate(() => document.body.innerText).catch(() => 'UNABLE_TO_GET_BODY_TEXT');
     console.error('[Adaptive UI Journey Debug] Hub locator failed. Current body innerText:\n' + text);
@@ -464,7 +465,7 @@ try {
     attempts++;
     await page.evaluate(() => {
       const h3s = Array.from(document.querySelectorAll('h3'));
-      const mockH3 = h3s.find(h => h.innerText.includes('Mock interview'));
+      const mockH3 = h3s.find(h => h.innerText.trim() === 'Mock interview');
       if (mockH3) {
         const cardBtn = mockH3.closest('button');
         if (cardBtn) cardBtn.click();

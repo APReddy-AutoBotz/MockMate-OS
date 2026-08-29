@@ -145,7 +145,9 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
           Speak with confidence
         </h1>
         <p className="max-w-md text-sm font-normal leading-relaxed text-brand-tint sm:text-base">
-          Short daily passages with transcript-match, pace, and pause-timing feedback for interview practice.
+          {capabilities?.standardSessionScoringAvailable
+            ? 'Practice short passages with transcript-match, pace, and pause-timing feedback.'
+            : 'Choose a speaking prompt, record yourself, and listen back at your own pace.'}
         </p>
       </header>
 
@@ -161,24 +163,33 @@ const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBr
             ? `Your ${profile.practiceDuration}-minute session is ready. Practice a little each day and notice what gets easier.`
             : 'Practice spoken English in just 3 minutes. Short exercises, real progress.'}
         </p>
-        <button
-          id="cs-start-practice"
-          onClick={() => setView('session')}
-          disabled={!capabilities?.standardSessionScoringAvailable}
-          className="relative z-10 mt-2 w-full max-w-md rounded-2xl border-none bg-brand-primary py-5 text-[11px] font-bold uppercase tracking-[0.12em] text-brand-dark shadow-xl transition-all hover:bg-brand-primary/90 active:scale-95 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-brand-tint disabled:shadow-none"
-        >
-          {capabilities?.standardSessionScoringAvailable
-            ? "Start today's scored practice"
-            : 'Scored practice temporarily unavailable'}
-        </button>
-        {!capabilities?.standardSessionScoringAvailable && (
-          <p role="status" className="max-w-md text-sm leading-relaxed text-brand-tint">
-            Scored delivery practice is unavailable in this controlled preview. No quota or progress will be changed. You can still use reference-style practice below.
-          </p>
+        {capabilities?.standardSessionScoringAvailable ? (
+          <>
+            <button
+              id="cs-start-practice"
+              onClick={() => setView('session')}
+              className="relative z-10 mt-2 w-full max-w-md rounded-2xl border-none bg-brand-primary py-5 text-sm font-bold text-brand-dark shadow-xl transition-all hover:bg-brand-primary/90 active:scale-95"
+            >
+              Start today's scored practice
+            </button>
+            <button onClick={() => setView('accent')} className="w-full max-w-md rounded-xl border border-brand-primary/50 px-6 py-3 font-semibold text-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary">
+              Practice UK / US reference styles
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              id="cs-start-practice"
+              onClick={() => setView('accent')}
+              className="relative z-10 mt-2 w-full max-w-md rounded-2xl border-none bg-brand-primary py-5 text-sm font-bold text-brand-dark shadow-xl transition-all hover:bg-brand-primary/90 active:scale-95"
+            >
+              Start record-and-listen practice
+            </button>
+            <p role="status" className="max-w-md text-sm leading-relaxed text-brand-tint">
+              Automatic speech scoring is unavailable right now, so MockMate will not invent a score. Record-and-listen practice remains available.
+            </p>
+          </>
         )}
-        <button onClick={() => setView('accent')} className="w-full max-w-md rounded-xl border border-brand-primary/50 px-6 py-3 font-semibold text-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary">
-          Practice UK / US reference styles
-        </button>
         <p className="text-xs text-brand-tint">Your practice stays private.</p>
       </section>
 
