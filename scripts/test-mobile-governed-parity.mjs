@@ -111,7 +111,7 @@ requireText(speak, 'previewPlayer.play()', 'ClearSpeak local listen-back');
 requireText(speak, 'No upload is needed for listen-back practice.', 'ClearSpeak unscored practice truth');
 requireBefore(
   speak,
-  'setRecordingPreview({ uri, durationMs });',
+  'onPreview: setRecordingPreview,',
   'issueAuthorityAndSubmit(preview.uri, preview.durationMs);',
   'ClearSpeak local review before optional governed upload',
 );

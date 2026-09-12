@@ -102,7 +102,7 @@ export default function RootLayout() {
       if (!inOnboarding) {
         router.replace('/onboarding');
       }
-    } else if (inAuthGroup || inOnboarding || (segments as string[]).length === 0 || ((segments as string[]).length === 1 && segments[0] === 'index')) {
+    } else if (inAuthGroup || inOnboarding || (segments as string[]).length === 0) {
       router.replace('/(app)');
     }
   }, [user, loading, hasProfile, segments, profileLoaded, isolationError, router]);

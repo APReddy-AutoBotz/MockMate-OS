@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Platform,
   ScrollView,
   StyleSheet,
@@ -17,6 +18,7 @@ import {
   useAudioPlayerStatus,
   useAudioRecorder,
 } from 'expo-audio';
+import { useFocusEffect } from 'expo-router';
 import { z } from 'zod';
 import {
   AccentProfileV1Schema,
@@ -32,6 +34,12 @@ import {
   type AccentScoreV2,
 } from 'mockmate-shared/accent-evidence';
 import { apiClient, ApiError } from '../../services/apiClient';
+import {
+  appendRecordingAudio,
+  createRecordingSession,
+  type RecordingPhase,
+  type RecordingPreview,
+} from '../../services/recordingSession';
 
 const AccentScoreSchema = z.union([AccentScoreV1Schema, AccentScoreV2Schema]);
 type AccentScore = AccentScoreV1 | AccentScoreV2;
@@ -115,16 +123,7 @@ type PendingAttempt = {
   metadata: Record<string, unknown>;
 };
 
-type RecordingPreview = {
-  uri: string;
-  durationMs: number;
-};
-
 type CancelOutcome = 'none' | 'cancelled' | 'committed' | 'missing' | 'failed';
-
-const RECORDING_UPLOAD = Platform.OS === 'web'
-  ? { name: 'recording.webm', type: 'audio/webm' }
-  : { name: 'recording.m4a', type: 'audio/mp4' };
 
 const DIMENSIONS = [
   ['intelligibility', 'Intelligibility'],
@@ -193,9 +192,11 @@ export default function SpeakScreen() {
   const [realSpeechScoringAvailable, setRealSpeechScoringAvailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [consented, setConsented] = useState(false);
-  const [recording, setRecording] = useState(false);
+  const [reviewingConsent, setReviewingConsent] = useState(false);
+  const [recordingPhase, setRecordingPhase] = useState<RecordingPhase>('idle');
+  const recording = recordingPhase === 'recording';
+  const recordingBusy = recordingPhase !== 'idle';
   const [recordingPreview, setRecordingPreview] = useState<RecordingPreview | null>(null);
-  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [result, setResult] = useState<AccentScore | null>(null);
@@ -204,6 +205,9 @@ export default function SpeakScreen() {
   const [hasPendingAttempt, setHasPendingAttempt] = useState(false);
   const pendingAttemptRef = useRef<PendingAttempt | null>(null);
   const resultRef = useRef<AccentScore | null>(null);
+  const mountedRef = useRef(true);
+  const focusedRef = useRef(true);
+  const submissionInFlightRef = useRef(false);
 
   const selectedProfile = useMemo(
     () => profiles.find((item) => item.profileId === selectedProfileId) ?? null,
@@ -212,17 +216,38 @@ export default function SpeakScreen() {
 
   const setGovernedResult = useCallback((score: AccentScore | null) => {
     resultRef.current = score;
-    setResult(score);
+    if (mountedRef.current) setResult(score);
   }, []);
 
+  const recordingSession = useMemo(() => createRecordingSession({
+    recorder: audioRecorder,
+    requestPermission: () => AudioModule.requestRecordingPermissionsAsync(),
+    setRecordingMode: (enabled) => setAudioModeAsync({ allowsRecording: enabled, playsInSilentMode: true }),
+    onPhaseChange: setRecordingPhase,
+    onPreview: setRecordingPreview,
+    onError: setErrorText,
+  }), [audioRecorder]);
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    recordingSession.attach();
+    return () => {
+      mountedRef.current = false;
+      // The audio hooks release their own native objects during passive cleanup.
+      recordingSession.dispose();
+    };
+  }, [recordingSession]);
+
   const stopPreviewPlayback = useCallback(async () => {
+    if (!mountedRef.current) return;
     previewPlayer.pause();
-    await previewPlayer.seekTo(0).catch(() => undefined);
-  }, [previewPlayer]);
+    if (recordingPreview) await previewPlayer.seekTo(0).catch(() => undefined);
+  }, [previewPlayer, recordingPreview]);
 
   const playRecordingPreview = useCallback(async () => {
     if (!recordingPreview) return;
     await stopPreviewPlayback();
+    if (!mountedRef.current || !focusedRef.current) return;
     try {
       previewPlayer.play();
     } catch (error: any) {
@@ -232,6 +257,7 @@ export default function SpeakScreen() {
 
   const discardRecordingPreview = useCallback(async () => {
     await stopPreviewPlayback();
+    if (!mountedRef.current) return;
     setRecordingPreview(null);
     setSeconds(0);
     setErrorText('');
@@ -239,7 +265,7 @@ export default function SpeakScreen() {
 
   useEffect(() => {
     previewPlayer.pause();
-    previewPlayer.replace(recordingPreview ? { uri: recordingPreview.uri } : null);
+    if (recordingPreview) previewPlayer.replace({ uri: recordingPreview.uri });
   }, [previewPlayer, recordingPreview]);
 
   const loadHistory = useCallback(async () => {
@@ -411,13 +437,38 @@ export default function SpeakScreen() {
   }, [authorizePendingAttempt, loadHistory, recoverCommittedAttempt, setGovernedResult]);
 
   useEffect(() => () => {
-    if (audioRecorder.isRecording) void audioRecorder.stop().catch(() => undefined);
-    previewPlayer.pause();
     if (pendingAttemptRef.current && !resultRef.current) void cancelPendingAuthority(true);
-  }, [audioRecorder, cancelPendingAuthority, previewPlayer]);
+  }, [cancelPendingAuthority]);
+
+  useFocusEffect(useCallback(() => {
+    focusedRef.current = true;
+    recordingSession.resume();
+    return () => {
+      focusedRef.current = false;
+      // Blur can keep a stack screen mounted; unmount has already handed the
+      // native objects back to their hooks and must not access them here.
+      if (!mountedRef.current) return;
+      previewPlayer.pause();
+      void recordingSession.suspend();
+      if (pendingAttemptRef.current && !resultRef.current) void cancelPendingAuthority(false);
+    };
+  }, [cancelPendingAuthority, previewPlayer, recordingSession]));
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (!mountedRef.current) return;
+      if (state === 'active' && focusedRef.current) {
+        recordingSession.resume();
+      } else if (state === 'background') {
+        previewPlayer.pause();
+        void recordingSession.suspend();
+      }
+    });
+    return () => subscription.remove();
+  }, [previewPlayer, recordingSession]);
 
   const blockSettingChangeIfBusy = (): boolean => {
-    if (recording || recordingPreview || isSubmitting) {
+    if (recordingBusy || recordingPreview || isSubmitting) {
       Alert.alert('Recording in progress', 'Finish or discard the current recording before changing the target or practice mode.');
       return true;
     }
@@ -439,18 +490,11 @@ export default function SpeakScreen() {
   };
 
   const askForConsent = () => {
-    Alert.alert(
-      'Microphone consent',
-      'Your recording stays on this device for listen-back. If reliable scoring is available and you choose Check recording, it is uploaded for that check; MockMate does not persist raw audio.',
-      [
-        { text: 'Not now', style: 'cancel' },
-        { text: 'I consent', onPress: () => setConsented(true) },
-      ],
-    );
+    setReviewingConsent(true);
   };
 
   const handleStartRecording = async () => {
-    if (!prompt) return;
+    if (!prompt || recordingBusy || !focusedRef.current) return;
     if (pendingAttemptRef.current) {
       Alert.alert('Pending governed attempt', 'Recover, retry, or cancel the pending attempt before recording again.');
       return;
@@ -459,24 +503,12 @@ export default function SpeakScreen() {
       askForConsent();
       return;
     }
-    try {
-      await discardRecordingPreview();
-      const permission = await AudioModule.requestRecordingPermissionsAsync();
-      if (!permission.granted) {
-        Alert.alert('Microphone permission required', 'Allow microphone access to record this practice attempt.');
-        return;
-      }
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-      await audioRecorder.prepareToRecordAsync();
-      audioRecorder.record();
-      setRecording(true);
-      setRecordingStartedAt(Date.now());
-      setSeconds(0);
-      setErrorText('');
-      setGovernedResult(null);
-    } catch (error: any) {
-      Alert.alert('Recording unavailable', error?.message || 'Could not start microphone recording.');
-    }
+    previewPlayer.pause();
+    setRecordingPreview(null);
+    setSeconds(0);
+    setErrorText('');
+    setGovernedResult(null);
+    await recordingSession.start(prompt.maxDurationMs);
   };
 
   const buildSelector = useCallback((attemptId: string, durationMs: number) => {
@@ -496,6 +528,8 @@ export default function SpeakScreen() {
   }, [prompt, scoringPolicyVersion]);
 
   const processPendingAttempt = useCallback(async (original: PendingAttempt) => {
+    if (submissionInFlightRef.current) return;
+    submissionInFlightRef.current = true;
     setIsSubmitting(true);
     setErrorText('');
     let pending = original;
@@ -505,12 +539,17 @@ export default function SpeakScreen() {
       if (capabilityNeedsRotation(pending)) pending = await authorizePendingAttempt(pending);
       if (!pending.capability) throw new Error('Submission capability is unavailable.');
 
+      if (!mountedRef.current || !focusedRef.current) {
+        await cancelPendingAuthority(!mountedRef.current);
+        return;
+      }
+
       const formData = new FormData();
-      formData.append('audio', {
-        uri: pending.uri,
-        name: RECORDING_UPLOAD.name,
-        type: RECORDING_UPLOAD.type,
-      } as any);
+      await appendRecordingAudio(formData, pending.uri, Platform.OS === 'web');
+      if (!mountedRef.current || !focusedRef.current) {
+        await cancelPendingAuthority(!mountedRef.current);
+        return;
+      }
       formData.append('metadata', JSON.stringify({
         ...pending.metadata,
         submissionCapability: pending.capability,
@@ -540,11 +579,13 @@ export default function SpeakScreen() {
         );
       }
     } finally {
-      setIsSubmitting(false);
+      submissionInFlightRef.current = false;
+      if (mountedRef.current) setIsSubmitting(false);
     }
-  }, [authorizePendingAttempt, loadHistory, recoverCommittedAttempt, setGovernedResult]);
+  }, [authorizePendingAttempt, cancelPendingAuthority, loadHistory, recoverCommittedAttempt, setGovernedResult]);
 
   const issueAuthorityAndSubmit = useCallback(async (uri: string, durationMs: number) => {
+    if (pendingAttemptRef.current || submissionInFlightRef.current) return;
     const attemptId = createUuidV4();
     const selector = buildSelector(attemptId, durationMs);
     // Persist local recovery identity before authority issuance. If the authority
@@ -561,43 +602,25 @@ export default function SpeakScreen() {
     await processPendingAttempt(pending);
   }, [buildSelector, processPendingAttempt]);
 
-  const handleStopRecording = useCallback(async () => {
-    if (!recording || !prompt) return;
-    const startedAt = recordingStartedAt ?? Date.now();
-    setRecording(false);
-    setRecordingStartedAt(null);
-    try {
-      await audioRecorder.stop();
-      const uri = audioRecorder.uri;
-      const durationMs = Math.max(250, Math.min(prompt.maxDurationMs, Date.now() - startedAt));
-      if (!uri) throw new Error('Recording file is unavailable.');
-      setRecordingPreview({ uri, durationMs });
-    } catch (error: any) {
-      setErrorText(error?.message || 'Could not finish this recording.');
-    } finally {
-      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => undefined);
-    }
-  }, [audioRecorder, prompt, recording, recordingStartedAt]);
+  const handleStopRecording = useCallback(() => recordingSession.stop(), [recordingSession]);
 
   const checkRecordingPreview = useCallback(async () => {
-    if (!recordingPreview || !realSpeechScoringAvailable) return;
+    if (!recordingPreview || !realSpeechScoringAvailable || pendingAttemptRef.current || submissionInFlightRef.current) return;
     const preview = recordingPreview;
-    await stopPreviewPlayback();
+    previewPlayer.pause();
     setRecordingPreview(null);
     await issueAuthorityAndSubmit(preview.uri, preview.durationMs);
-  }, [issueAuthorityAndSubmit, realSpeechScoringAvailable, recordingPreview, stopPreviewPlayback]);
+  }, [issueAuthorityAndSubmit, previewPlayer, realSpeechScoringAvailable, recordingPreview]);
 
   useEffect(() => {
     if (!recording) return undefined;
     const timer = setInterval(() => {
-      setSeconds((current) => {
-        const next = current + 1;
-        if (prompt && next * 1000 >= prompt.maxDurationMs) void handleStopRecording();
-        return next;
-      });
-    }, 1000);
+      const elapsedMs = recordingSession.durationMs();
+      setSeconds(Math.floor(elapsedMs / 1000));
+      if (prompt && elapsedMs >= prompt.maxDurationMs) void handleStopRecording();
+    }, 250);
     return () => clearInterval(timer);
-  }, [handleStopRecording, prompt, recording]);
+  }, [handleStopRecording, prompt, recording, recordingSession]);
 
   const retryPending = async () => {
     const pending = pendingAttemptRef.current;
@@ -650,7 +673,7 @@ export default function SpeakScreen() {
               key={profile.profileId}
               style={[styles.choice, selectedProfileId === profile.profileId && styles.choiceActive]}
               onPress={() => chooseProfile(profile.profileId)}
-              disabled={Boolean(recording) || Boolean(recordingPreview) || isSubmitting || hasPendingAttempt}
+              disabled={recordingBusy || Boolean(recordingPreview) || isSubmitting || hasPendingAttempt}
             >
               <Text style={selectedProfileId === profile.profileId ? styles.choiceTextActive : styles.choiceText}>
                 {profile.displayName}
@@ -665,7 +688,7 @@ export default function SpeakScreen() {
               key={item}
               style={[styles.choice, mode === item && styles.choiceActive]}
               onPress={() => chooseMode(item)}
-              disabled={Boolean(recording) || Boolean(recordingPreview) || isSubmitting || hasPendingAttempt}
+              disabled={recordingBusy || Boolean(recordingPreview) || isSubmitting || hasPendingAttempt}
             >
               <Text style={mode === item ? styles.choiceTextActive : styles.choiceText}>
                 {item.replace(/_/g, ' ')}
@@ -692,10 +715,25 @@ export default function SpeakScreen() {
         </Text>
       </View>
 
-      {!consented && (
+      {!consented && !reviewingConsent && (
         <TouchableOpacity style={styles.secondaryButton} onPress={askForConsent}>
           <Text style={styles.secondaryButtonText}>Review microphone consent</Text>
         </TouchableOpacity>
+      )}
+
+      {!consented && reviewingConsent && (
+        <View style={styles.noticeCard}>
+          <Text style={styles.noticeTitle}>Microphone consent</Text>
+          <Text style={styles.muted}>
+            Your recording stays on this device for listen-back. If reliable scoring is available and you choose Check recording, it is uploaded for that check; MockMate does not persist raw audio.
+          </Text>
+          <TouchableOpacity style={styles.secondaryButton} onPress={() => { setConsented(true); setReviewingConsent(false); }}>
+            <Text style={styles.secondaryButtonText}>I consent</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.cancelButton} onPress={() => setReviewingConsent(false)}>
+            <Text style={styles.cancelButtonText}>Not now</Text>
+          </TouchableOpacity>
+        </View>
       )}
 
       {recording ? (
@@ -731,11 +769,11 @@ export default function SpeakScreen() {
         </View>
       ) : (
         <TouchableOpacity
-          style={[styles.primaryButton, (!prompt || isSubmitting || hasPendingAttempt) && styles.disabled]}
-          disabled={!prompt || isSubmitting || hasPendingAttempt}
+          style={[styles.primaryButton, (!prompt || recordingBusy || isSubmitting || hasPendingAttempt) && styles.disabled]}
+          disabled={!prompt || recordingBusy || isSubmitting || hasPendingAttempt}
           onPress={() => void handleStartRecording()}
         >
-          <Text style={styles.primaryButtonText}>Start recording</Text>
+          <Text style={styles.primaryButtonText}>{recordingBusy ? 'Preparing recording…' : 'Start recording'}</Text>
         </TouchableOpacity>
       )}
 
