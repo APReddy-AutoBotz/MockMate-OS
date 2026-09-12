@@ -1,12 +1,12 @@
 /**
  * components/clearspeak/BetaFeedback.tsx
- * Mockmate ClearSpeak — lightweight beta feedback widget.
+ * Mockmate ClearSpeak — lightweight practice feedback widget.
  *
  * Shown after session_completed. Three yes/no questions only.
  * Feedback is sent fire-and-forget to /api/clearspeak/beta/feedback.
  * Not shown if user already submitted feedback for this session.
  *
- * Deferred (non-beta): richer open text, rating scale, sentiment tagging.
+ * Deferred: richer open text, rating scale, sentiment tagging.
  */
 
 import React, { useState } from 'react';
@@ -65,7 +65,7 @@ const BetaFeedback: React.FC<BetaFeedbackProps> = ({ sessionId, retryWasUsed, on
     <div id="cs-beta-feedback" className="mt-6 p-6 sm:p-8 bg-brand-dark/70 backdrop-blur-md border border-white/10 rounded-2xl shadow-xl flex flex-col gap-2">
       <div className="text-xs font-bold text-brand-primary uppercase tracking-widest opacity-80 mb-4 flex items-center gap-2">
         <div className="w-2 h-2 bg-brand-primary rounded-full animate-pulse"></div>
-        Beta Feedback · 3 quick questions
+        Practice feedback · 3 quick questions
       </div>
 
       {/* Q1 */}

@@ -161,15 +161,15 @@ try {
   page.on('pageerror', error => console.error('[ClearSpeak Browser PageError]', error));
 
   await enterHub(page);
-  console.log('[ClearSpeak UI Journey] Opening Speaking coach...');
-  const speakingHeading = page.getByRole('heading', { name: 'Speaking coach' });
+  console.log('[ClearSpeak UI Journey] Opening ClearSpeak...');
+  const speakingHeading = page.getByRole('heading', { name: 'ClearSpeak' });
   await speakingHeading.waitFor({ state: 'visible', timeout: 10000 });
   await speakingHeading.locator('xpath=ancestor::button[1]').click();
   await page.getByRole('heading', { name: /speak with confidence/i }).waitFor({ state: 'visible', timeout: 10000 });
   await page.getByText('Hard words practiced').waitFor({ state: 'visible' });
   await page.getByText('7', { exact: true }).waitFor({ state: 'visible' });
 
-  await page.getByRole('button', { name: /practice uk \/ us reference styles/i }).click();
+  await page.getByRole('button', { name: /start record-and-listen practice/i }).click();
   await page.getByRole('heading', { name: /reference-style speaking practice/i }).waitFor({ state: 'visible', timeout: 10000 });
   await page.getByText(/feedback scoring is unavailable right now/i).waitFor({ state: 'visible' });
   await page.getByText(/raw audio is never retained/i).waitFor({ state: 'visible' });
@@ -226,7 +226,7 @@ try {
   await mobilePage.getByRole('navigation', { name: 'Primary' }).waitFor({ state: 'visible', timeout: 10000 });
   await mobilePage.getByTestId('mobile-tab-speak').click();
   await mobilePage.getByRole('heading', { name: /speak with confidence/i }).waitFor({ state: 'visible', timeout: 10000 });
-  await mobilePage.getByRole('button', { name: /practice uk \/ us reference styles/i }).waitFor({ state: 'visible' });
+  await mobilePage.getByRole('button', { name: /start record-and-listen practice/i }).waitFor({ state: 'visible' });
   await mobile.close();
 
   console.log('[ClearSpeak UI Journey] ALL UK/US SPEAKING UI CHECKS PASSED.');

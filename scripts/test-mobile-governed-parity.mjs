@@ -104,7 +104,19 @@ requireText(speak, '/clearspeak/v1/accent/attempt-authority', 'ClearSpeak');
 requireText(speak, '/clearspeak/v1/accent/attempts', 'ClearSpeak');
 requireText(speak, 'AccentScoreV1Schema', 'ClearSpeak');
 requireText(speak, 'AccentScoreV2Schema', 'ClearSpeak');
+requireText(speak, 'recordingPreview', 'ClearSpeak local listen-back');
+requireText(speak, "from 'expo-audio'", 'ClearSpeak maintained native audio');
+requireText(speak, 'useAudioRecorder(RecordingPresets.HIGH_QUALITY)', 'ClearSpeak native recording');
+requireText(speak, 'previewPlayer.play()', 'ClearSpeak local listen-back');
+requireText(speak, 'No upload is needed for listen-back practice.', 'ClearSpeak unscored practice truth');
+requireBefore(
+  speak,
+  'onPreview: setRecordingPreview,',
+  'issueAuthorityAndSubmit(preview.uri, preview.durationMs);',
+  'ClearSpeak local review before optional governed upload',
+);
 rejectText(speak, '/clearspeak/score', 'ClearSpeak');
+rejectText(speak, "from 'expo-av'", 'ClearSpeak deprecated native audio');
 rejectText(speak, 'scoreResult.composite', 'ClearSpeak');
 rejectText(speak, 'scoreResult.clarity', 'ClearSpeak');
 

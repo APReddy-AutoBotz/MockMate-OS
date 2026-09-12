@@ -142,13 +142,3 @@ export async function submitBetaFeedback(payload: BetaFeedbackPayload): Promise<
     // Fire-and-forget
   }
 }
-
-export async function checkBetaAccess(): Promise<boolean> {
-  try {
-    const BetaAccessSchema = z.object({ enabled: z.boolean() }).strict();
-    const data = await apiClient.get('clearspeak/beta/access', BetaAccessSchema);
-    return data.enabled === true;
-  } catch {
-    return false;
-  }
-}

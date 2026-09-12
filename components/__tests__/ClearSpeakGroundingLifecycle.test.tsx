@@ -77,7 +77,7 @@ describe('Resume to ClearSpeak one-time grounding lifecycle', () => {
     expect(onGroundingConsumed).not.toHaveBeenCalled();
   });
 
-  it('disables scored practice without consuming quota while retaining reference-style practice', async () => {
+  it('offers record-and-listen practice without presenting an unavailable score action', async () => {
     (getCapabilities as jest.Mock).mockResolvedValue({
       standardSessionScoringAvailable: false,
       scoreEvidenceBasis: null,
@@ -86,10 +86,10 @@ describe('Resume to ClearSpeak one-time grounding lifecycle', () => {
 
     render(<ClearSpeakDashboard onInterviewBridge={jest.fn()} />);
 
-    const disabledAction = await screen.findByRole('button', { name: 'Scored practice temporarily unavailable' });
-    expect(disabledAction).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Practice UK / US reference styles' })).toBeEnabled();
-    expect(screen.getByText(/No quota or progress will be changed/i)).toBeInTheDocument();
+    const listenBackAction = await screen.findByRole('button', { name: 'Start record-and-listen practice' });
+    expect(listenBackAction).toBeEnabled();
+    expect(screen.queryByRole('button', { name: "Start today's scored practice" })).not.toBeInTheDocument();
+    expect(screen.getByText(/will not invent a score/i)).toBeInTheDocument();
   });
 
   it('shows a retryable load error instead of impersonating first-time onboarding', async () => {

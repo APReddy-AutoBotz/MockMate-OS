@@ -200,18 +200,10 @@ function handleMulterError(
   next(err);
 }
 
-// All ClearSpeak routes require auth
+// Every ClearSpeak surface is available to authenticated MockMate users.
+// Individual capabilities (for example, evidence-backed scoring) remain
+// server-authoritative and may truthfully report unavailable.
 router.use(verifyAuthToken);
-
-async function userHasClearSpeakBetaAccess(userId: string | undefined): Promise<boolean> {
-  if (!userId || !supabaseAdmin) return false;
-  const { data, error } = await supabaseAdmin
-    .from('profiles')
-    .select('clearspeak_beta_enabled')
-    .eq('user_id', userId)
-    .maybeSingle();
-  return !error && data?.clearspeak_beta_enabled === true;
-}
 
 async function getAuthoritativeGenerationHistory(userId: string): Promise<{
   recentTopics: string[];
@@ -238,20 +230,6 @@ async function getAuthoritativeGenerationHistory(userId: string): Promise<{
     sessionAttemptLength: Math.min(Math.max(count ?? data?.length ?? 0, 0), 5),
   };
 }
-
-// All product routes are allowlist-only in controlled previews. The access
-// probe itself must remain reachable so the UI can hide the module. There is no
-// environment-based bypass: authorization remains fail-closed in every runtime.
-router.use(async (req: Request, res: Response, next: NextFunction) => {
-  if (req.path === '/beta/access') return next();
-  try {
-    const enabled = await userHasClearSpeakBetaAccess((req as any).user?.uid);
-    if (!enabled) return res.status(403).json({ error: 'feature_not_available' });
-    return next();
-  } catch {
-    return res.status(403).json({ error: 'feature_not_available' });
-  }
-});
 
 // The client checks this before offering standard scored practice. Availability
 // is server-authoritative so missing provider configuration cannot fall through
@@ -704,7 +682,7 @@ router.get('/progress', async (req: Request, res: Response) => {
 //
 // POST /api/clearspeak/beta/event    — analytics event sink
 // POST /api/clearspeak/beta/feedback — tester feedback capture
-// GET  /api/clearspeak/beta/access   — beta feature flag check
+// GET  /api/clearspeak/beta/access   — legacy compatibility access probe
 
 /**
  * POST /api/clearspeak/beta/event
@@ -821,23 +799,11 @@ router.post('/beta/feedback', betaFeedbackLimiter, async (req: Request, res: Res
 
 /**
  * GET /api/clearspeak/beta/access
- * Checks whether the authenticated user is in the beta allowlist.
- *
- * A user is a beta tester if profiles.clearspeak_beta_enabled is true.
- *
- * To add a beta tester: set clearspeak_beta_enabled on the user's profile.
- *
- * Fail-closed: if the profile doesn't exist or the read fails, returns { enabled: false }.
+ * Legacy compatibility route for older clients. ClearSpeak is now included for
+ * every authenticated user, so access no longer depends on a profile flag.
  */
-router.get('/beta/access', betaAccessLimiter, async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user?.uid;
-    return res.json({ enabled: await userHasClearSpeakBetaAccess(userId) });
-  } catch (err: any) {
-    console.error('[ClearSpeak] GET /beta/access error:', err);
-    // Fail-closed — beta hidden on any error
-    return res.json({ enabled: false });
-  }
+router.get('/beta/access', betaAccessLimiter, (_req: Request, res: Response) => {
+  return res.json({ enabled: true });
 });
 
 export default router;
