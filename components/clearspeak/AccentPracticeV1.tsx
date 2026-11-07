@@ -143,6 +143,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
   const [submitting, setSubmitting] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
   const [promptRefresh, setPromptRefresh] = useState(0);
+  const [promptIndex, setPromptIndex] = useState(0);
   const [history, setHistory] = useState<HistoryAttempt[]>([]);
   const [historyError, setHistoryError] = useState('');
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -266,7 +267,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
     setScore(null);
     setPrompt(null);
     recorder.abortRecording();
-    apiClient.post('clearspeak/v1/accent/prompts', Prompt, { profileId, profileVersion: 1, mode }, { signal: controller.signal })
+    apiClient.post('clearspeak/v1/accent/prompts', Prompt, { profileId, profileVersion: 1, mode, promptIndex }, { signal: controller.signal })
       .then(result => {
         if (controller.signal.aborted || generation !== promptGeneration.current) return;
         setPrompt(result.prompt);
@@ -447,6 +448,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
   const chooseTarget = async (nextProfileId: string, nextMode: typeof mode) => {
     if (nextProfileId === profileId && nextMode === mode) return;
     if (!await settleCurrentAttempt()) return;
+    setPromptIndex(0);
     setProfileId(nextProfileId);
     setMode(nextMode);
   };
@@ -535,7 +537,19 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
 
       {prompt && (
         <section className="mt-6 rounded-2xl bg-white/5 p-5">
-          <h2 className="font-semibold">3. Read or respond</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-semibold">3. Read or respond</h2>
+            <button
+              type="button"
+              onClick={() => {
+                setPromptIndex(prev => prev + 1);
+                setPromptRefresh(val => val + 1);
+              }}
+              className="rounded-lg border border-brand-primary/40 bg-brand-primary/10 px-3 py-1.5 text-xs font-semibold text-brand-primary hover:bg-brand-primary/20 transition-colors"
+            >
+              Try another {mode === 'word' ? 'word' : mode === 'phrase' ? 'phrase' : mode === 'sentence_reading' ? 'sentence' : 'prompt'} ↻
+            </button>
+          </div>
           <p className="my-5 text-xl">{prompt.displayText}</p>
           <p className="text-xs text-brand-tint">{prompt.referenceLabel}</p>
           <p className="mt-2 text-xs">Recording stops automatically after {Math.ceil(prompt.maxDurationMs / 1000)} seconds.</p>

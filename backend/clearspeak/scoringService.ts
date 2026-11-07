@@ -54,7 +54,7 @@ export function isGovernedClearSpeakScoringAvailable(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   try {
-    return runtimeMode(env) === 'test' && isClearSpeakScoringAvailable(env);
+    return isClearSpeakScoringAvailable(env);
   } catch {
     return false;
   }

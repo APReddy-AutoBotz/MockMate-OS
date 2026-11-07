@@ -269,7 +269,7 @@ router.post('/v1/accent/prompts', (req, res) => {
     const profile = getAccentProfile(req.body?.profileId);
     if (!profile || (req.body?.profileVersion != null && req.body.profileVersion !== profile.profileVersion)) return res.status(409).json({ error: 'stale_or_unknown_profile' });
     if (!['word', 'phrase', 'sentence_reading', 'free_response'].includes(req.body?.mode)) return res.status(422).json({ error: 'unsupported_practice_mode' });
-    return res.json({ prompt: promptFor(profile, req.body.mode), scoringPolicyVersion: profile.scoringPolicyVersion, fixture: true });
+    return res.json({ prompt: promptFor(profile, req.body.mode, Number(req.body?.promptIndex) || 0), scoringPolicyVersion: profile.scoringPolicyVersion, fixture: true });
   } catch (error: any) { return res.status(422).json({ error: error.message }); }
 });
 

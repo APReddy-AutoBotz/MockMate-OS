@@ -13,6 +13,34 @@ import { supabaseAdmin } from '../supabaseAdmin';
 export const ACCENT_V1_MAX_BYTES = 5 * 1024 * 1024;
 export const ACCENT_V1_MIMES = new Set(['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg']);
 const label = 'Practice example — not a pronunciation benchmark.' as const;
+export const PROMPTS_POOL = {
+  word: [
+    { id: '10000000-0000-4000-a000-000000000001', text: 'collaboration' },
+    { id: '10000000-0000-4000-a000-000000000011', text: 'methodology' },
+    { id: '10000000-0000-4000-a000-000000000012', text: 'deliverables' },
+    { id: '10000000-0000-4000-a000-000000000013', text: 'infrastructure' },
+    { id: '10000000-0000-4000-a000-000000000014', text: 'stakeholders' },
+  ],
+  phrase: [
+    { id: '10000000-0000-4000-a000-000000000002', text: 'Could we review the next steps?' },
+    { id: '10000000-0000-4000-a000-000000000021', text: 'Let me walk you through the key findings.' },
+    { id: '10000000-0000-4000-a000-000000000022', text: 'Based on our current sprint velocity.' },
+    { id: '10000000-0000-4000-a000-000000000023', text: 'I recommend aligning on these requirements first.' },
+  ],
+  sentence_reading: [
+    { id: '10000000-0000-4000-a000-000000000003', text: 'The project team will share a clear update tomorrow morning.' },
+    { id: '10000000-0000-4000-a000-000000000031', text: 'We prioritized these critical user stories to meet the quarterly milestone.' },
+    { id: '10000000-0000-4000-a000-000000000032', text: 'Our automated testing pipeline caught the regression before deployment.' },
+    { id: '10000000-0000-4000-a000-000000000033', text: 'I collaborated closely with product managers to refine the business specifications.' },
+    { id: '10000000-0000-4000-a000-000000000034', text: 'We analyzed system performance metrics to identify potential throughput bottlenecks.' },
+  ],
+  free_response: [
+    { id: '10000000-0000-4000-a000-000000000004', text: 'Describe a recent challenge and how you approached it.' },
+    { id: '10000000-0000-4000-a000-000000000041', text: 'Walk me through a project where you had to manage conflicting stakeholder priorities.' },
+    { id: '10000000-0000-4000-a000-000000000042', text: 'Explain how you ensure high quality and clarity in your technical documentation.' },
+  ],
+} as const;
+
 const fixtures = {
   word: 'collaboration',
   phrase: 'Could we review the next steps?',
@@ -30,10 +58,14 @@ export type AccentAdapterDescriptor =
   | { status: 'unavailable'; adapterId: 'scoring-unavailable-v1' }
   | { status: 'authorized'; adapterId: string; adapterVersion: string };
 
-export function promptFor(profile: AccentProfileV1, mode: PracticeMode): PracticePromptV1 {
-  const displayText = fixtures[mode];
+export function promptFor(profile: AccentProfileV1, mode: PracticeMode, promptIndex = 0, specificPromptId?: string): PracticePromptV1 {
+  const pool = (PROMPTS_POOL as any)[mode] || PROMPTS_POOL.sentence_reading;
+  const item = (specificPromptId ? pool.find((p: any) => p.id === specificPromptId) : null)
+    || pool[Math.abs(promptIndex) % pool.length]
+    || pool[0];
+  const displayText = item.text;
   const canonical = JSON.stringify({ mode, profileId: profile.profileId, displayText, version: 1 });
-  return { contractVersion: 'practice-prompt.v1', promptId: ids[mode], promptVersion: 1, mode,
+  return { contractVersion: 'practice-prompt.v1', promptId: item.id, promptVersion: 1, mode,
     profileId: profile.profileId, profileVersion: profile.profileVersion, referenceSetVersion: profile.referenceSetVersion,
     displayText, ...(mode === 'free_response' ? {} : { expectedText: displayText }),
     maxDurationMs: mode === 'free_response' ? 120000 : 45000,
@@ -77,7 +109,7 @@ export function validatePromptSelector(input: any): PracticePromptV1 {
   const profile = getAccentProfile(input?.profileId);
   if (!profile || profile.profileVersion !== input?.profileVersion) throw new Error('stale_or_unknown_profile');
   if (!Object.prototype.hasOwnProperty.call(fixtures, input?.mode)) throw new Error('unsupported_practice_mode');
-  const prompt = promptFor(profile, input.mode);
+  const prompt = promptFor(profile, input.mode, 0, input.promptId);
   if (input.promptId !== prompt.promptId || input.promptVersion !== prompt.promptVersion || input.promptContentHash !== prompt.contentHash ||
       input.referenceSetVersion !== prompt.referenceSetVersion || input.scoringPolicyVersion !== profile.scoringPolicyVersion) {
     throw new Error('stale_or_mismatched_server_selector');
@@ -96,6 +128,7 @@ const allowedClientSelectorKeys = new Set([
   'promptContentHash',
   'referenceSetVersion',
   'scoringPolicyVersion',
+  'promptIndex',
 ]);
 export function rejectClientAuthority(body: any): void {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('client_authority_rejected');
