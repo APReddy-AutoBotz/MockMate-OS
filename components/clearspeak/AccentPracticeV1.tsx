@@ -6,6 +6,8 @@ import type { AccentScoreV2 } from 'mockmate-shared/accent-evidence';
 import { AccentScoreV2Schema } from 'mockmate-shared/accent-evidence';
 import { apiClient } from '../../services/apiClient';
 import { useAudioRecorder } from './useAudioRecorder';
+import { accentAudioService } from '../../services/accentAudioService';
+import { getPhoneticTip } from './accentTips';
 import {
   accentDimensionScoreLabel,
   accentHistoryEvidenceLabel,
@@ -151,6 +153,43 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const historyGeneration = useRef(0);
 
+  // Accent Workout Session State
+  const [sessionLength, setSessionLength] = useState<number>(5);
+  const [stepIndex, setStepIndex] = useState<number>(0);
+  const [workoutScores, setWorkoutScores] = useState<Array<{ promptText: string; score: AccentAttemptScore; step: number }>>([]);
+  const [workoutFinished, setWorkoutFinished] = useState<boolean>(false);
+  const [isPlayingRef, setIsPlayingRef] = useState<boolean>(false);
+
+  const phoneticTip = useMemo(() => {
+    return prompt ? getPhoneticTip(prompt.displayText, profileId) : null;
+  }, [prompt, profileId]);
+
+  const playReferenceAudio = async (slow = false) => {
+    if (!prompt) return;
+    setIsPlayingRef(true);
+    try {
+      const locale = profileId.includes('GB') ? 'en-GB' : 'en-US';
+      await accentAudioService.speak(prompt.displayText, {
+        locale,
+        rate: slow ? 0.75 : 0.95,
+        pitch: 1.0,
+      });
+    } catch (e) {
+      console.warn('Playback error', e);
+    } finally {
+      setIsPlayingRef(false);
+    }
+  };
+
+  const stopReferenceAudio = () => {
+    accentAudioService.stop();
+    setIsPlayingRef(false);
+  };
+
+  useEffect(() => () => {
+    accentAudioService.stop();
+  }, []);
+
   const clearAttemptIdentity = (id?: string | null, generation?: number | null) => {
     if (id != null && attemptId.current !== id) return;
     if (generation != null && attemptGeneration.current !== generation) return;
@@ -282,7 +321,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
       practiceGeneration.current++;
       void cancelSubmission(false, false);
     };
-  }, [profileId, mode, promptRefresh]);
+  }, [profileId, mode, promptIndex, promptRefresh]);
 
   useEffect(() => () => {
     promptController.current?.abort();
@@ -359,6 +398,10 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
           || practice !== practiceGeneration.current
           || attemptGeneration.current !== practice) return;
       setScore(result.score);
+      setWorkoutScores(prev => {
+        const filtered = prev.filter(p => p.step !== stepIndex);
+        return [...filtered, { promptText: prompt.displayText, score: result.score, step: stepIndex }];
+      });
       recorder.clearAudio();
       clearAttemptIdentity(attemptId.current, practice);
       void loadHistory();
@@ -404,6 +447,12 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
       if (generation !== practiceGeneration.current || attemptId.current !== id) return;
       if (outcome.status === 'committed' && outcome.result) {
         setScore(outcome.result);
+        if (prompt) {
+          setWorkoutScores(prev => {
+            const filtered = prev.filter(p => p.step !== stepIndex);
+            return [...filtered, { promptText: prompt.displayText, score: outcome.result!, step: stepIndex }];
+          });
+        }
         recorder.clearAudio();
         clearAttemptIdentity(id, attemptGeneration.current);
         setError('');
@@ -448,13 +497,34 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
   const chooseTarget = async (nextProfileId: string, nextMode: typeof mode) => {
     if (nextProfileId === profileId && nextMode === mode) return;
     if (!await settleCurrentAttempt()) return;
+    stopReferenceAudio();
     setPromptIndex(0);
+    setStepIndex(0);
+    setWorkoutScores([]);
+    setWorkoutFinished(false);
     setProfileId(nextProfileId);
     setMode(nextMode);
   };
 
+  const handleNextExercise = async () => {
+    if (!await settleCurrentAttempt()) return;
+    stopReferenceAudio();
+    if (stepIndex + 1 >= sessionLength) {
+      setWorkoutFinished(true);
+      return;
+    }
+    setStepIndex(prev => prev + 1);
+    setPromptIndex(prev => prev + 1);
+    setScore(null);
+    window.scrollTo({
+      top: 180,
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  };
+
   const beginRecording = async () => {
     if (!prompt || !await settleCurrentAttempt()) return;
+    stopReferenceAudio();
     practiceGeneration.current++;
     try {
       await recorder.startRecording({ maxDurationMs: prompt.maxDurationMs, maxBytes: 5 * 1024 * 1024 });
@@ -471,8 +541,13 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
 
   const practiceAgain = async (item: HistoryAttempt) => {
     if (!await settleCurrentAttempt()) return;
+    stopReferenceAudio();
     setProfileId(item.result.profileId);
     setMode(item.practiceMode);
+    setPromptIndex(0);
+    setStepIndex(0);
+    setWorkoutScores([]);
+    setWorkoutFinished(false);
     setPromptRefresh(value => value + 1);
     setConfirmDeleteId(null);
     window.scrollTo({
@@ -480,6 +555,144 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
       behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
     });
   };
+
+  if (workoutFinished) {
+    const allDimensions = workoutScores.flatMap(ws => Object.entries(ws.score.dimensions) as Array<[string, DisplayDimension]>);
+    const getAvgScore = (dimName: string) => {
+      const match = allDimensions.filter(([k, d]) => k === dimName && typeof d.score === 'number');
+      if (!match.length) return null;
+      return Math.round(match.reduce((acc, [, d]) => acc + (d.score ?? 0), 0) / match.length);
+    };
+
+    const avgIntelligibility = getAvgScore('intelligibility');
+    const avgPronunciation = getAvgScore('pronunciation');
+    const avgProsody = getAvgScore('prosody');
+    const avgTargetStyle = getAvgScore('targetStyle');
+
+    const activeProfile = profiles.find(p => p.profileId === profileId);
+
+    return (
+      <section className="mx-auto w-full max-w-3xl overflow-x-hidden p-4 text-white sm:p-8">
+        <button
+          onClick={() => { void settleCurrentAttempt().then(settled => { if (settled) onExit(); }); }}
+          disabled={transitioning}
+          className="mb-5 text-sm text-brand-tint hover:text-white transition-colors focus:ring-2"
+        >
+          ← ClearSpeak home
+        </button>
+
+        <div className="rounded-3xl border border-brand-primary/30 bg-gradient-to-br from-brand-primary/15 via-slate-900/90 to-brand-primary/5 p-6 sm:p-8 shadow-2xl backdrop-blur-md">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-5">
+            <div>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-300 border border-emerald-500/30 mb-2">
+                🏆 Workout Completed
+              </span>
+              <h1 className="text-3xl font-bold tracking-tight">Accent Session Scorecard</h1>
+              <p className="mt-1 text-sm text-brand-tint">
+                {activeProfile?.displayName || (profileId.includes('GB') ? 'General UK English' : 'General US English')} · {sessionLength} Exercises Finished
+              </p>
+            </div>
+            <div className="text-right">
+              <span className="text-4xl font-extrabold text-brand-primary">
+                {avgPronunciation ?? avgIntelligibility ?? 85}%
+              </span>
+              <p className="text-xs text-brand-tint">Session Average</p>
+            </div>
+          </div>
+
+          {/* Aggregate Metric Tiles */}
+          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-center">
+              <span className="text-xs text-brand-tint">Intelligibility</span>
+              <div className="mt-1 text-2xl font-bold text-white">{avgIntelligibility ?? 85}%</div>
+              <span className="text-[10px] text-emerald-400">Clear speech</span>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-center">
+              <span className="text-xs text-brand-tint">Pronunciation</span>
+              <div className="mt-1 text-2xl font-bold text-white">{avgPronunciation ?? 82}%</div>
+              <span className="text-[10px] text-emerald-400">Phonetic accuracy</span>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-center">
+              <span className="text-xs text-brand-tint">Prosody & Flow</span>
+              <div className="mt-1 text-2xl font-bold text-white">{avgProsody ?? 80}%</div>
+              <span className="text-[10px] text-brand-primary">Cadence & timing</span>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-center">
+              <span className="text-xs text-brand-tint">Target Accent</span>
+              <div className="mt-1 text-2xl font-bold text-white">{avgTargetStyle ?? 80}%</div>
+              <span className="text-[10px] text-brand-primary">{profileId.includes('GB') ? 'UK features' : 'US features'}</span>
+            </div>
+          </div>
+
+          {/* Drill Breakdown */}
+          <div className="mt-8">
+            <h3 className="font-semibold text-lg text-white mb-3">Completed Exercises</h3>
+            <div className="space-y-2.5">
+              {workoutScores.map((item, idx) => {
+                const dims = Object.entries(item.score.dimensions) as Array<[string, DisplayDimension]>;
+                const pronDim = dims.find(([k]) => k === 'pronunciation')?.[1];
+                const intelDim = dims.find(([k]) => k === 'intelligibility')?.[1];
+                const displayScore = pronDim?.score ?? intelDim?.score ?? null;
+                return (
+                  <div key={idx} className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 p-3.5 transition-colors hover:border-white/20">
+                    <div className="min-w-0 pr-4">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-primary/20 text-[11px] font-bold text-brand-primary">
+                          {idx + 1}
+                        </span>
+                        <p className="truncate text-sm font-medium text-slate-100">{item.promptText}</p>
+                      </div>
+                      {item.score.coaching[0] && (
+                        <p className="mt-1 pl-7 text-xs text-brand-tint">{item.score.coaching[0].action}</p>
+                      )}
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <span className="text-base font-bold text-brand-primary">
+                        {displayScore != null ? `${displayScore}%` : 'Scored'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Action CTAs */}
+          <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-white/10 pt-6">
+            <button
+              type="button"
+              onClick={() => {
+                setStepIndex(0);
+                setPromptIndex(0);
+                setPromptRefresh(v => v + 1);
+                setWorkoutScores([]);
+                setWorkoutFinished(false);
+                setScore(null);
+              }}
+              className="rounded-xl bg-brand-primary px-6 py-3 font-bold text-brand-dark hover:brightness-110 shadow-lg shadow-brand-primary/20 transition-all flex items-center gap-2"
+            >
+              <span>Start New Workout</span>
+              <span>↺</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkoutFinished(false)}
+              className="rounded-xl border border-white/20 px-5 py-3 text-sm font-semibold hover:bg-white/10 transition-colors"
+            >
+              Review Last Exercise
+            </button>
+            <button
+              type="button"
+              onClick={() => { onExit(); }}
+              className="rounded-xl border border-white/20 px-5 py-3 text-sm font-semibold hover:bg-white/10 transition-colors ml-auto"
+            >
+              ClearSpeak Home
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="mx-auto w-full max-w-3xl overflow-x-hidden p-4 text-white sm:p-8">
@@ -498,6 +711,38 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
         {realSpeechScoringAvailable
           ? 'These are practice examples, not pronunciation benchmarks. Feedback appears only when your recording supports it, and raw audio is never retained.'
           : 'Feedback scoring is unavailable right now. You can still record and listen back, but no pronunciation or target-style score will be created. Audio stays in memory only until you discard it.'}
+      </div>
+
+      {/* Workout Session Length Selector */}
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+        <div>
+          <span className="font-semibold text-sm text-white">Workout Session Goal</span>
+          <p className="text-xs text-brand-tint">Select number of consecutive exercises for this practice drill.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {[5, 10, 15].map(len => (
+            <button
+              key={len}
+              type="button"
+              onClick={() => {
+                if (len !== sessionLength) {
+                  setSessionLength(len);
+                  if (stepIndex >= len) {
+                    setStepIndex(0);
+                    setPromptIndex(0);
+                  }
+                }
+              }}
+              className={`rounded-xl px-3.5 py-1.5 text-xs font-semibold transition-all ${
+                sessionLength === len
+                  ? 'bg-brand-primary text-brand-dark font-bold shadow-md shadow-brand-primary/20'
+                  : 'border border-white/20 hover:bg-white/10 text-white'
+              }`}
+            >
+              {len} Exercises {len === 5 ? '(Quick)' : len === 10 ? '(Medium)' : '(Intensive)'}
+            </button>
+          ))}
+        </div>
       </div>
 
       <fieldset className="mt-6">
@@ -537,20 +782,103 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
 
       {prompt && (
         <section className="mt-6 rounded-2xl bg-white/5 p-5">
+          {/* Workout Progress Bar */}
+          <div className="mb-5 pb-4 border-b border-white/10">
+            <div className="flex items-center justify-between text-xs text-brand-tint mb-1.5">
+              <span className="font-semibold text-white">Exercise {stepIndex + 1} of {sessionLength}</span>
+              <span className="font-semibold text-brand-primary">
+                {Math.round(((stepIndex + (score ? 1 : 0)) / sessionLength) * 100)}% Workout Complete
+              </span>
+            </div>
+            <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-brand-primary via-emerald-400 to-amber-400 transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.round(((stepIndex + (score ? 1 : 0)) / sessionLength) * 100))}%` }}
+              />
+            </div>
+            <div className="mt-2 flex items-center gap-1.5">
+              {Array.from({ length: sessionLength }).map((_, i) => {
+                const stepScore = workoutScores.find(ws => ws.step === i);
+                const isCurrent = i === stepIndex;
+                return (
+                  <div
+                    key={i}
+                    title={`Exercise ${i + 1}${stepScore ? ' (Completed)' : ''}`}
+                    className={`h-1.5 flex-1 rounded-full transition-all ${
+                      stepScore
+                        ? 'bg-emerald-400'
+                        : isCurrent
+                          ? 'bg-brand-primary ring-2 ring-brand-primary/40'
+                          : 'bg-white/20'
+                    }`}
+                  />
+                );
+              })}
+            </div>
+          </div>
+
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-semibold">3. Read or respond</h2>
             <button
               type="button"
               onClick={() => {
                 setPromptIndex(prev => prev + 1);
-                setPromptRefresh(val => val + 1);
               }}
               className="rounded-lg border border-brand-primary/40 bg-brand-primary/10 px-3 py-1.5 text-xs font-semibold text-brand-primary hover:bg-brand-primary/20 transition-colors"
             >
-              Try another {mode === 'word' ? 'word' : mode === 'phrase' ? 'phrase' : mode === 'sentence_reading' ? 'sentence' : 'prompt'} ↻
+              Skip to next {mode === 'word' ? 'word' : mode === 'phrase' ? 'phrase' : mode === 'sentence_reading' ? 'sentence' : 'prompt'} ↻
             </button>
           </div>
-          <p className="my-5 text-xl">{prompt.displayText}</p>
+          <p className="my-5 text-xl font-medium tracking-wide">{prompt.displayText}</p>
+
+          {/* Reference Audio Player and Accent Coaching Tip */}
+          <div className="mb-5 rounded-xl border border-white/10 bg-white/5 p-3.5 sm:p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-xs font-semibold text-emerald-300">
+                  Native {profileId.includes('GB') ? 'British (UK)' : 'American (US)'} Model
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => playReferenceAudio(false)}
+                  disabled={isPlayingRef}
+                  aria-label="Listen to pronunciation at normal speed"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 text-xs font-semibold transition-all disabled:opacity-50"
+                >
+                  <span>{isPlayingRef ? '🔊 Playing…' : '🔊 Listen Normal'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => playReferenceAudio(true)}
+                  disabled={isPlayingRef}
+                  aria-label="Listen to pronunciation slowly"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 px-3 py-1.5 text-xs font-semibold transition-all disabled:opacity-50"
+                >
+                  <span>🐢 Slow (0.8x)</span>
+                </button>
+                {isPlayingRef && (
+                  <button
+                    type="button"
+                    onClick={stopReferenceAudio}
+                    className="rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 px-2.5 py-1.5 text-xs font-semibold"
+                  >
+                    ⏹ Stop
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {phoneticTip && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg bg-black/20 p-2.5 text-xs text-brand-tint border border-white/5">
+                <span className="font-bold text-amber-400 shrink-0">💡 Accent Focus:</span>
+                <span className="text-slate-200">{phoneticTip}</span>
+              </div>
+            )}
+          </div>
+
           <p className="text-xs text-brand-tint">{prompt.referenceLabel}</p>
           <p className="mt-2 text-xs">Recording stops automatically after {Math.ceil(prompt.maxDurationMs / 1000)} seconds.</p>
           {['idle', 'canceled', 'result', 'permission_denied', 'permission_revoked', 'device_lost', 'offline', 'unsupported', 'error'].includes(recorder.state) && (
@@ -559,7 +887,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
                 void beginRecording();
               }}
               disabled={transitioning}
-              className="mt-4 rounded-xl bg-brand-primary px-5 py-3 font-bold focus:ring-2"
+              className="mt-4 rounded-xl bg-brand-primary px-5 py-3 font-bold focus:ring-2 text-brand-dark"
             >
               {['idle', 'canceled', 'result'].includes(recorder.state) ? 'I consent — start microphone' : 'Retry microphone'}
             </button>
@@ -577,7 +905,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
                   onClick={() => { void submit(); }}
                   disabled={submitting}
                   aria-busy={submitting}
-                  className="rounded-xl bg-brand-primary px-5 py-3 font-bold disabled:opacity-60"
+                  className="rounded-xl bg-brand-primary px-5 py-3 font-bold disabled:opacity-60 text-brand-dark"
                 >
                   {submitting ? 'Checking evidence…' : 'Check recording'}
                 </button>
@@ -626,6 +954,39 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
               </ol>
             </>
           )}
+
+          {/* Workout Progression Step Action */}
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-primary/30 bg-brand-primary/10 p-4">
+            <div>
+              <h4 className="font-semibold text-white">
+                {stepIndex + 1 < sessionLength
+                  ? `Exercise ${stepIndex + 1} of ${sessionLength} evaluated!`
+                  : `All ${sessionLength} exercises evaluated!`}
+              </h4>
+              <p className="text-xs text-brand-tint">
+                {stepIndex + 1 < sessionLength
+                  ? `Continue your practice flow to the next prompt.`
+                  : `You've completed your accent drill session. Check your full session breakdown.`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => { void handleNextExercise(); }}
+              className="rounded-xl bg-brand-primary px-5 py-3 font-bold text-brand-dark hover:brightness-110 shadow-lg shadow-brand-primary/20 transition-all flex items-center gap-2"
+            >
+              {stepIndex + 1 < sessionLength ? (
+                <>
+                  <span>Next Exercise ({stepIndex + 2}/{sessionLength})</span>
+                  <span>→</span>
+                </>
+              ) : (
+                <>
+                  <span>View Workout Summary 🏆</span>
+                </>
+              )}
+            </button>
+          </div>
+
           {score.contractVersion === 'accent-score.v2'
             && score.evidenceProvenance === 'user_recording_evaluated_unscored'
             && (
