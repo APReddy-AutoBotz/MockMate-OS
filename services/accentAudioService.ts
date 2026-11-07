@@ -104,6 +104,15 @@ class AccentAudioService {
     });
   }
 
+  /**
+   * Speak a single word with crisp isolated articulation ($0 cost).
+   */
+  public async speakWord(word: string, locale: 'en-GB' | 'en-US'): Promise<void> {
+    const clean = word.replace(/[^a-zA-Z'-]/g, '').trim();
+    if (!clean) return;
+    return this.speak(clean, { locale, rate: 0.85, pitch: 1.0 });
+  }
+
   public stop(): void {
     if (this.synth) {
       this.synth.cancel();

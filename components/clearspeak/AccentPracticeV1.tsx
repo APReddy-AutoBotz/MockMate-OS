@@ -7,7 +7,7 @@ import { AccentScoreV2Schema } from 'mockmate-shared/accent-evidence';
 import { apiClient } from '../../services/apiClient';
 import { useAudioRecorder } from './useAudioRecorder';
 import { accentAudioService } from '../../services/accentAudioService';
-import { getPhoneticTip, getFriendlyDimensionFeedback } from './accentTips';
+import { getPhoneticTip, getFriendlyDimensionFeedback, getPromptCadence } from './accentTips';
 import {
   accentDimensionScoreLabel,
   accentHistoryEvidenceLabel,
@@ -171,9 +171,30 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
     return prompt ? getPhoneticTip(prompt.displayText, profileId) : null;
   }, [prompt, profileId]);
 
+  const cadence = useMemo(() => {
+    return prompt ? getPromptCadence(prompt.displayText, profileId) : null;
+  }, [prompt, profileId]);
+
+  const [activeWord, setActiveWord] = useState<string | null>(null);
+
+  const handleWordClick = async (word: string) => {
+    const clean = word.replace(/[^a-zA-Z'-]/g, '').trim().toLowerCase();
+    if (!clean) return;
+    setActiveWord(clean);
+    try {
+      const locale = profileId.includes('GB') ? 'en-GB' : 'en-US';
+      await accentAudioService.speakWord(word, locale);
+    } catch (e) {
+      console.warn('Word audio error', e);
+    } finally {
+      setActiveWord(null);
+    }
+  };
+
   const playReferenceAudio = async (slow = false) => {
     if (!prompt) return;
     setIsPlayingRef(true);
+    setActiveWord(null);
     try {
       const locale = profileId.includes('GB') ? 'en-GB' : 'en-US';
       await accentAudioService.speak(prompt.displayText, {
@@ -191,6 +212,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
   const stopReferenceAudio = () => {
     accentAudioService.stop();
     setIsPlayingRef(false);
+    setActiveWord(null);
   };
 
   useEffect(() => () => {
@@ -842,6 +864,99 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
           </div>
           <p className="my-5 text-xl font-medium tracking-wide">{prompt.displayText}</p>
 
+          {/* Option C: Stacked Cadence, Pauses & Word Stress Guide */}
+          {cadence && (
+            <div className="mb-6 rounded-2xl border border-brand-primary/20 bg-slate-950/60 p-4 sm:p-5 shadow-inner">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2 w-2 rounded-full bg-brand-primary animate-pulse" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-brand-tint">
+                    Cadence & Stress Architecture
+                  </span>
+                </div>
+                <span className="text-[11px] text-brand-tint">
+                  💡 Tap any word to hear isolated {profileId.includes('GB') ? 'UK' : 'US'} pronunciation
+                </span>
+              </div>
+
+              {/* Thought Groups / Chunks with Pause Markers & Tap-to-Pronounce Words */}
+              <div className="mt-3.5">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 block mb-2">
+                  Speech Rhythm & Thought Groups
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {cadence.chunks.map((chunk, chunkIdx) => {
+                    const words = chunk.split(/\s+/).filter(Boolean);
+                    return (
+                      <React.Fragment key={chunkIdx}>
+                        <div className="inline-flex flex-wrap items-center gap-1 rounded-xl bg-white/5 px-2.5 py-1.5 border border-white/10">
+                          {words.map((w, wIdx) => {
+                            const cleanW = w.replace(/[^a-zA-Z'-]/g, '').toLowerCase();
+                            const isSpeaking = activeWord === cleanW;
+                            return (
+                              <button
+                                key={wIdx}
+                                type="button"
+                                onClick={() => void handleWordClick(w)}
+                                title={`Tap to hear "${w}" in ${profileId.includes('GB') ? 'UK' : 'US'} accent`}
+                                className={`rounded px-1.5 py-0.5 text-sm font-medium transition-all ${
+                                  isSpeaking
+                                    ? 'bg-brand-primary text-brand-dark font-bold scale-105 shadow-sm shadow-brand-primary/50 ring-2 ring-brand-primary'
+                                    : 'text-white hover:bg-brand-primary/20 hover:text-brand-primary active:scale-95'
+                                }`}
+                              >
+                                {w}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {chunkIdx < cadence.chunks.length - 1 && (
+                          <span
+                            title="Micro-pause (0.3s breath/pause)"
+                            className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/20"
+                          >
+                            <span>⏸</span>
+                            <span>pause</span>
+                          </span>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Syllable Stress Guide */}
+              {(cadence.stressUK || cadence.stressUS) && (
+                <div className="mt-4 pt-3 border-t border-white/10">
+                  <div className="flex items-center justify-between text-[11px] mb-1">
+                    <span className="font-semibold uppercase tracking-wider text-slate-400">
+                      Syllable Stress & Phonation Guide
+                    </span>
+                    <span className="text-[10px] text-brand-tint">CAPITALS = primary accent stress</span>
+                  </div>
+                  <div className="rounded-xl bg-black/40 px-3.5 py-2.5 font-mono text-xs text-amber-200 tracking-wide border border-white/5 leading-relaxed overflow-x-auto">
+                    {profileId.includes('GB')
+                      ? (cadence.stressUK || cadence.stressUS)
+                      : (cadence.stressUS || cadence.stressUK)}
+                  </div>
+                </div>
+              )}
+
+              {/* Dialect Nuance Focus */}
+              {phoneticTip && (
+                <div className="mt-3.5 flex items-start gap-2.5 rounded-xl bg-amber-500/10 p-3 text-xs text-brand-tint border border-amber-500/20">
+                  <span className="font-bold text-amber-400 shrink-0 text-sm">💡</span>
+                  <div>
+                    <span className="font-semibold text-amber-300">
+                      {profileId.includes('GB') ? 'British (UK)' : 'American (US)'} Accent Focus:
+                    </span>{' '}
+                    <span className="text-slate-100">{phoneticTip}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Reference Audio Player and Accent Coaching Tip */}
           <div className="mb-5 rounded-xl border border-white/10 bg-white/5 p-3.5 sm:p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -881,13 +996,6 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
                 )}
               </div>
             </div>
-
-            {phoneticTip && (
-              <div className="mt-3 flex items-start gap-2 rounded-lg bg-black/20 p-2.5 text-xs text-brand-tint border border-white/5">
-                <span className="font-bold text-amber-400 shrink-0">💡 Accent Focus:</span>
-                <span className="text-slate-200">{phoneticTip}</span>
-              </div>
-            )}
           </div>
 
           <p className="text-xs text-brand-tint">{prompt.referenceLabel}</p>
