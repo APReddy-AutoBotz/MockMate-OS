@@ -98,31 +98,32 @@ export const Hub: React.FC<HubProps> = ({ userProfile, betaEnabled, onNavigate, 
                 </motion.div>
             </header>
 
-            <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6 lg:gap-8 ${betaEnabled ? 'lg:grid-cols-3' : 'lg:grid-cols-2'}`}>
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-3 md:gap-6 lg:gap-8">
                 <ToolCard
                     icon={<FileText className="h-6 w-6" />}
-                    title="Resume builder"
-                    description="Build an ATS-friendly resume with guided support and simple wording."
-                    action="Start resume"
+                    title="Resume builder & ATS"
+                    badge="ATS Scoring"
+                    description="Upload or craft an ATS-optimized resume. Get instant scoring, keyword diagnostics, and bullet rewriting."
+                    action="Start resume review"
                     delay={0.1}
                     onClick={() => onNavigate('RESUME')}
                 />
 
-                {betaEnabled && (
-                    <ToolCard
-                        icon={<Mic className="h-6 w-6" />}
-                        title="Speaking coach"
-                        description="Practice spoken English for interviews and get transcript- and timing-based feedback."
-                        action="Start speaking"
-                        delay={0.2}
-                        onClick={() => onNavigate('SPEAK')}
-                    />
-                )}
+                <ToolCard
+                    icon={<Mic className="h-6 w-6" />}
+                    title="ClearSpeak Voice Coach"
+                    badge="Speaking Coach"
+                    description="Practice spoken English for interviews with real-time speech analysis, pacing metrics, and feedback."
+                    action="Start speaking practice"
+                    delay={0.2}
+                    onClick={() => onNavigate('SPEAK')}
+                />
 
                 <ToolCard
                     icon={<Users className="h-6 w-6" />}
                     title="Mock interview"
-                    description="Practice real interview questions and learn how to improve your answers."
+                    badge="AI Interviewer"
+                    description="Practice real role-specific interview questions with interactive AI follow-ups and scoring."
                     action="Start interview practice"
                     delay={0.3}
                     onClick={() => onNavigate('INTERVIEW')}

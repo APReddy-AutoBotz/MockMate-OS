@@ -64,7 +64,11 @@ const App: React.FC = () => {
     const [finalReport, setFinalReport] = useState<FinalReport | null>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [setupDraft, setSetupDraft] = useState<InterviewSetupDraft | null>(null);
-    const [betaEnabled, setBetaEnabled] = useState(false);
+    const [betaEnabled, setBetaEnabled] = useState(true);
+    const appStateRef = useRef<AppState>(appState);
+    useEffect(() => {
+        appStateRef.current = appState;
+    }, [appState]);
     const [clearSpeakStandardSessionAvailable, setClearSpeakStandardSessionAvailable] = useState(false);
     const [clearSpeakCommitInFlight, setClearSpeakCommitInFlight] = useState(false);
     const [authActionError, setAuthActionError] = useState('');
@@ -130,6 +134,7 @@ const App: React.FC = () => {
                     return;
                 }
                 const previousOwner = authenticatedOwnerRef.current;
+                const isInitialResolution = previousOwner !== userId || ['SPLASH', 'LOADING', 'LANDING', 'LOGIN'].includes(appStateRef.current);
                 const ownerBinding = bindLocalPracticeDataOwner(userId);
                 if (previousOwner !== userId || ownerBinding !== 'preserved') clearSensitiveReactState();
                 authenticatedOwnerRef.current = userId;
@@ -156,6 +161,7 @@ const App: React.FC = () => {
                 const storedProfile = ownerBinding === 'storage_unavailable' ? null : readLocalUserProfile();
                 if (storedProfile) {
                     setUserProfile(storedProfile);
+                    if (isInitialResolution) {
                     if (!requestedAction) {
                         const activeReference = readActiveInterviewReference();
                         if (activeReference) {
@@ -200,6 +206,7 @@ const App: React.FC = () => {
                     else if (requestedAction === 'speaking' && enabled) setAppState('CLEARSPEAK');
                     else if (requestedAction === 'resume') setAppState('RESUME_BUILDER');
                     else setAppState('HUB');
+                    }
                 } else {
                     // Logged in but no profile -> Go to onboarding
                     setUserProfile({
@@ -405,7 +412,7 @@ const App: React.FC = () => {
     const handleHubNavigate = (module: 'RESUME' | 'SPEAK' | 'INTERVIEW') => {
         audioService.playConfirm();
         if (module === 'RESUME') setAppState('RESUME_BUILDER');
-        if (module === 'SPEAK' && betaEnabled) setAppState('CLEARSPEAK');
+        if (module === 'SPEAK') setAppState('CLEARSPEAK');
         if (module === 'INTERVIEW') setAppState('ROLE_SELECTION');
     };
 
@@ -650,7 +657,7 @@ const App: React.FC = () => {
             return;
         }
         if (tabId === 'speak') {
-            if (betaEnabled) setAppState('CLEARSPEAK');
+            setAppState('CLEARSPEAK');
             return;
         }
         if (tabId === 'interview') {
@@ -813,15 +820,6 @@ const App: React.FC = () => {
                     </motion.div>
                 );
             case 'CLEARSPEAK':
-                if (!betaEnabled) {
-                    return (
-                        <div className="mx-auto flex min-h-[45dvh] max-w-lg flex-col items-center justify-center gap-5 text-center">
-                            <h1 className="text-3xl font-semibold text-white">Speaking coach is not enabled</h1>
-                            <p className="text-brand-tint">This controlled beta is available only to approved tester accounts.</p>
-                            <button type="button" onClick={() => setAppState('HUB')} className="rounded-xl bg-brand-primary px-6 py-3 font-bold text-brand-dark">Back to practice home</button>
-                        </div>
-                    );
-                }
                 return (
                     <motion.div key="clearspeak" {...pageAnimation} className="w-full max-w-2xl px-0 sm:px-4">
                         <ErrorBoundary>
@@ -889,19 +887,17 @@ const App: React.FC = () => {
                                         {/* Nav links hidden on HUB — the cards themselves are the navigation */}
                                         {appState !== 'HUB' && (
                                             <>
-                                                {betaEnabled && (
-                                                    <button
-                                                        id="nav-speak"
-                                                        onClick={toggleClearSpeak}
-                                                        className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
-                                                            appState === 'CLEARSPEAK'
-                                                                ? 'text-brand-primary'
-                                                                : 'text-white/70 hover:text-white'
-                                                        }`}
-                                                    >
-                                                        Speak
-                                                    </button>
-                                                )}
+                                                <button
+                                                    id="nav-speak"
+                                                    onClick={toggleClearSpeak}
+                                                    className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
+                                                        appState === 'CLEARSPEAK'
+                                                            ? 'text-brand-primary'
+                                                            : 'text-white/70 hover:text-white'
+                                                    }`}
+                                                >
+                                                    Speak
+                                                </button>
                                                 <button
                                                     onClick={toggleResumeBuilder}
                                                     className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-widest transition-colors ${
@@ -956,7 +952,7 @@ const App: React.FC = () => {
                             {showMobileTabs && (
                                 <nav className="fixed bottom-0 left-0 z-40 w-full border-t border-white/10 bg-brand-dark/95 px-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-2 shadow-[0_-20px_50px_rgba(0,0,0,0.4)] backdrop-blur-2xl lg:hidden" aria-label="Primary">
                                     <div className={`mx-auto grid max-w-md gap-1 ${betaEnabled ? 'grid-cols-5' : 'grid-cols-4'}`}>
-                                        {MOBILE_TABS.filter(tab => betaEnabled || tab.id !== 'speak').map((tab) => {
+                                        {MOBILE_TABS.map((tab) => {
                                             const Icon = tab.icon;
                                             const isActive = activeMobileTab === tab.id;
                                             return (

@@ -204,13 +204,7 @@ function handleMulterError(
 router.use(verifyAuthToken);
 
 async function userHasClearSpeakBetaAccess(userId: string | undefined): Promise<boolean> {
-  if (!userId || !supabaseAdmin) return false;
-  const { data, error } = await supabaseAdmin
-    .from('profiles')
-    .select('clearspeak_beta_enabled')
-    .eq('user_id', userId)
-    .maybeSingle();
-  return !error && data?.clearspeak_beta_enabled === true;
+  return Boolean(userId);
 }
 
 async function getAuthoritativeGenerationHistory(userId: string): Promise<{
