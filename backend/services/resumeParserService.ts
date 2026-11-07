@@ -474,22 +474,81 @@ OUTPUT SHAPE:
   "awards":[{"title":"","description":"","sourceExcerpt":""}]
 }`;
 
-    let response: any;
+    let parsed: any;
     try {
         const { client, model } = providerClient();
-        response = await client.chat.completions.create({
-            model,
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.1,
-            response_format: { type: 'json_object' },
-        });
+        if (model.includes('gpt')) {
+            const promptBasics = `Extract basics, summary, and skills as JSON from this resume text.
+RESUME:
+"""
+${source.substring(0, 16000)}
+"""
+OUTPUT SHAPE:
+{
+  "basics": {"name":"","email":"","phone":"","location":"","linkedinUrl":"","portfolioUrl":""},
+  "summary":"",
+  "skills":[{"category":"","items":[]}]
+}`;
+
+            const promptRecords = `Extract experience, projects, education, certifications, and awards as JSON from this resume text.
+RULES: For each record include exact sourceExcerpt from text containing that record's facts.
+RESUME:
+"""
+${source.substring(0, 16000)}
+"""
+OUTPUT SHAPE:
+{
+  "experience":[{"company":"","position":"","startDate":"","endDate":"","bullets":[],"sourceExcerpt":""}],
+  "projects":[{"name":"","description":"","tools":[],"url":"","sourceExcerpt":""}],
+  "education":[{"institution":"","degree":"","year":"","sourceExcerpt":""}],
+  "certifications":[{"name":"","issuer":"","year":"","sourceExcerpt":""}],
+  "awards":[{"title":"","description":"","sourceExcerpt":""}]
+}`;
+
+            const [res1, res2] = await Promise.all([
+                client.chat.completions.create({
+                    model,
+                    messages: [{ role: 'user', content: promptBasics }],
+                    temperature: 0.0,
+                    max_tokens: 800,
+                    response_format: { type: 'json_object' },
+                }),
+                client.chat.completions.create({
+                    model,
+                    messages: [{ role: 'user', content: promptRecords }],
+                    temperature: 0.0,
+                    max_tokens: 1500,
+                    response_format: { type: 'json_object' },
+                }),
+            ]);
+
+            const p1 = extractJson(getResponseText(res1)) as any;
+            const p2 = extractJson(getResponseText(res2)) as any;
+            parsed = {
+                basics: p1?.basics || { name: '', email: '', phone: '', location: '', linkedinUrl: '', portfolioUrl: '' },
+                summary: p1?.summary || '',
+                skills: Array.isArray(p1?.skills) ? p1.skills : [],
+                experience: Array.isArray(p2?.experience) ? p2.experience : [],
+                projects: Array.isArray(p2?.projects) ? p2.projects : [],
+                education: Array.isArray(p2?.education) ? p2.education : [],
+                certifications: Array.isArray(p2?.certifications) ? p2.certifications : [],
+                awards: Array.isArray(p2?.awards) ? p2.awards : [],
+            };
+        } else {
+            const response = await client.chat.completions.create({
+                model,
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.1,
+                response_format: { type: 'json_object' },
+            });
+            parsed = extractJson(getResponseText(response));
+        }
     } catch (error) {
         if (error instanceof ResumeProviderUnavailableError) throw error;
-        console.error('[RESUME_PARSE_PROVIDER_FAILED]');
+        console.error('[RESUME_PARSE_PROVIDER_FAILED]', error);
         throw new ResumeProviderUnavailableError();
     }
 
-    const parsed = extractJson(getResponseText(response));
     if (!parsed) throw new Error('Resume provider returned invalid JSON');
     return validateProviderExtraction(parsed, source);
 };
