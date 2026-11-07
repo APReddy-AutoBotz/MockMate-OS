@@ -21,7 +21,10 @@ import {
   TranscribeAudioResponseSchema,
   TranscribeAudioResponse,
   CoachPack,
-  CoachPackSchema
+  CoachPackSchema,
+  GroundingReference,
+  GroundingReferenceSchema,
+  CareerContextSnapshot
 } from 'mockmate-shared';
 import { PERSONAS_CONFIG } from '../config/personas';
 import { GoogleGenAI } from '@google/genai';
@@ -250,17 +253,19 @@ export const buildDeterministicInterviewPlan = (
     const template = bank[i % bank.length];
     const personaFocus = safePanelIDs[i % safePanelIDs.length];
 
-    let groundingReferences: any[] | undefined = undefined;
-    if (projItems.length > 0) {
-      const item = projItems[i % projItems.length];
-      if (item) {
-        groundingReferences = [{
-          id: item.id,
-          label: item.label,
-          canonicalKey: item.canonicalKey,
-          exactExcerpt: item.exactExcerpt,
-          sourceModule: item.sourceModule,
-        }];
+    let groundingReferences: GroundingReference[] | undefined = undefined;
+    if (groundingSnapshot && groundingSnapshot.itemIds && groundingSnapshot.itemIds.length > 0) {
+      const targetItemId = groundingSnapshot.itemIds[i % groundingSnapshot.itemIds.length];
+      if (targetItemId) {
+        groundingReferences = [GroundingReferenceSchema.parse({
+          contextItemId: targetItemId,
+          sourceModule: groundingSnapshot.sourceModules[0] || 'resume',
+          sourceRecordId: 'doc_1',
+          sourcePath: 'item',
+          label: 'User-selected source claim',
+          exactExcerpt: null,
+          purpose: groundingSnapshot.purpose,
+        })];
       }
     }
 
@@ -304,7 +309,6 @@ export const buildDeterministicInterviewPlan = (
 };
 
 import { buildGroundingPromptSection } from './groundingPromptBuilder';
-import { CareerContextSnapshot } from 'mockmate-shared';
 
 export const generateInterviewPlan = async (
   role: string,
@@ -390,7 +394,7 @@ export const generateInterviewPlan = async (
     const rawParsed = RawInterviewPlanSchema.parse(rawData);
 
     if (!rawParsed.questionSet || rawParsed.questionSet.length === 0) {
-      return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs);
+      return buildDeterministicInterviewPlan(role, intentText, sessionControls, safePanelIDs, groundingSnapshot);
     }
 
     const normalizedQuestions = rawParsed.questionSet.map((q, idx) => {
@@ -398,6 +402,23 @@ export const generateInterviewPlan = async (
       if (!safePanelIDs.includes(focus)) {
         focus = safePanelIDs[idx % safePanelIDs.length];
       }
+
+      let groundingReferences: GroundingReference[] | undefined = undefined;
+      if (groundingSnapshot && Array.isArray((q as any).groundingItemIds)) {
+        const validItemIds = ((q as any).groundingItemIds as string[]).filter(id => groundingSnapshot.itemIds.includes(id));
+        if (validItemIds.length > 0) {
+          groundingReferences = validItemIds.map(id => GroundingReferenceSchema.parse({
+            contextItemId: id,
+            sourceModule: groundingSnapshot.sourceModules[0] || 'resume',
+            sourceRecordId: 'doc_1',
+            sourcePath: 'item',
+            label: 'User-selected source claim',
+            exactExcerpt: null,
+            purpose: groundingSnapshot.purpose,
+          }));
+        }
+      }
+
       return {
         id: createDeterministicQuestionId(role, sessionMode, q.question, idx + 1),
         phase: q.phase || 'scenario',
@@ -411,7 +432,8 @@ export const generateInterviewPlan = async (
         rubric: q.rubric,
         sourceBullets: q.sourceBullets,
         language: q.language,
-        timeAllocation: q.timeAllocation
+        timeAllocation: q.timeAllocation,
+        groundingReferences,
       };
     });
 
@@ -774,11 +796,11 @@ REQUIRED OUTPUT SCHEMA (JSON):
     quickWins,
     prioritizedActions,
     challengeRecoveryTimeline: challengeRecoveryTimeline.length > 0 ? challengeRecoveryTimeline : undefined,
-    contextAudit: (context?.groundingSnapshot?.id || (context as any)?.groundingSnapshotId) ? {
-      snapshotId: context.groundingSnapshot?.id || (context as any).groundingSnapshotId,
+    contextAudit: context?.groundingSnapshot ? {
+      snapshotId: context.groundingSnapshot.id,
       bridgeId: context.bridgeSessionId || undefined,
-      purpose: context.groundingSnapshot?.purpose || (context as any).purpose || 'resume_to_interview',
-      sourceModules: context.groundingSnapshot?.sourceModules || (context as any).sourceModules || ['resume'],
+      purpose: context.groundingSnapshot.purpose,
+      sourceModules: context.groundingSnapshot.sourceModules,
       groundedQuestions: (history || []).map((t: any, idx: number) => ({
         questionId: t.id || `q_${idx}`,
         questionText: t.question || '',

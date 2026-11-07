@@ -395,17 +395,186 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 REVOKE EXECUTE ON FUNCTION public.mutate_career_context_item(UUID, UUID, TEXT, TEXT, BIGINT) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.mutate_career_context_item(UUID, UUID, TEXT, TEXT, BIGINT) TO service_role;
 
+-- Transactional Update Personalization Preference RPC
+CREATE OR REPLACE FUNCTION public.update_personalization_preference_tx(
+    p_user_id UUID,
+    p_enabled BOOLEAN,
+    p_expected_version BIGINT DEFAULT NULL
+)
+RETURNS JSONB AS $$
+DECLARE
+    v_current_ver BIGINT;
+    v_now TIMESTAMPTZ := NOW();
+    v_state RECORD;
+BEGIN
+    SELECT context_version INTO v_current_ver
+    FROM public.career_context_state
+    WHERE user_id = p_user_id
+    FOR UPDATE;
+
+    IF v_current_ver IS NULL THEN
+        INSERT INTO public.career_context_state (user_id, context_version, personalization_enabled, updated_at)
+        VALUES (p_user_id, 1, p_enabled, v_now)
+        RETURNING * INTO v_state;
+    ELSE
+        IF p_expected_version IS NOT NULL AND p_expected_version <> v_current_ver THEN
+            RAISE EXCEPTION 'Stale or mismatched context version: expected %, current is %', p_expected_version, v_current_ver;
+        END IF;
+
+        UPDATE public.career_context_state
+        SET personalization_enabled = p_enabled, context_version = context_version + 1, updated_at = v_now
+        WHERE user_id = p_user_id
+        RETURNING * INTO v_state;
+    END IF;
+
+    RETURN jsonb_build_object(
+        'state', to_jsonb(v_state)
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+REVOKE EXECUTE ON FUNCTION public.update_personalization_preference_tx(UUID, BOOLEAN, BIGINT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.update_personalization_preference_tx(UUID, BOOLEAN, BIGINT) TO service_role;
+
+-- Transactional Rebuild Career Context Batch RPC
+CREATE OR REPLACE FUNCTION public.rebuild_career_context_batch_tx(
+    p_user_id UUID,
+    p_source_module TEXT,
+    p_record_id TEXT,
+    p_revision TEXT,
+    p_items JSONB
+)
+RETURNS JSONB AS $$
+DECLARE
+    v_current_ver BIGINT;
+    v_now TIMESTAMPTZ := NOW();
+    v_item_elem JSONB;
+    v_canon_key TEXT;
+    v_item_kind TEXT;
+    v_label TEXT;
+    v_value_json JSONB;
+    v_source_path TEXT;
+    v_exact_excerpt TEXT;
+    v_sensitivity TEXT;
+    v_source_hash TEXT;
+    v_existing_active RECORD;
+    v_existing_revoked RECORD;
+    v_new_id UUID;
+    v_added INT := 0;
+    v_superseded INT := 0;
+    v_unchanged INT := 0;
+    v_changed BOOLEAN := FALSE;
+BEGIN
+    SELECT context_version INTO v_current_ver
+    FROM public.career_context_state
+    WHERE user_id = p_user_id
+    FOR UPDATE;
+
+    IF v_current_ver IS NULL THEN
+        INSERT INTO public.career_context_state (user_id, context_version, personalization_enabled, updated_at)
+        VALUES (p_user_id, 1, false, v_now)
+        RETURNING context_version INTO v_current_ver;
+    END IF;
+
+    IF p_items IS NOT NULL AND jsonb_array_length(p_items) > 0 THEN
+        FOR v_item_elem IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+            v_canon_key := v_item_elem->>'canonicalKey';
+            v_item_kind := v_item_elem->>'itemKind';
+            v_label := v_item_elem->>'label';
+            v_value_json := v_item_elem->'value';
+            v_source_path := COALESCE(v_item_elem->>'sourcePath', v_canon_key);
+            v_exact_excerpt := v_item_elem->>'exactExcerpt';
+            v_sensitivity := COALESCE(v_item_elem->>'sensitivity', 'standard');
+            v_source_hash := encode(digest(COALESCE(v_exact_excerpt, v_label, v_canon_key), 'sha256'), 'hex');
+
+            SELECT * INTO v_existing_revoked
+            FROM public.career_context_items
+            WHERE user_id = p_user_id AND canonical_key = v_canon_key AND item_status IN ('revoked', 'disputed', 'user_edited')
+            ORDER BY updated_at DESC LIMIT 1;
+
+            IF v_existing_revoked IS NOT NULL THEN
+                v_unchanged := v_unchanged + 1;
+                CONTINUE;
+            END IF;
+
+            SELECT * INTO v_existing_active
+            FROM public.career_context_items
+            WHERE user_id = p_user_id AND canonical_key = v_canon_key AND item_status = 'active'
+            ORDER BY created_at DESC LIMIT 1;
+
+            IF v_existing_active IS NOT NULL THEN
+                IF v_existing_active.source_hash = v_source_hash AND v_existing_active.source_revision = p_revision THEN
+                    v_unchanged := v_unchanged + 1;
+                ELSE
+                    v_new_id := gen_random_uuid();
+                    INSERT INTO public.career_context_items (
+                        id, user_id, item_kind, canonical_key, label, value, source_module,
+                        source_record_id, source_path, source_revision, source_hash, exact_excerpt,
+                        provenance, item_status, sensitivity, user_confirmed_at, created_at, updated_at
+                    ) VALUES (
+                        v_new_id, p_user_id, v_item_kind, v_canon_key, v_label, v_value_json, p_source_module,
+                        p_record_id, v_source_path, p_revision, v_source_hash, v_exact_excerpt,
+                        'inferred_pending', 'active', v_sensitivity, NULL, v_now, v_now
+                    );
+                    UPDATE public.career_context_items
+                    SET item_status = 'superseded', superseded_by = v_new_id, updated_at = v_now
+                    WHERE id = v_existing_active.id;
+                    v_superseded := v_superseded + 1;
+                    v_added := v_added + 1;
+                    v_changed := TRUE;
+                END IF;
+            ELSE
+                v_new_id := gen_random_uuid();
+                INSERT INTO public.career_context_items (
+                    id, user_id, item_kind, canonical_key, label, value, source_module,
+                    source_record_id, source_path, source_revision, source_hash, exact_excerpt,
+                    provenance, item_status, sensitivity, user_confirmed_at, created_at, updated_at
+                ) VALUES (
+                    v_new_id, p_user_id, v_item_kind, v_canon_key, v_label, v_value_json, p_source_module,
+                    p_record_id, v_source_path, p_revision, v_source_hash, v_exact_excerpt,
+                    'inferred_pending', 'active', v_sensitivity, NULL, v_now, v_now
+                );
+                v_added := v_added + 1;
+                v_changed := TRUE;
+            END IF;
+        END LOOP;
+    END IF;
+
+    IF v_changed THEN
+        UPDATE public.career_context_state
+        SET context_version = context_version + 1, updated_at = v_now
+        WHERE user_id = p_user_id
+        RETURNING context_version INTO v_current_ver;
+    END IF;
+
+    RETURN jsonb_build_object(
+        'addedCount', v_added,
+        'supersededCount', v_superseded,
+        'unchangedCount', v_unchanged,
+        'contextVersion', v_current_ver
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+REVOKE EXECUTE ON FUNCTION public.rebuild_career_context_batch_tx(UUID, TEXT, TEXT, TEXT, JSONB) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.rebuild_career_context_batch_tx(UUID, TEXT, TEXT, TEXT, JSONB) TO service_role;
+
 -- Transactional Create Grounding Snapshot RPC
+DROP FUNCTION IF EXISTS public.create_grounding_snapshot_tx;
 CREATE OR REPLACE FUNCTION public.create_grounding_snapshot_tx(
     p_user_id UUID,
     p_purpose TEXT,
-    p_projection JSONB,
-    p_conflicts JSONB,
-    p_consent JSONB,
-    p_source_modules TEXT[],
-    p_item_ids UUID[],
-    p_client_request_id TEXT,
-    p_request_hash TEXT
+    p_projection JSONB DEFAULT NULL,
+    p_conflicts JSONB DEFAULT NULL,
+    p_consent JSONB DEFAULT NULL,
+    p_source_modules TEXT[] DEFAULT NULL,
+    p_item_ids UUID[] DEFAULT NULL,
+    p_client_request_id TEXT DEFAULT NULL,
+    p_request_hash TEXT DEFAULT NULL,
+    p_expected_context_version BIGINT DEFAULT NULL,
+    p_included_item_ids UUID[] DEFAULT NULL,
+    p_excluded_item_ids UUID[] DEFAULT NULL,
+    p_conflict_selections JSONB DEFAULT NULL
 )
 RETURNS JSONB AS $$
 DECLARE
@@ -413,8 +582,11 @@ DECLARE
     v_current_ver BIGINT;
     v_snapshot_id UUID := gen_random_uuid();
     v_now TIMESTAMPTZ := NOW();
+    v_item_ids UUID[];
     v_item_id UUID;
+    v_item_rec RECORD;
     v_pos INT := 0;
+    v_projection JSONB;
 BEGIN
     SELECT * INTO v_existing
     FROM public.career_context_snapshots
@@ -441,14 +613,46 @@ BEGIN
         v_current_ver := 1;
     END IF;
 
+    IF p_expected_context_version IS NOT NULL AND p_expected_context_version <> v_current_ver THEN
+        RAISE EXCEPTION 'Stale context version during snapshot creation: expected %, current is %', p_expected_context_version, v_current_ver;
+    END IF;
+
+    v_item_ids := COALESCE(p_included_item_ids, p_item_ids, ARRAY[]::UUID[]);
+
+    IF v_item_ids IS NOT NULL AND array_length(v_item_ids, 1) > 0 THEN
+        FOREACH v_item_id IN ARRAY v_item_ids LOOP
+            SELECT * INTO v_item_rec
+            FROM public.career_context_items
+            WHERE id = v_item_id AND user_id = p_user_id;
+
+            IF v_item_rec IS NULL THEN
+                RAISE EXCEPTION 'Item % not found or does not belong to user %', v_item_id, p_user_id;
+            END IF;
+
+            IF v_item_rec.item_status <> 'active' THEN
+                RAISE EXCEPTION 'Item % is not active (status: %)', v_item_id, v_item_rec.item_status;
+            END IF;
+
+            IF v_item_rec.sensitivity = 'personal_contact' THEN
+                RAISE EXCEPTION 'Item % is sensitive personal_contact and cannot be included in snapshot', v_item_id;
+            END IF;
+        END LOOP;
+    END IF;
+
+    v_projection := COALESCE(p_projection, jsonb_build_object(
+        'purpose', p_purpose,
+        'itemCount', COALESCE(array_length(v_item_ids, 1), 0),
+        'sourceModules', COALESCE(p_source_modules, ARRAY[]::TEXT[])
+    ));
+
     INSERT INTO public.career_context_snapshots (
         id, user_id, purpose, context_version, projection, conflicts, consent, source_modules, client_request_id, request_hash, created_at
     ) VALUES (
-        v_snapshot_id, p_user_id, p_purpose, v_current_ver, p_projection, COALESCE(p_conflicts, '[]'::jsonb), p_consent, p_source_modules, p_client_request_id, p_request_hash, v_now
+        v_snapshot_id, p_user_id, p_purpose, v_current_ver, v_projection, COALESCE(p_conflict_selections, p_conflicts, '[]'::jsonb), p_consent, COALESCE(p_source_modules, ARRAY[]::TEXT[]), p_client_request_id, p_request_hash, v_now
     );
 
-    IF p_item_ids IS NOT NULL AND array_length(p_item_ids, 1) > 0 THEN
-        FOREACH v_item_id IN ARRAY p_item_ids LOOP
+    IF v_item_ids IS NOT NULL AND array_length(v_item_ids, 1) > 0 THEN
+        FOREACH v_item_id IN ARRAY v_item_ids LOOP
             INSERT INTO public.career_context_snapshot_items (snapshot_id, item_id, position)
             VALUES (v_snapshot_id, v_item_id, v_pos);
             v_pos := v_pos + 1;
@@ -463,8 +667,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-REVOKE EXECUTE ON FUNCTION public.create_grounding_snapshot_tx(UUID, TEXT, JSONB, JSONB, JSONB, TEXT[], UUID[], TEXT, TEXT) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.create_grounding_snapshot_tx(UUID, TEXT, JSONB, JSONB, JSONB, TEXT[], UUID[], TEXT, TEXT) TO service_role;
+REVOKE EXECUTE ON FUNCTION public.create_grounding_snapshot_tx FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_grounding_snapshot_tx TO service_role;
 
 -- Transactional Create Module Bridge RPC
 CREATE OR REPLACE FUNCTION public.create_module_bridge_tx(
@@ -481,15 +685,20 @@ RETURNS JSONB AS $$
 DECLARE
     v_existing RECORD;
     v_snap_owner UUID;
+    v_snap_purpose TEXT;
     v_bridge_id UUID := gen_random_uuid();
     v_now TIMESTAMPTZ := NOW();
 BEGIN
-    SELECT user_id INTO v_snap_owner
+    SELECT user_id, purpose INTO v_snap_owner, v_snap_purpose
     FROM public.career_context_snapshots
     WHERE id = p_snapshot_id;
 
     IF v_snap_owner IS NULL OR v_snap_owner <> p_user_id THEN
         RAISE EXCEPTION 'Bridge snapshot ownership mismatch: snapshot does not belong to user.';
+    END IF;
+
+    IF v_snap_purpose <> p_purpose THEN
+        RAISE EXCEPTION 'Bridge purpose mismatch: snapshot purpose is %, requested bridge purpose is %', v_snap_purpose, p_purpose;
     END IF;
 
     SELECT * INTO v_existing
@@ -535,7 +744,7 @@ RETURNS JSONB AS $$
 DECLARE
     v_bridge RECORD;
     v_snapshot RECORD;
-    v_session_owner UUID;
+    v_session RECORD;
     v_now TIMESTAMPTZ := NOW();
 BEGIN
     SELECT * INTO v_bridge
@@ -551,15 +760,42 @@ BEGIN
         RAISE EXCEPTION 'Bridge has been cancelled';
     ELSIF v_bridge.status = 'expired' THEN
         RAISE EXCEPTION 'Bridge has expired';
+    ELSIF v_bridge.status = 'drafted' THEN
+        RAISE EXCEPTION 'Bridge is in drafted state';
     END IF;
 
-    IF p_target_session_id IS NOT NULL THEN
-        SELECT user_id INTO v_session_owner
-        FROM public.interview_sessions
-        WHERE id = p_target_session_id;
+    IF p_target_session_id IS NULL THEN
+        RAISE EXCEPTION 'Target session ID is required for bridge consumption.';
+    END IF;
 
-        IF v_session_owner IS NOT NULL AND v_session_owner <> p_user_id THEN
-            RAISE EXCEPTION 'Cross-user target session consumption denied.';
+    SELECT * INTO v_session
+    FROM public.interview_sessions
+    WHERE id = p_target_session_id;
+
+    IF v_session IS NULL THEN
+        RAISE EXCEPTION 'Target session % does not exist', p_target_session_id;
+    END IF;
+
+    IF v_session.user_id <> p_user_id THEN
+        RAISE EXCEPTION 'Cross-user target session consumption denied.';
+    END IF;
+
+    IF v_bridge.status = 'consumed' THEN
+        IF v_bridge.target_session_id = p_target_session_id THEN
+            SELECT * INTO v_snapshot
+            FROM public.career_context_snapshots
+            WHERE id = v_bridge.snapshot_id;
+
+            RETURN jsonb_build_object(
+                'bridgeId', v_bridge.id,
+                'status', 'consumed',
+                'snapshotId', v_bridge.snapshot_id,
+                'projection', v_snapshot.projection,
+                'purpose', v_bridge.purpose,
+                'replayed', true
+            );
+        ELSE
+            RAISE EXCEPTION 'Bridge already consumed for a different session';
         END IF;
     END IF;
 
@@ -576,7 +812,8 @@ BEGIN
         'status', 'consumed',
         'snapshotId', v_bridge.snapshot_id,
         'projection', v_snapshot.projection,
-        'purpose', v_bridge.purpose
+        'purpose', v_bridge.purpose,
+        'replayed', false
     );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

@@ -85,6 +85,9 @@ async function runRuntimeVerification() {
           ELSE
             ALTER ROLE service_role BYPASSRLS;
           END IF;
+          GRANT USAGE ON SCHEMA public TO anon;
+          GRANT USAGE ON SCHEMA public TO authenticated;
+          GRANT ALL ON SCHEMA public TO service_role;
         END $$;
       `);
     } catch (_) {}
@@ -119,6 +122,16 @@ async function runRuntimeVerification() {
       const sql = await readFile(path.join(migrationsDir, file), 'utf8');
       await client.query(sql);
     }
+
+    await client.query(`
+      GRANT USAGE ON SCHEMA public TO service_role, anon, authenticated;
+      GRANT SELECT ON ALL TABLES IN SCHEMA public TO authenticated, anon;
+      GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+      GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
+      GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role, authenticated, anon;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role, authenticated, anon;
+    `);
     console.log('[Runtime Verification] All migration SQL compiled and executed cleanly!');
 
     // Setup Test Users
@@ -126,6 +139,8 @@ async function runRuntimeVerification() {
     const userB = '22222222-2222-2222-2222-222222222222';
     const sessionA = '33333333-3333-3333-3333-333333333333';
     const sessionB = '44444444-4444-4444-4444-444444444444';
+
+    const sessionA2 = '55555555-5555-5555-5555-555555555555';
 
     try {
       await client.query(`
@@ -146,6 +161,7 @@ async function runRuntimeVerification() {
     await client.query(`
       INSERT INTO public.interview_sessions (id, user_id, setup, status) VALUES
         ('${sessionA}', '${userA}', '{}'::jsonb, 'active'),
+        ('${sessionA2}', '${userA}', '{}'::jsonb, 'active'),
         ('${sessionB}', '${userB}', '{}'::jsonb, 'active')
       ON CONFLICT (id) DO NOTHING;
     `);
@@ -551,8 +567,43 @@ async function runRuntimeVerification() {
     }
 
     // 33. bridge_exact_replay
+    await setRole(client, 'service_role');
+    const firstConsumeRes = await client.query(`SELECT public.consume_module_bridge_tx('${userA}'::uuid, '${bridgeA}'::uuid, '${sessionA}'::uuid) as res;`);
+    if (firstConsumeRes.rows[0].res.status !== 'consumed' || firstConsumeRes.rows[0].res.replayed !== false) {
+      throw new Error('First bridge consumption failed to return consumed status');
+    }
+    const replayConsumeRes = await client.query(`SELECT public.consume_module_bridge_tx('${userA}'::uuid, '${bridgeA}'::uuid, '${sessionA}'::uuid) as res;`);
+    const replayData = replayConsumeRes.rows[0].res;
+    if (replayData.status !== 'consumed' || !replayData.replayed) {
+      throw new Error('Bridge exact replay failed to return consumed status with replayed flag');
+    }
+    await resetRole(client);
     passedCount++;
     console.log('  ✓ Assertion 33. bridge_exact_replay passed');
+
+    // 33b. missing_target_session_rejection
+    try {
+      await setRole(client, 'service_role');
+      await client.query(`SELECT public.consume_module_bridge_tx('${userA}'::uuid, '${bridgeA}'::uuid, '00000000-0000-0000-0000-000000000000'::uuid);`);
+      throw new Error('Consumption with missing target session succeeded!');
+    } catch (e) {
+      await resetRole(client);
+      if (!e.message.includes('does not exist')) throw e;
+      passedCount++;
+      console.log('  ✓ Assertion 33b. missing_target_session_rejection passed');
+    }
+
+    // 33c. changed_target_session_rejection
+    try {
+      await setRole(client, 'service_role');
+      await client.query(`SELECT public.consume_module_bridge_tx('${userA}'::uuid, '${bridgeA}'::uuid, '${sessionA2}'::uuid);`);
+      throw new Error('Consumption with changed target session succeeded!');
+    } catch (e) {
+      await resetRole(client);
+      if (!e.message.includes('Bridge already consumed for a different session')) throw e;
+      passedCount++;
+      console.log('  ✓ Assertion 33c. changed_target_session_rejection passed');
+    }
 
     // 34. bridge_changed_replay_conflict
     try {
@@ -657,7 +708,7 @@ async function runRuntimeVerification() {
     passedCount++;
     console.log('  ✓ Assertion 41. other_user_data_retained passed');
 
-    console.log(`[Runtime Assertions] All ${passedCount}/41 Career Context PostgreSQL assertions passed successfully!`);
+    console.log(`[Runtime Assertions] All ${passedCount} Career Context PostgreSQL assertions passed successfully!`);
   } finally {
     await client.end();
   }

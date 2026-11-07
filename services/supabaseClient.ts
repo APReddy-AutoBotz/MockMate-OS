@@ -130,7 +130,12 @@ export const signOut = async (_authObj?: any) => {
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
-  if (isUsingMockAuth) return devMockUser ? 'test-token' : null;
+  if (isUsingMockAuth) {
+    if (devMockUser?.email?.includes('@')) {
+      return devMockUser.email.split('@')[0];
+    }
+    return 'dev_user_a';
+  }
   if (!supabase) return null;
   const { data } = await supabase.auth.getSession();
   return data.session?.access_token || null;

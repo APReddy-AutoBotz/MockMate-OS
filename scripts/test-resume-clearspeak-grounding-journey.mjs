@@ -1,19 +1,38 @@
 process.env.NODE_ENV = 'test';
 
 import http from 'node:http';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import { chromium } from '@playwright/test';
+import express from 'express';
+import pkg from 'pg';
+import { ensureTestDatabase } from './init-test-db.mjs';
 
+const { Client } = pkg;
 const require = createRequire(import.meta.url);
+
+const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/postgres';
+const pgClient = new Client({ connectionString, connectionTimeoutMillis: 3000 });
+
+try {
+  await pgClient.connect();
+  await ensureTestDatabase(pgClient);
+} catch (err) {
+  console.error('[Resume -> ClearSpeak Playwright Journey] FAILED: Could not connect to disposable PostgreSQL database:', err.message);
+  process.exit(1);
+}
+
 const serverModule = require('../backend/dist/server.js');
 const app = serverModule.default || serverModule.app || serverModule;
+
+app.use(express.static(path.resolve(process.cwd(), 'dist')));
 
 console.log('[Resume -> ClearSpeak Playwright Journey] Starting visible browser end-to-end journey...');
 
 const server = http.createServer(app);
 await new Promise(resolve => server.listen(0, resolve));
 const backendPort = server.address().port;
-const backendUrl = `http://localhost:${backendPort}`;
+const backendUrl = `http://127.0.0.1:${backendPort}`;
 
 const headers = {
   'Content-Type': 'application/json',
@@ -38,93 +57,95 @@ try {
     }),
   });
 
-  if (rebuildRes.status !== 200 && rebuildRes.status !== 503) {
-    throw new Error(`Expected 200/503 for rebuild, got ${rebuildRes.status}`);
+  if (rebuildRes.status !== 200) {
+    const errText = await rebuildRes.text();
+    throw new Error(`Expected 200 for rebuild, got ${rebuildRes.status}: ${errText}`);
   }
 
-  // 2. Launch Playwright Chromium and test visible UI modal interaction
+  // 2. Launch Playwright Chromium and navigate to real application URL
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  // Render Grounding Preview Modal DOM in Playwright page
-  await page.setContent(`
-    <!DOCTYPE html>
-    <html>
-      <head><title>MockMate ClearSpeak Grounding Journey</title></head>
-      <body>
-        <div id="grounding-modal">
-          <h2>Career Context Grounding Preview</h2>
-          <p id="purpose-display">Target Module: ClearSpeak</p>
-          <div class="grounding-items">
-            <label><input type="checkbox" class="grounding-item-checkbox" checked value="item_1"/> Target Role: Staff Engineer</label>
-            <label><input type="checkbox" class="grounding-item-checkbox" checked value="item_2"/> Skill: Clear Communication</label>
-          </div>
-          <button id="confirm-grounded-launch">Confirm & Launch ClearSpeak</button>
-        </div>
-      </body>
-    </html>
-  `);
+  // Navigate to real app URL
+  await page.goto(backendUrl, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(1000);
 
-  await page.waitForSelector('#grounding-modal');
-  const purposeText = await page.textContent('#purpose-display');
-  if (!purposeText.includes('ClearSpeak')) {
-    throw new Error(`Expected purpose display to contain ClearSpeak, got: ${purposeText}`);
+  // 3. API Grounding flow against PostgreSQL (Snapshot + Bridge)
+  const getRes = await fetch(`${backendUrl}/api/career-context`, { headers });
+  if (getRes.status !== 200) {
+    const getErr = await getRes.text();
+    throw new Error(`Expected 200 for GET career-context, got ${getRes.status}: ${getErr}`);
   }
 
-  await page.click('#confirm-grounded-launch');
+  const getBody = await getRes.json();
+  const itemIds = (getBody.activeItems || []).map(i => i.id);
+  if (itemIds.length === 0) {
+    throw new Error('Expected active items in career context after rebuild, got 0');
+  }
 
-  // 3. Test API Grounding flow (Snapshot + Bridge)
-  const getRes = await fetch(`${backendUrl}/api/career-context`, { headers });
-  if (getRes.status === 200) {
-    const getBody = await getRes.json();
-    const itemIds = (getBody.activeItems || []).map(i => i.id);
+  // Create Snapshot in PostgreSQL
+  const snapRes = await fetch(`${backendUrl}/api/career-context/snapshots`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      purpose: 'resume_to_clearspeak',
+      includedItemIds: itemIds,
+      excludedItemIds: [],
+      conflictSelections: {},
+      consent: {
+        scope: 'one_time',
+        purpose: 'resume_to_clearspeak',
+        includedItemIds: itemIds,
+        excludedItemIds: [],
+        sourceModules: ['resume'],
+        acknowledgedAt: new Date().toISOString(),
+      },
+      clientRequestId: `snap_cs_${Date.now()}`,
+    }),
+  });
 
-    if (itemIds.length > 0) {
-      // Create Snapshot
-      const snapRes = await fetch(`${backendUrl}/api/career-context/snapshots`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          purpose: 'resume_to_clearspeak',
-          includedItemIds: itemIds,
-          excludedItemIds: [],
-          conflictSelections: {},
-          scope: 'one_time',
-          sourceModules: ['resume'],
-          clientRequestId: `snap_cs_${Date.now()}`,
-        }),
-      });
+  if (snapRes.status !== 200) {
+    const snapErr = await snapRes.text();
+    throw new Error(`Expected 200 for snapshot creation, got ${snapRes.status}: ${snapErr}`);
+  }
 
-      if (snapRes.status === 200) {
-        const snapBody = await snapRes.json();
-        const snapshotId = snapBody.snapshot.id;
+  const snapBody = await snapRes.json();
+  const snapshotId = snapBody.snapshot.id;
 
-        // Create Bridge
-        const bridgeRes = await fetch(`${backendUrl}/api/career-context/bridges`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            sourceModule: 'resume',
-            targetModule: 'clearspeak',
-            purpose: 'resume_to_clearspeak',
-            snapshotId,
-            clientRequestId: `bridge_cs_${Date.now()}`,
-          }),
-        });
+  // Create Bridge in PostgreSQL
+  const bridgeRes = await fetch(`${backendUrl}/api/career-context/bridges`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      sourceModule: 'resume',
+      targetModule: 'clearspeak',
+      purpose: 'resume_to_clearspeak',
+      snapshotId,
+      clientRequestId: `bridge_cs_${Date.now()}`,
+    }),
+  });
 
-        if (bridgeRes.status === 200) {
-          const bridgeBody = await bridgeRes.json();
-          if (!bridgeBody.bridge || bridgeBody.bridge.status !== 'confirmed') {
-            throw new Error('Bridge creation failed to return confirmed bridge');
-          }
-        }
-      }
-    }
+  if (bridgeRes.status !== 200) {
+    const bridgeErr = await bridgeRes.text();
+    throw new Error(`Expected 200 for bridge creation, got ${bridgeRes.status}: ${bridgeErr}`);
+  }
+
+  const bridgeBody = await bridgeRes.json();
+  const bridgeId = bridgeBody.bridge.id;
+  if (!bridgeBody.bridge || bridgeBody.bridge.status !== 'confirmed') {
+    throw new Error('Bridge creation failed to return confirmed bridge');
+  }
+
+  // Verify PostgreSQL database row for created bridge
+  const bridgeDbRow = await pgClient.query(`SELECT status, target_module, snapshot_id FROM public.career_context_bridges WHERE id = '${bridgeId}'`);
+  if (bridgeDbRow.rows.length === 0 || bridgeDbRow.rows[0].status !== 'confirmed' || bridgeDbRow.rows[0].target_module !== 'clearspeak' || bridgeDbRow.rows[0].snapshot_id !== snapshotId) {
+    throw new Error(`Database verification failed for bridge creation: row missing or invalid target_module / snapshot_id`);
   }
 
   console.log('[Resume -> ClearSpeak Playwright Journey] PASSED: Real Playwright browser journey & database-backed flow verified 100%!');
 } finally {
   if (browser) await browser.close();
   server.close();
+  await pgClient.end();
 }

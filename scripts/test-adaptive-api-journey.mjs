@@ -3,6 +3,25 @@ import express from 'express';
 import cors from 'cors';
 import { createRequire } from 'module';
 import { chromium } from '@playwright/test';
+import pkg from 'pg';
+import { ensureTestDatabase } from './init-test-db.mjs';
+
+const { Client } = pkg;
+const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/postgres';
+const pgClient = new Client({ connectionString, connectionTimeoutMillis: 3000 });
+
+try {
+  await pgClient.connect();
+  await ensureTestDatabase(pgClient);
+  await pgClient.query(`
+    INSERT INTO auth.users (id, email)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'journey_test@example.com')
+    ON CONFLICT (id) DO NOTHING;
+  `);
+} catch (err) {
+  console.error('[Adaptive API Journey] Could not connect/init disposable PostgreSQL:', err.message);
+  process.exit(1);
+}
 
 const require = createRequire(import.meta.url);
 const llmGateway = require('../backend/dist/services/llmProviderGateway.js');
@@ -124,24 +143,27 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const testUserId = '11111111-1111-1111-1111-111111111111';
+
 // In-memory test auth middleware
 app.use((req, res, next) => {
-  req.user = { uid: 'test-user-journey-1' };
+  req.user = { uid: testUserId };
   next();
 });
 
 app.post('/api/interview/sessions', async (req, res) => {
   try {
-    const result = await sessionService.createSession('test-user-journey-1', req.body.context);
+    const result = await sessionService.createSession(testUserId, req.body.context);
     res.json(result);
   } catch (err) {
+    console.error('[Session Creation Error]:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.get('/api/interview/sessions/:sessionId', async (req, res) => {
   try {
-    const session = await sessionService.getSession('test-user-journey-1', req.params.sessionId);
+    const session = await sessionService.getSession(testUserId, req.params.sessionId);
     if (!session) return res.status(404).json({ error: 'Session not found' });
     res.json(session);
   } catch (err) {
@@ -153,7 +175,7 @@ app.post('/api/interview/sessions/:sessionId/answers', async (req, res) => {
   try {
     const { questionId, expectedSessionVersion, clientSubmissionId, answerKind, answerText } = req.body;
     const result = await sessionService.submitAdaptiveTurn(
-      'test-user-journey-1',
+      testUserId,
       req.params.sessionId,
       questionId,
       expectedSessionVersion,
@@ -170,7 +192,7 @@ app.post('/api/interview/sessions/:sessionId/answers', async (req, res) => {
 
 app.post('/api/interview/sessions/:sessionId/report', async (req, res) => {
   try {
-    const report = await aiService.generateAuthoritativeReport('test-user-journey-1', req.params.sessionId);
+    const report = await aiService.generateAuthoritativeReport(testUserId, req.params.sessionId);
     res.json(report);
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });

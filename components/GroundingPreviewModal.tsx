@@ -6,6 +6,7 @@ interface GroundingPreviewModalProps {
   purpose: GroundingPurpose;
   items: CareerContextItem[];
   conflicts: GroundingConflict[];
+  error?: string;
   onConfirm: (selectedItemIds: string[], scope: 'one_time' | 'future_sessions') => void;
   onSkip: () => void;
   onClose: () => void;
@@ -15,6 +16,7 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
   purpose,
   items,
   conflicts,
+  error,
   onConfirm,
   onSkip,
   onClose,
@@ -58,9 +60,18 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
           </button>
         </div>
 
+        {/* Grounding Persistence Error */}
+        {error && (
+          <div id="grounding-error-banner" className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 space-y-1 text-red-400 text-xs">
+            <div className="font-semibold flex items-center gap-1.5"><AlertTriangle className="w-4 h-4" /> Grounding Persistence Error</div>
+            <div id="grounding-error-message">{error}</div>
+            <div className="text-white/60 text-[11px] pt-1">You may choose to continue without context below.</div>
+          </div>
+        )}
+
         {/* Conflict Warning */}
         {conflicts.length > 0 && (
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 space-y-2">
+          <div id="grounding-conflict-warning" className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 space-y-2">
             <div className="flex items-center gap-2 text-amber-400 font-medium text-sm">
               <AlertTriangle className="w-4 h-4" /> Conflict Detected
             </div>
@@ -145,12 +156,14 @@ export const GroundingPreviewModal: React.FC<GroundingPreviewModalProps> = ({
         {/* Action Buttons */}
         <div className="flex items-center justify-between border-t border-white/10 pt-4">
           <button
+            id="continue-without-context"
             onClick={onSkip}
             className="px-4 py-2.5 rounded-xl border border-white/10 text-white/60 hover:text-white text-xs font-medium transition-colors"
           >
-            Continue Without Grounding
+            Continue Without Context
           </button>
           <button
+            id="confirm-grounded-launch"
             onClick={() => onConfirm(selectedIds, scope)}
             disabled={selectedIds.length === 0}
             className="px-6 py-2.5 rounded-xl bg-brand-primary text-brand-dark hover:bg-brand-primary/90 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors disabled:opacity-40"

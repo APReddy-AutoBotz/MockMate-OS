@@ -16,6 +16,7 @@ import { buildInterviewContextItems } from '../services/careerContextAdapters/in
 import { supabaseAdmin } from '../supabaseAdmin';
 import {
   CareerContextItemDraft,
+  CareerContextGetResponseSchema,
   CareerContextItemDecisionRequestSchema,
   GroundingSnapshotCreateRequestSchema,
   ModuleBridgeCreateRequestSchema,
@@ -40,14 +41,16 @@ router.get('/', async (req, res) => {
     const pendingItems = allItems.filter(i => i.status === 'pending_confirmation');
     const { projection, conflicts } = projectCareerContext(allItems);
 
-    return res.json({
+    const responsePayload = CareerContextGetResponseSchema.parse({
       success: true,
       state,
       activeItems,
       pendingItems,
       conflicts,
-      projection,
+      projection: projection || null,
     });
+
+    return res.json(responsePayload);
   } catch (err: any) {
     console.error('[CareerContextRoutes] GET / error:', err);
     const status = err.status || 500;
@@ -63,6 +66,24 @@ router.post('/rebuild', async (req, res) => {
 
     if (!supabaseAdmin) {
       return res.status(503).json({ error: 'Authoritative persistence unavailable' });
+    }
+
+    if (req.body.sourceModule && Array.isArray(req.body.items)) {
+      const result = await saveCareerContextItemDrafts(
+        userId,
+        req.body.sourceModule,
+        req.body.recordId || 'direct_rebuild',
+        req.body.revision || 'v1',
+        req.body.items
+      );
+      const updatedState = await getCareerContextState(userId);
+      return res.json({
+        success: true,
+        state: updatedState,
+        addedCount: result.addedCount,
+        supersededCount: result.supersededCount,
+        unchangedCount: result.unchangedCount,
+      });
     }
 
     const drafts: CareerContextItemDraft[] = [];
@@ -155,14 +176,14 @@ router.post('/rebuild', async (req, res) => {
       });
     }
 
-    const result = await saveCareerContextItemDrafts(userId, drafts);
+    const result = await saveCareerContextItemDrafts(userId, 'system_rebuild', 'rebuild_all', 'v1', drafts);
     const updatedState = await getCareerContextState(userId);
 
     return res.json({
       success: true,
       state: updatedState,
       addedCount: result.addedCount,
-      supersededCount: result.updatedCount,
+      supersededCount: result.supersededCount,
       unchangedCount: result.unchangedCount,
     });
   } catch (err: any) {

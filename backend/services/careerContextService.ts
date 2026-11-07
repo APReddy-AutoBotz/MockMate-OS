@@ -21,7 +21,7 @@ export async function getCareerContextState(userId: string): Promise<CareerConte
         userId: data.user_id,
         contextVersion: Number(data.context_version),
         personalizationEnabled: Boolean(data.personalization_enabled),
-        updatedAt: data.updated_at || now,
+        updatedAt: data.updated_at instanceof Date ? data.updated_at.toISOString() : String(data.updated_at || now),
       });
     }
 
@@ -42,7 +42,7 @@ export async function getCareerContextState(userId: string): Promise<CareerConte
         userId: inserted.user_id,
         contextVersion: Number(inserted.context_version),
         personalizationEnabled: Boolean(inserted.personalization_enabled),
-        updatedAt: inserted.updated_at,
+        updatedAt: inserted.updated_at instanceof Date ? inserted.updated_at.toISOString() : String(inserted.updated_at),
       });
     }
   }
@@ -53,6 +53,14 @@ export async function getCareerContextState(userId: string): Promise<CareerConte
     personalizationEnabled: false,
     updatedAt: now,
   });
+}
+
+function toIsoDateString(v: any): string {
+  if (!v) return new Date().toISOString();
+  if (v instanceof Date) return v.toISOString();
+  const d = new Date(v);
+  if (!isNaN(d.getTime())) return d.toISOString();
+  return String(v);
 }
 
 export async function setPersonalizationPreference(
@@ -66,36 +74,24 @@ export async function setPersonalizationPreference(
     throw err;
   }
 
-  const now = new Date().toISOString();
-  const currentState = await getCareerContextState(userId);
+  const { data, error } = await supabaseAdmin.rpc('update_personalization_preference_tx', {
+    p_user_id: userId,
+    p_enabled: enabled,
+    p_expected_version: expectedContextVersion || null,
+  });
 
-  if (expectedContextVersion !== undefined && expectedContextVersion !== currentState.contextVersion) {
-    const err: any = new Error(`Stale or mismatched context version: expected ${expectedContextVersion}, current is ${currentState.contextVersion}`);
-    err.status = 409;
+  if (error || !data) {
+    const err: any = new Error(`Failed to update preference: ${error?.message || 'Unknown error'}`);
+    if (error?.message?.includes('Stale or mismatched context version')) err.status = 409;
     throw err;
   }
 
-  const newVer = currentState.contextVersion + 1;
-  const { data, error } = await supabaseAdmin
-    .from('career_context_state')
-    .upsert({
-      user_id: userId,
-      context_version: newVer,
-      personalization_enabled: enabled,
-      updated_at: now,
-    })
-    .select('*')
-    .single();
-
-  if (error || !data) {
-    throw new Error(`Failed to update preference: ${error?.message}`);
-  }
-
+  const stateData = (data as any).state;
   return CareerContextStateSchema.parse({
-    userId: data.user_id,
-    contextVersion: Number(data.context_version),
-    personalizationEnabled: Boolean(data.personalization_enabled),
-    updatedAt: data.updated_at,
+    userId: stateData.user_id,
+    contextVersion: Number(stateData.context_version),
+    personalizationEnabled: Boolean(stateData.personalization_enabled),
+    updatedAt: toIsoDateString(stateData.updated_at),
   });
 }
 
@@ -116,65 +112,38 @@ export async function getUserCareerContextItems(userId: string): Promise<CareerC
 
 export async function saveCareerContextItemDrafts(
   userId: string,
+  sourceModule: string,
+  recordId: string,
+  revision: string,
   drafts: CareerContextItemDraft[]
-): Promise<{ addedCount: number; updatedCount: number; unchangedCount: number }> {
+): Promise<{ addedCount: number; supersededCount: number; unchangedCount: number; contextVersion: number }> {
   if (!supabaseAdmin) {
     const err: any = new Error('Authoritative persistence unavailable');
     err.status = 503;
     throw err;
   }
 
-  const existingItems = await getUserCareerContextItems(userId);
-  const now = new Date().toISOString();
-  let addedCount = 0;
-  let updatedCount = 0;
-  let unchangedCount = 0;
+  const { data, error } = await supabaseAdmin.rpc('rebuild_career_context_batch_tx', {
+    p_user_id: userId,
+    p_source_module: sourceModule,
+    p_record_id: recordId,
+    p_revision: revision,
+    p_items: drafts,
+  });
 
-  for (const draft of drafts) {
-    const existing = existingItems.find(i => i.canonicalKey === draft.canonicalKey);
-
-    if (!existing) {
-      const newItem = {
-        id: crypto.randomUUID(),
-        user_id: userId,
-        item_kind: draft.kind,
-        canonical_key: draft.canonicalKey,
-        label: draft.label,
-        value: draft.value,
-        source_module: draft.source.module,
-        source_record_id: draft.source.recordId || null,
-        source_path: draft.source.fieldPath || null,
-        source_revision: draft.source.sourceRevision || 'v1',
-        source_hash: draft.source.sourceHash || 'h1',
-        exact_excerpt: draft.exactExcerpt || null,
-        provenance: draft.provenance,
-        item_status: draft.status || 'pending_confirmation',
-        sensitivity: draft.sensitivity,
-        created_at: now,
-        updated_at: now,
-      };
-
-      await supabaseAdmin.from('career_context_items').insert(newItem);
-      addedCount++;
-    } else if (existing.source.sourceHash !== draft.source.sourceHash) {
-      await supabaseAdmin
-        .from('career_context_items')
-        .update({
-          label: draft.label,
-          value: draft.value,
-          source_revision: draft.source.sourceRevision,
-          source_hash: draft.source.sourceHash,
-          exact_excerpt: draft.exactExcerpt || null,
-          updated_at: now,
-        })
-        .eq('id', existing.id);
-      updatedCount++;
-    } else {
-      unchangedCount++;
-    }
+  if (error || !data) {
+    const err: any = new Error(`Failed to rebuild career context batch: ${error?.message || 'Unknown error'}`);
+    err.status = 500;
+    throw err;
   }
 
-  return { addedCount, updatedCount, unchangedCount };
+  const res = data as any;
+  return {
+    addedCount: Number(res.addedCount || 0),
+    supersededCount: Number(res.supersededCount || 0),
+    unchangedCount: Number(res.unchangedCount || 0),
+    contextVersion: Number(res.contextVersion || 1),
+  };
 }
 
 export async function handleItemDecision(
@@ -211,6 +180,7 @@ export async function handleItemDecision(
 }
 
 function mapDbToItem(r: any): CareerContextItem {
+  const toIso = (v: any) => v ? (v instanceof Date ? v.toISOString() : String(v)) : undefined;
   return CareerContextItemSchema.parse({
     id: r.id,
     userId: r.user_id,
@@ -224,15 +194,15 @@ function mapDbToItem(r: any): CareerContextItem {
       fieldPath: r.source_path,
       sourceRevision: r.source_revision,
       sourceHash: r.source_hash,
-      capturedAt: r.created_at,
+      capturedAt: toIso(r.created_at) || new Date().toISOString(),
     },
     exactExcerpt: r.exact_excerpt || undefined,
     provenance: r.provenance,
     status: r.item_status,
     sensitivity: r.sensitivity,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
+    createdAt: toIso(r.created_at),
+    updatedAt: toIso(r.updated_at),
     supersededBy: r.superseded_by || undefined,
-    userConfirmedAt: r.user_confirmed_at || undefined,
+    userConfirmedAt: toIso(r.user_confirmed_at),
   });
 }

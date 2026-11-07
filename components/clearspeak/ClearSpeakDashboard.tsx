@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import type { ClearSpeakBridgePayload, ClearSpeakProfile, ClearSpeakProgress } from './types';
+import { ClearSpeakGroundingLaunch } from 'mockmate-shared';
 import { getProfile, getProgress } from '../../services/clearSpeakService';
 import ClearSpeakOnboarding from './ClearSpeakOnboarding';
 import ClearSpeakSession from './ClearSpeakSession';
 
 interface ClearSpeakDashboardProps {
   onInterviewBridge: (payload: ClearSpeakBridgePayload) => void;
+  groundingLaunch?: ClearSpeakGroundingLaunch | null;
 }
 
 type DashboardView = 'loading' | 'onboarding' | 'dashboard' | 'session';
@@ -17,7 +19,7 @@ const clarityLabel = (score: number) => {
   return 'Keep practicing';
 };
 
-const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBridge }) => {
+const ClearSpeakDashboard: React.FC<ClearSpeakDashboardProps> = ({ onInterviewBridge, groundingLaunch }) => {
   const [view, setView] = useState<DashboardView>('loading');
   const [profile, setProfile] = useState<ClearSpeakProfile | null>(null);
   const [progress, setProgress] = useState<ClearSpeakProgress | null>(null);

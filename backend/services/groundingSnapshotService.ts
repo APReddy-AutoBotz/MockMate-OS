@@ -41,121 +41,46 @@ export async function createGroundingSnapshot(input: CreateSnapshotInput): Promi
   } = input;
   const acknowledgedAt = new Date().toISOString();
 
-  // 1. Load active state version for user
-  let contextVersion = 1;
-  let personalizationEnabled = false;
-  const { data: stateData } = await supabaseAdmin
-    .from('career_context_state')
-    .select('context_version, personalization_enabled')
-    .eq('user_id', userId)
-    .maybeSingle();
-
-  if (stateData) {
-    contextVersion = Number(stateData.context_version);
-    personalizationEnabled = Boolean(stateData.personalization_enabled);
-  }
-
-  if (expectedContextVersion !== undefined && expectedContextVersion !== contextVersion) {
-    const err: any = new Error(`Stale or mismatched context version: expected ${expectedContextVersion}, current is ${contextVersion}`);
-    err.status = 409;
-    throw err;
-  }
-
-  // 2. Canonical request hash for idempotency
-  const sortedInc = [...includedItemIds].sort();
-  const sortedExc = [...excludedItemIds].sort();
-  const sortedMods = [...sourceModules].sort();
-  const rawHashPayload = JSON.stringify({
-    userId,
-    purpose,
-    contextVersion,
-    includedItemIds: sortedInc,
-    excludedItemIds: sortedExc,
-    conflictSelections,
-    scope,
-    sourceModules: sortedMods,
-  });
-  const requestHash = crypto.createHash('sha256').update(rawHashPayload).digest('hex');
-
-  // 3. Load specified items (verifying ownership, active status, and sensitivity)
-  let items: CareerContextItem[] = [];
-  if (includedItemIds.length > 0) {
-    const { data: rawItems, error } = await supabaseAdmin
-      .from('career_context_items')
-      .select('*')
-      .eq('user_id', userId)
-      .in('id', includedItemIds);
-
-    if (error) {
-      throw new Error(`Failed to load requested career context items: ${error.message}`);
-    }
-
-    if (rawItems) {
-      if (rawItems.length !== includedItemIds.length) {
-        const err: any = new Error('One or more requested career context items were missing or not owned by user.');
-        err.status = 422;
-        throw err;
-      }
-
-      for (const r of rawItems) {
-        if (r.item_status !== 'active') {
-          const err: any = new Error(`Item ${r.id} is not active (status: ${r.item_status}).`);
-          err.status = 422;
-          throw err;
-        }
-        if (r.provenance === 'inferred_pending') {
-          const err: any = new Error(`Item ${r.id} is inferred_pending and cannot be grounded until user confirmed.`);
-          err.status = 422;
-          throw err;
-        }
-        if (r.sensitivity === 'personal_contact') {
-          const err: any = new Error(`Item ${r.id} has personal_contact sensitivity and cannot be grounded.`);
-          err.status = 422;
-          throw err;
-        }
-      }
-
-      items = rawItems.map(mapDbToCareerContextItem);
-    }
-  }
-
-  // 4. Project context & compute conflicts
-  const { projection, conflicts } = projectCareerContext(items, purpose, conflictSelections, personalizationEnabled);
-
-  // Reject unresolved conflicts
-  const unresolved = conflicts.find(c => c.requiresUserChoice && !conflictSelections[c.canonicalKey]);
-  if (unresolved) {
-    const err: any = new Error(`Unresolved conflict for key '${unresolved.canonicalKey}'. Explicit selection required.`);
-    err.status = 422;
-    throw err;
-  }
-
   const consent = {
     scope,
     purpose,
-    includedItemIds: items.map(i => i.id),
+    includedItemIds,
     excludedItemIds,
     sourceModules,
     acknowledgedAt,
   };
 
-  // 5. Invoke transactional RPC create_grounding_snapshot_tx
+  const rawHashPayload = JSON.stringify({
+    userId,
+    purpose,
+    includedItemIds: [...includedItemIds].sort(),
+    excludedItemIds: [...excludedItemIds].sort(),
+    conflictSelections,
+    scope,
+    sourceModules: [...sourceModules].sort(),
+  });
+  const requestHash = crypto.createHash('sha256').update(rawHashPayload).digest('hex');
+
   const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('create_grounding_snapshot_tx', {
     p_user_id: userId,
     p_purpose: purpose,
-    p_projection: projection,
-    p_conflicts: conflicts,
+    p_expected_context_version: expectedContextVersion || null,
+    p_included_item_ids: includedItemIds,
+    p_excluded_item_ids: excludedItemIds,
+    p_conflict_selections: conflictSelections,
     p_consent: consent,
     p_source_modules: sourceModules,
-    p_item_ids: items.map(i => i.id),
     p_client_request_id: clientRequestId,
     p_request_hash: requestHash,
   });
 
   if (rpcErr) {
     const err: any = new Error(rpcErr.message);
-    if (rpcErr.message.includes('unique_user_snapshot_client_req')) err.status = 409;
-    else err.status = 400;
+    if (rpcErr.message.includes('unique_user_snapshot_client_req') || rpcErr.message.includes('Stale context version')) {
+      err.status = 409;
+    } else {
+      err.status = 422;
+    }
     throw err;
   }
 
@@ -190,17 +115,21 @@ export async function getSnapshotById(userId: string, snapshotId: string): Promi
 }
 
 function getSnapshotFromDbRow(data: any): CareerContextSnapshot {
+  const parseJson = (v: any) => typeof v === 'string' ? JSON.parse(v) : v;
+  const consent = parseJson(data.consent);
+  const rawConflicts = parseJson(data.conflicts);
+  const conflicts = Array.isArray(rawConflicts) ? rawConflicts : [];
   return CareerContextSnapshotSchema.parse({
     id: data.id,
     userId: data.user_id,
     purpose: data.purpose,
     contextVersion: Number(data.context_version),
-    projection: data.projection,
-    conflicts: data.conflicts || [],
-    consent: data.consent,
-    createdAt: data.created_at,
+    projection: parseJson(data.projection),
+    conflicts,
+    consent,
+    createdAt: data.created_at instanceof Date ? data.created_at.toISOString() : String(data.created_at),
     sourceModules: data.source_modules,
-    itemIds: data.consent?.includedItemIds || [],
+    itemIds: consent?.includedItemIds || [],
   });
 }
 

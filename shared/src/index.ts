@@ -419,13 +419,19 @@ export const GroundingConflictSchema = z.object({
 export type GroundingConflict = z.infer<typeof GroundingConflictSchema>;
 
 export const GroundingProjectionSchema = z.object({
+  purpose: GroundingPurposeSchema.optional(),
+  sourceModules: z.array(z.string()).optional(),
+  itemCount: z.number().optional(),
   targetRole: z.string().nullable().optional(),
   alternativeTargetRoles: z.array(z.string()).optional(),
   careerGoals: z.array(z.string()).optional(),
+  experienceYears: z.number().nullable().optional(),
   skills: z.array(z.string()).optional(),
   achievements: z.array(z.string()).optional(),
+  topAchievements: z.array(z.string()).optional(),
   experienceClaims: z.array(z.string()).optional(),
   projects: z.array(z.string()).optional(),
+  recentProjects: z.array(z.string()).optional(),
   jdMissingSkills: z.array(z.string()).optional(),
   personalizationEnabled: z.boolean().optional(),
   practiceSignals: z.array(z.string()).optional(),
@@ -512,8 +518,21 @@ export const CareerContextGetResponseSchema = z.object({
   state: CareerContextStateSchema,
   activeItems: z.array(CareerContextItemSchema),
   pendingItems: z.array(CareerContextItemSchema),
+  conflicts: z.array(GroundingConflictSchema),
+  projection: GroundingProjectionSchema.nullable().optional(),
 }).strict();
 export type CareerContextGetResponse = z.infer<typeof CareerContextGetResponseSchema>;
+
+export const ClearSpeakGroundingLaunchSchema = z.object({
+  snapshotId: z.string().uuid(),
+  bridgeId: z.string().uuid(),
+  purpose: GroundingPurposeSchema,
+  selectedSourceItemReferences: z.array(z.string()).optional(),
+  selectedSummary: z.string().optional(),
+  selectedAchievements: z.array(z.string()).optional(),
+  selectedProjects: z.array(z.string()).optional(),
+}).strict();
+export type ClearSpeakGroundingLaunch = z.infer<typeof ClearSpeakGroundingLaunchSchema>;
 
 export const CareerContextRebuildRequestSchema = z.object({
   expectedContextVersion: z.number().int().optional(),
@@ -871,6 +890,7 @@ export const RawQuestionBlueprintSchema = z.object({
   language: z.string().optional(),
   timeAllocation: z.number().optional(),
   relatedDimensions: z.array(z.string()).optional(),
+  groundingItemIds: z.array(z.string().uuid()).optional(),
 }).passthrough();
 
 export const RawInterviewPlanSchema = z.object({

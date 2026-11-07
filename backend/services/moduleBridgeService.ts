@@ -117,6 +117,7 @@ export async function getModuleBridgeById(userId: string, bridgeId: string): Pro
 }
 
 function mapDbToBridge(row: any): ModuleBridgeSession {
+  const toIso = (v: any) => v ? (v instanceof Date ? v.toISOString() : String(v)) : undefined;
   return ModuleBridgeSessionSchema.parse({
     id: row.id,
     userId: row.user_id,
@@ -128,9 +129,9 @@ function mapDbToBridge(row: any): ModuleBridgeSession {
     targetSessionId: row.target_session_id || undefined,
     status: row.status,
     clientRequestId: row.client_request_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at || row.created_at || new Date().toISOString(),
-    confirmedAt: row.confirmed_at || undefined,
-    consumedAt: row.consumed_at || undefined,
+    createdAt: toIso(row.created_at) || new Date().toISOString(),
+    updatedAt: toIso(row.updated_at) || toIso(row.created_at) || new Date().toISOString(),
+    confirmedAt: toIso(row.confirmed_at),
+    consumedAt: toIso(row.consumed_at),
   });
 }

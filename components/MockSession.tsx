@@ -25,6 +25,7 @@ import { trackQuestionUsage } from '../services/storageService';
 
 interface MockSessionProps {
   sessionContext: InterviewSessionContext;
+  onSessionStarted?: (sessionId: string) => void;
   onReportGenerated: (report: FinalReport) => void;
   onCancel: () => void;
 }
@@ -38,7 +39,7 @@ type SessionPhase =
   | 'confirm_skip'
   | 'generating_report';
 
-const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGenerated, onCancel }) => {
+const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onSessionStarted, onReportGenerated, onCancel }) => {
   const [sessionPhase, setSessionPhase] = useState<SessionPhase>('loading_question');
   const [sessionId, setSessionId] = useState<string>('');
   const [openingMessage, setOpeningMessage] = useState<string>('');
@@ -76,6 +77,9 @@ const MockSession: React.FC<MockSessionProps> = ({ sessionContext, onReportGener
       try {
         const data = await startInterviewSession(sessionContext);
         setSessionId(data.sessionId);
+        if (onSessionStarted && data.sessionId) {
+          onSessionStarted(data.sessionId);
+        }
         setOpeningMessage(data.openingMessage);
         setCurrentQuestion(data.firstQuestion);
         setRootQuestionIndex(data.questionIndex);
