@@ -1034,6 +1034,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
                   onClick={() => { void submit(); }}
                   disabled={submitting}
                   aria-busy={submitting}
+                  aria-label="Check recording"
                   className="rounded-xl bg-brand-primary px-5 py-3 font-bold disabled:opacity-60 text-brand-dark flex items-center gap-2 shadow-md shadow-brand-primary/20 hover:brightness-105 transition-all"
                 >
                   {submitting ? 'Evaluating speech & accent…' : 'Evaluate Pronunciation ✨'}
@@ -1041,6 +1042,7 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
                 <button
                   onClick={() => { void settleCurrentAttempt(); }}
                   disabled={transitioning}
+                  aria-label="Discard recording"
                   className="rounded-xl border border-white/20 px-5 py-3 text-sm font-semibold hover:bg-white/10 disabled:opacity-60 transition-colors"
                 >
                   {transitioning ? 'Discarding…' : 'Record Again'}

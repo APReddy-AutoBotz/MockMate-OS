@@ -2,14 +2,19 @@
  * components/clearspeak/ClearSpeakSession.tsx
  * Mockmate ClearSpeak — main session orchestrator.
  *
- * Implements the screen-by-screen UX flow from implementation_plan.md §12:
- *   idle → vocab_warmup → guided_read → recording → processing
- *       → score_card → [retry?] → [bridge_prompt?] → complete
+ * Implements the screen-by-screen UX flow:
+ *   idle → vocab_warmup → guided_read (with live pause/resume & review) → processing
+ *       → score_card (with audio playback) → [retry?] → [bridge_prompt?] → complete
  *
- * One job per phase. No conversational AI. No avatar. No grammar module.
+ * Polished communication coach experience:
+ *   - Native reference voiceover (normal 1.0x & slow 0.8x)
+ *   - Interactive tap-to-pronounce on ANY word
+ *   - Live recording timer, pause/resume, and discard/start-over
+ *   - Audio preview player before scoring (no accidental submissions)
+ *   - Scorecard with audio playback of the evaluated attempt
  */
 
-import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type {
   ClearSpeakPhase,
   ClearSpeakSessionContent,
@@ -27,31 +32,19 @@ import {
 } from '../../services/clearSpeakService';
 import { csTrack, newSessionId } from '../../services/csAnalytics';
 import { useAudioRecorder } from './useAudioRecorder';
+import { accentAudioService } from '../../services/accentAudioService';
 import PassageRenderer from './PassageRenderer';
 import BetaFeedback from './BetaFeedback';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface ClearSpeakSessionProps {
-  /**
-   * Called when bridge trigger fires — navigates to Mockmate Interview.
-   * Carries the full structured bridge payload (contract: ClearSpeakBridgePayload).
-   */
   onInterviewBridge: (payload: ClearSpeakBridgePayload) => void;
-  /** Notifies App while a score request may commit quota/progress server-side. */
   onScoreCommitStateChange?: (inFlight: boolean) => void;
-  /** Called when session fully completes */
   onComplete: (topicTag?: string) => void;
-  /** Called once when a grounded score reaches canonical completion (including replay). */
   onCanonicalGroundedScore?: (bridgeId: string) => void;
-  /** Recent topic tags to enforce content freshness */
   recentTopics?: string[];
-  /** Number of sessions attempted in the current UI session to toggle hybrid generation */
   sessionAttemptLength?: number;
-  /**
-   * The user's ClearSpeak role — passed from dashboard profile state.
-   * Used to populate the bridge payload role field correctly.
-   */
   profileRole: import('./types').ClearSpeakRole;
   grounding?: { snapshot: CareerContextSnapshot; bridge: ModuleBridgeSession };
 }
@@ -138,29 +131,53 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const recorder = useAudioRecorder();
 
-  // The application-level grounding prop is a one-time launch handoff. App
-  // clears it as soon as the canonical score completes so a later ClearSpeak
-  // launch is ordinary, but that parent cleanup must not rewrite the identity
-  // of this still-mounted session. Capture the authoritative selectors once
-  // for this session's entire lifetime.
   const sessionGrounding = useRef(grounding).current;
-
-  // Per-session analytics ID — generated once on mount, not persisted
   const sessionId = useRef(newSessionId()).current;
-  // Track whether retry was used in this session (for feedback widget Q3)
   const [retryUsed, setRetryUsed] = useState(false);
-  // Track whether feedback widget is showing
   const [showFeedback, setShowFeedback] = useState(false);
   const notifiedGroundedCompletion = useRef<string | null>(null);
+
+  // Audio preview & feedback states
+  const [activeWord, setActiveWord] = useState<string | null>(null);
+  const [isPlayingCoach, setIsPlayingCoach] = useState(false);
+  const [lastScoredAudioUrl, setLastScoredAudioUrl] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  const previewUrl = useMemo(
+    () => recorder.audioBlob ? URL.createObjectURL(recorder.audioBlob) : '',
+    [recorder.audioBlob],
+  );
+
+  useEffect(() => () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
+
+  // Clean up last scored audio object url on unmount
+  useEffect(() => () => {
+    if (lastScoredAudioUrl) URL.revokeObjectURL(lastScoredAudioUrl);
+    accentAudioService.stop();
+  }, [lastScoredAudioUrl]);
+
+  // Live timer for recording state
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    if (recorder.state === 'recording') {
+      interval = setInterval(() => {
+        setElapsedSeconds(prev => prev + 1);
+      }, 1000);
+    } else if (recorder.state === 'idle' || recorder.state === 'canceled') {
+      setElapsedSeconds(0);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [recorder.state]);
 
   useEffect(() => {
     onScoreCommitStateChange?.(state.phase === 'processing');
     return () => onScoreCommitStateChange?.(false);
   }, [onScoreCommitStateChange, state.phase]);
 
-  // SCORE_RECEIVED is the canonical completion boundary for a grounded attempt.
-  // Notify the application here rather than waiting for a later score-card action,
-  // since global navigation may unmount this component immediately afterward.
   useEffect(() => {
     const bridgeId = sessionGrounding?.bridge.id;
     if (state.phase !== 'score_card' || !bridgeId || notifiedGroundedCompletion.current === bridgeId) return;
@@ -168,17 +185,15 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
     onCanonicalGroundedScore?.(bridgeId);
   }, [sessionGrounding?.bridge.id, onCanonicalGroundedScore, state.phase]);
 
-  // ── Load content on mount ──
+  // Load content on mount
   useEffect(() => {
     (async () => {
       try {
         const content = await generateSession(recentTopics, sessionAttemptLength, sessionGrounding);
         dispatch({ type: 'CONTENT_LOADED', content });
-        // ANALYTICS: session_started — fires after content is available
         void csTrack('session_started', sessionId, {
           topicTag: content.topicTag,
           difficultyLevel: content.difficultyLevel,
-          // isFallback is not detectable client-side; backend logs it separately
         });
       } catch (err: any) {
         dispatch({ type: 'ERROR', message: err.message || 'Failed to load practice content.' });
@@ -187,9 +202,52 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Submit recording for scoring ──
+  // Audio Playback Helpers
+  const handleWordClick = async (word: string) => {
+    const clean = word.replace(/[^a-zA-Z'-]/g, '').trim().toLowerCase();
+    if (!clean) return;
+    setActiveWord(clean);
+    try {
+      await accentAudioService.speakWord(word, 'en-US');
+    } catch (e) {
+      console.warn('Word audio error', e);
+    } finally {
+      setActiveWord(null);
+    }
+  };
+
+  const playCoachAudio = async (text: string, slow = false) => {
+    setIsPlayingCoach(true);
+    setActiveWord(null);
+    try {
+      await accentAudioService.speak(text, {
+        locale: 'en-US',
+        rate: slow ? 0.78 : 0.95,
+        pitch: 1.0,
+      });
+    } catch (e) {
+      console.warn('Playback error', e);
+    } finally {
+      setIsPlayingCoach(false);
+    }
+  };
+
+  const stopCoachAudio = () => {
+    accentAudioService.stop();
+    setIsPlayingCoach(false);
+    setActiveWord(null);
+  };
+
+  // Submit recording for scoring (called explicitly when learner clicks evaluate)
   const handleSubmitRecording = useCallback(async (isRetryAttempt: boolean) => {
     if (!recorder.audioBlob || !state.content) return;
+
+    stopCoachAudio();
+
+    // Persist a copy of preview url for the scorecard so the learner can listen back
+    if (previewUrl) {
+      setLastScoredAudioUrl(previewUrl);
+    }
 
     dispatch({ type: 'START_PROCESSING' });
 
@@ -202,13 +260,9 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
         clientSessionId: sessionId,
       });
 
-      // Clear blob from memory — privacy policy
       recorder.clearAudio();
 
-      // Low-confidence guard: if the composite is extremely low (≤ 15),
-      // the transcription likely failed (empty audio, mic error, background noise).
       if (score.composite <= 15 && score.clarity === 0) {
-        // ANALYTICS: low_confidence_error (frontend guard)
         void csTrack('low_confidence_error', sessionId, { errorSource: 'frontend_guard' });
         dispatch({
           type: 'ERROR',
@@ -217,7 +271,6 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
         return;
       }
 
-      // ANALYTICS: score_feedback_viewed — fires when score card is about to render
       void csTrack('score_feedback_viewed', sessionId, {
         composite: score.composite,
         clarity: score.clarity,
@@ -229,7 +282,6 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
     } catch (err: any) {
       recorder.clearAudio();
       if (err instanceof LowConfidenceError) {
-        // ANALYTICS: low_confidence_error (route 422)
         void csTrack('low_confidence_error', sessionId, { errorSource: 'route_422' });
         dispatch({ type: 'ERROR', message: err.message });
       } else if (err instanceof ScoringUnavailableError) {
@@ -238,9 +290,9 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
         dispatch({ type: 'ERROR', message: err.message || 'Scoring failed. Please try again.' });
       }
     }
-  }, [recorder, state.content, sessionId]);
+  }, [recorder, state.content, sessionId, previewUrl]);
 
-  // ── Safeguard: Catch async recorder errors after phase transitions ──
+  // Safeguard: Catch async recorder errors after phase transitions
   useEffect(() => {
     if (
       (state.phase === 'recording' || state.phase === 'retry') &&
@@ -250,14 +302,17 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
     }
   }, [state.phase, recorder.state, recorder.errorMessage]);
 
-  // Handle successful recording completion safely
-  useEffect(() => {
-    if (state.phase === 'recording' && recorder.state === 'preview_ready' && recorder.audioBlob) {
-      handleSubmitRecording(false);
-    } else if (state.phase === 'retry' && recorder.state === 'preview_ready' && recorder.audioBlob) {
-      handleSubmitRecording(true);
+  const handleNextPassage = async () => {
+    stopCoachAudio();
+    recorder.clearAudio();
+    dispatch({ type: 'START_PROCESSING' });
+    try {
+      const content = await generateSession(recentTopics, sessionAttemptLength + 1, sessionGrounding);
+      dispatch({ type: 'CONTENT_LOADED', content });
+    } catch (err: any) {
+      dispatch({ type: 'ERROR', message: err.message || 'Failed to load next passage.' });
     }
-  }, [state.phase, recorder.state, recorder.audioBlob, handleSubmitRecording]);
+  };
 
   // ── Phase Renders ──────────────────────────────────────────────────────────
 
@@ -266,15 +321,24 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
       <div className="flex min-h-[55dvh] w-full items-center justify-center animate-in fade-in duration-500">
         {state.error ? (
           <div className="flex flex-col items-center gap-6 p-8 bg-red-500/10 border border-red-500/20 rounded-2xl max-w-lg text-center">
-            <svg className="w-12 h-12 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-            <p className="text-red-400 text-lg font-medium">{state.error}</p>
-            {state.content && (
+            <svg className="w-12 h-12 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-red-300 text-base font-medium">{state.error}</p>
+            {state.content ? (
               <button
                 id="cs-error-retry"
                 onClick={() => dispatch({ type: 'START_READ' })}
-                className="px-6 py-3 bg-red-500/20 hover:bg-red-500/30 text-red-300 font-bold rounded-xl transition-colors"
+                className="px-6 py-3 bg-brand-primary text-brand-dark font-bold rounded-xl hover:brightness-110 transition-all shadow-md"
               >
                 Try Again
+              </button>
+            ) : (
+              <button
+                onClick={() => onComplete()}
+                className="px-6 py-3 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-xl transition-all"
+              >
+                Back to Dashboard
               </button>
             )}
           </div>
@@ -293,35 +357,45 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
       <VocabWarmup
         vocab={state.content.keyVocab}
         onReady={() => dispatch({ type: 'START_READ' })}
+        onWordClick={handleWordClick}
+        activeWord={activeWord}
       />
     );
   }
 
-    if (state.phase === 'guided_read' && state.content) {
-      return (
-        <GuidedRead
-          content={state.content}
-          recorderState={recorder.state}
-          onStartRecording={async () => {
-            try {
-              await recorder.startRecording();
-              dispatch({ type: 'START_RECORDING' });
-            } catch (err: any) {
-              dispatch({ type: 'ERROR', message: err.message });
-            }
-          }}
-        />
-      );
-    }
-
-  if (state.phase === 'recording' && state.content) {
+  if ((state.phase === 'guided_read' || state.phase === 'recording') && state.content) {
     return (
-      <RecordingView
+      <GuidedReadAndRecordView
         content={state.content}
-        recorderState={recorder.state}
-        onStop={() => {
+        recorder={recorder}
+        previewUrl={previewUrl}
+        activeWord={activeWord}
+        isPlayingCoach={isPlayingCoach}
+        elapsedSeconds={elapsedSeconds}
+        onWordClick={handleWordClick}
+        onPlayCoach={(slow) => playCoachAudio(state.content!.passageData.map(t => t.text).join(' '), slow)}
+        onStopCoach={stopCoachAudio}
+        onStartRecording={async () => {
+          stopCoachAudio();
+          try {
+            await recorder.startRecording();
+            dispatch({ type: 'START_RECORDING' });
+          } catch (err: any) {
+            dispatch({ type: 'ERROR', message: err.message });
+          }
+        }}
+        onPauseRecording={recorder.pauseRecording}
+        onResumeRecording={recorder.resumeRecording}
+        onStopRecording={() => {
           recorder.stopRecording();
         }}
+        onDiscardRecording={() => {
+          recorder.abortRecording();
+          recorder.clearAudio();
+          dispatch({ type: 'START_READ' });
+        }}
+        onSubmitRecording={() => handleSubmitRecording(false)}
+        onSkipPassage={handleNextPassage}
       />
     );
   }
@@ -329,35 +403,32 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   if (state.phase === 'processing') {
     return (
       <div className="flex min-h-[55dvh] w-full flex-col items-center justify-center animate-in fade-in zoom-in-95 duration-500">
-        <div className="w-32 h-32 relative flex items-center justify-center mb-8">
+        <div className="w-28 h-28 relative flex items-center justify-center mb-8">
           <div className="absolute inset-0 rounded-full border-4 border-brand-primary/20"></div>
           <div className="absolute inset-0 rounded-full border-4 border-t-brand-primary border-r-brand-primary/60 border-b-transparent border-l-transparent animate-spin"></div>
-          <svg className="w-10 h-10 text-white animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+          <span className="text-3xl">🎙</span>
         </div>
-        <p className="text-xl font-bold text-white mb-2">Checking your speaking...</p>
-        <span className="text-sm uppercase tracking-widest text-brand-primary/70">Clear is better than fast</span>
+        <p className="text-2xl font-bold text-white mb-2 tracking-tight">Analyzing speech delivery & pacing...</p>
+        <span className="text-xs uppercase tracking-widest text-brand-tint">Measuring transcript match, rhythm, and pauses</span>
       </div>
     );
   }
 
   if (state.phase === 'score_card' && state.score && state.content) {
-    // A grounded score is already the canonical completion of its one-time
-    // artifact/bridge. Reusing it with new audio would only replay the old
-    // result, so keep retry available exclusively for ordinary practice.
-    const shouldRetry = !sessionGrounding && state.score.composite < 70 && !state.isRetry;
+    const shouldRetry = !sessionGrounding && state.score.composite < 75 && !state.isRetry;
     return (
       <ScoreCard
         score={state.score}
         progress={state.progress}
+        recordedAudioUrl={lastScoredAudioUrl}
         onRetry={shouldRetry ? () => {
-          // ANALYTICS: retry_used
           void csTrack('retry_used', sessionId, { firstComposite: state.score!.composite });
           setRetryUsed(true);
           dispatch({ type: 'TRIGGER_RETRY' });
         } : undefined}
+        onNextPassage={handleNextPassage}
         onContinue={() => {
           if (state.bridgeTrigger?.shouldSurface) {
-            // ANALYTICS: bridge_triggered
             void csTrack('bridge_triggered', sessionId, { role: profileRole });
             dispatch({ type: 'TRIGGER_BRIDGE' });
           } else {
@@ -373,7 +444,14 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
       <RetryView
         sentence={state.content.retrySentence}
         recorder={recorder}
+        previewUrl={previewUrl}
+        activeWord={activeWord}
+        isPlayingCoach={isPlayingCoach}
+        onWordClick={handleWordClick}
+        onPlayCoach={(slow) => playCoachAudio(state.content!.retrySentence, slow)}
+        onStopCoach={stopCoachAudio}
         onSubmit={() => handleSubmitRecording(true)}
+        onCancel={() => dispatch({ type: 'START_READ' })}
       />
     );
   }
@@ -384,7 +462,6 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
         question={state.content.interviewBridgeQuestion}
         topicTag={state.content.topicTag}
         onAccept={() => {
-          // ANALYTICS: bridge_entered
           void csTrack('bridge_entered', sessionId, { role: profileRole, topicTag: state.content!.topicTag });
           const payload: ClearSpeakBridgePayload = {
             source: 'clearspeak_bridge',
@@ -407,8 +484,6 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   }
 
   if (state.phase === 'complete') {
-    // ANALYTICS: session_completed — fires once, on first render of complete phase
-    // Using showFeedback state change as the trigger guard
     if (!showFeedback) {
       void csTrack('session_completed', sessionId, {
         composite: state.score?.composite,
@@ -419,20 +494,36 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
       });
     }
     return (
-      <div className="mx-auto flex w-full max-w-xl flex-col items-center justify-center rounded-[22px] border border-white/10 bg-brand-dark/85 p-6 text-center shadow-[0_0_40px_rgba(0,0,0,0.5)] backdrop-blur-xl animate-in fade-in duration-500 sm:rounded-[2rem] sm:p-12">
-        <div className="w-20 h-20 mb-6 bg-brand-primary/10 rounded-full flex items-center justify-center">
-          <span className="text-4xl">🎉</span>
+      <div className="mx-auto flex w-full max-w-xl flex-col items-center justify-center rounded-3xl border border-white/10 bg-gradient-to-b from-white/[0.05] to-transparent p-6 text-center shadow-2xl backdrop-blur-xl animate-in fade-in duration-500 sm:p-10">
+        <div className="w-16 h-16 mb-5 bg-emerald-500/20 border border-emerald-500/30 rounded-2xl flex items-center justify-center">
+          <span className="text-3xl">🎉</span>
         </div>
-        <h2 className="text-2xl sm:text-3xl font-extrabold text-white mb-2">Great session!</h2>
-        <p className="text-white/70 mb-10 text-lg">Keep the streak going.</p>
-        
+        <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">Great Delivery Practice!</h2>
+        <p className="text-brand-tint mb-8 text-sm sm:text-base leading-relaxed">
+          Consistent daily practice builds confident interview presence.
+        </p>
+
         {!showFeedback ? (
-          <button 
-            onClick={() => setShowFeedback(true)}
-            className="px-8 py-4 bg-white/5 hover:bg-white/10 text-white font-bold rounded-xl transition-all border border-white/10 w-full"
-          >
-            Back to Home
-          </button>
+          <div className="w-full flex flex-col gap-3">
+            <button
+              onClick={handleNextPassage}
+              className="w-full rounded-xl bg-brand-primary py-3.5 font-bold text-brand-dark hover:brightness-110 shadow-lg shadow-brand-primary/20 transition-all"
+            >
+              Practice Another Passage ↻
+            </button>
+            <button
+              onClick={() => onComplete(state.content?.topicTag)}
+              className="w-full rounded-xl border border-white/20 py-3 text-sm font-semibold text-white hover:bg-white/10 transition-colors"
+            >
+              ClearSpeak Home
+            </button>
+            <button
+              onClick={() => setShowFeedback(true)}
+              className="text-xs text-brand-tint hover:text-white transition-colors mt-2"
+            >
+              Give feedback on this session
+            </button>
+          </div>
         ) : (
           <div className="w-full text-left animate-in slide-in-from-bottom-4 duration-300">
             <BetaFeedback
@@ -449,254 +540,591 @@ const ClearSpeakSession: React.FC<ClearSpeakSessionProps> = ({
   return null;
 };
 
-// ─── Sub-views (styled) ────────────────────────────────────────────────────────
+// ─── Sub-views ────────────────────────────────────────────────────────────────
 
-const playAudio = (text: string) => {
-  if ('speechSynthesis' in window) {
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en';
-    utterance.rate = 0.85; // Slower for clarity
-    window.speechSynthesis.speak(utterance);
-  }
+const formatDuration = (seconds: number) => {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 };
 
-const VocabWarmup: React.FC<{ vocab: string[]; onReady: () => void }> = ({ vocab, onReady }) => (
-  <div className="mx-auto flex w-full max-w-3xl flex-col rounded-[22px] border border-white/10 bg-brand-dark/85 p-5 shadow-[0_0_40px_rgba(0,0,0,0.5)] backdrop-blur-xl animate-in slide-in-from-bottom-8 duration-500 sm:rounded-[2rem] sm:p-10">
-    <header className="mb-6 text-center sm:mb-8">
-      <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white mb-2">
-        Warm Up — Key Words
-      </h2>
-      <p className="text-white/60">Listen and repeat each word before we begin.</p>
-    </header>
-    
-    <ul className="mb-8 grid grid-cols-1 gap-3 sm:mb-10 sm:grid-cols-2 sm:gap-4">
-      {vocab.map(v => (
-        <li key={v} className="relative flex flex-col items-center justify-center p-6 bg-black/40 rounded-xl border border-white/5 group hover:border-brand-primary/30 transition-all">
-          <span className="text-2xl font-bold text-white/90 group-hover:text-white transition-colors">{v}</span>
-          <button
-            onClick={() => playAudio(v)}
-            className="absolute top-3 right-3 p-2 rounded-full bg-white/5 hover:bg-brand-primary/15 text-brand-primary shadow-lg transition-colors cursor-pointer"
-            title="Listen"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M17.95 6.05a8 8 0 010 11.9M6 10h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 001.707-.707V8a1 1 0 00-1.707-.707L9.293 3.879A1 1 0 008.586 3.5H6a2 2 0 00-2 2v13a2 2 0 002 2z" /></svg>
-          </button>
-        </li>
-      ))}
-    </ul>
-    
-    <button 
-      id="cs-warmup-ready" 
-      onClick={onReady}
-      className="w-full rounded-xl bg-brand-primary py-4 font-bold text-brand-dark shadow-[0_0_20px_rgba(255,188,3,0.22)] transition-all hover:bg-brand-primary/90"
-    >
-      I'm Ready — Start Reading
-    </button>
-  </div>
-);
-
-const GuidedRead: React.FC<{
-  content: ClearSpeakSessionContent;
-  recorderState: string;
-  onStartRecording: () => void;
-}> = ({ content, recorderState, onStartRecording }) => (
-  <div className="mx-auto flex w-full max-w-4xl flex-col rounded-[22px] border border-white/10 bg-brand-dark/85 p-5 shadow-[0_0_40px_rgba(0,0,0,0.5)] backdrop-blur-xl animate-in fade-in duration-500 sm:rounded-[2rem] sm:p-8 md:p-12">
-    <header className="mb-6 flex flex-col items-start justify-between gap-4 border-b border-white/10 pb-5 sm:mb-8 sm:flex-row sm:items-center sm:pb-6">
-      <h2 className="text-2xl sm:text-3xl font-extrabold text-white">Read Aloud</h2>
-      <div className="px-4 py-2 bg-brand-primary/10 border border-brand-primary/20 rounded-full">
-        <span className="text-brand-primary text-xs font-bold uppercase tracking-widest">Practicing: {content.targetSkill}</span>
+const VocabWarmup: React.FC<{
+  vocab: string[];
+  onReady: () => void;
+  onWordClick: (word: string) => void;
+  activeWord: string | null;
+}> = ({ vocab, onReady, onWordClick, activeWord }) => (
+  <div className="mx-auto flex w-full max-w-3xl flex-col rounded-3xl border border-white/10 bg-slate-900/80 p-5 shadow-2xl backdrop-blur-xl animate-in slide-in-from-bottom-6 duration-500 sm:p-8">
+    <header className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-5">
+      <div>
+        <span className="text-[11px] font-bold uppercase tracking-wider text-brand-primary">Warmup Drill</span>
+        <h2 className="text-2xl sm:text-3xl font-extrabold text-white mt-1">
+          Key Vocabulary
+        </h2>
+        <p className="text-xs sm:text-sm text-brand-tint mt-1">Tap each word to hear clean pronunciation before reading the passage.</p>
       </div>
-    </header>
-    
-    <div className="mb-4 min-h-[150px] rounded-xl border border-white/5 bg-black/30 p-4 shadow-inner sm:p-8">
-      <PassageRenderer tokens={content.passageData} />
-    </div>
-    
-    <div className="mb-8 flex flex-col items-center justify-between gap-4 px-0 sm:mb-10 sm:flex-row sm:px-4">
-      <div className="flex flex-wrap items-center justify-center gap-3 text-xs font-semibold uppercase tracking-wider text-white/50 sm:gap-4">
-        <span className="flex items-center gap-1"><span className="text-brand-primary font-bold text-base">Aa</span> Stress</span>
-        <span className="flex items-center gap-1"><span className="text-white/70 font-bold text-base">/</span> Pause</span>
-        <span className="flex items-center gap-1"><span className="text-white/70 font-bold text-base">//</span> Breathe</span>
-      </div>
-      
       <button
-        onClick={() => playAudio(content.passageData.map(t => t.text).join(' '))}
-        className="px-6 py-2 bg-white/5 hover:bg-white/10 text-white font-bold rounded-full border border-white/10 transition-all flex items-center gap-2 cursor-pointer"
+        type="button"
+        onClick={onReady}
+        className="rounded-lg border border-white/20 bg-white/5 px-3 py-1.5 text-xs font-semibold text-brand-tint hover:text-white hover:bg-white/10 transition-colors"
       >
-        <svg className="w-5 h-5 text-brand-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M17.95 6.05a8 8 0 010 11.9M6 10h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 001.707-.707V8a1 1 0 00-1.707-.707L9.293 3.879A1 1 0 008.586 3.5H6a2 2 0 00-2 2v13a2 2 0 002 2z" /></svg>
-        Hear First
+        Skip Warmup →
       </button>
-    </div>
-    
-    <button  
-      id="cs-start-recording" 
-      onClick={onStartRecording}
-      disabled={recorderState === 'requesting_permission'}
-      className="w-full sm:w-auto self-center px-12 py-5 bg-brand-primary hover:bg-brand-primary/90 text-brand-dark font-extrabold text-lg rounded-full shadow-[0_0_30px_rgba(255,188,3,0.22)] transition-all flex items-center justify-center gap-3 transform hover:scale-105 active:scale-95"
+    </header>
+
+    <ul className="mb-8 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+      {vocab.map(v => {
+        const clean = v.toLowerCase().replace(/[^a-z]/g, '');
+        const isSpeaking = activeWord === clean;
+        return (
+          <li
+            key={v}
+            className={`relative flex items-center justify-between p-4 sm:p-5 rounded-2xl border transition-all ${
+              isSpeaking
+                ? 'bg-brand-primary/15 border-brand-primary ring-2 ring-brand-primary/40'
+                : 'bg-black/30 border-white/10 hover:border-brand-primary/30'
+            }`}
+          >
+            <span className="text-xl font-bold text-white tracking-wide">{v}</span>
+            <button
+              type="button"
+              onClick={() => onWordClick(v)}
+              className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
+                isSpeaking
+                  ? 'bg-brand-primary text-brand-dark border-brand-primary'
+                  : 'bg-white/5 hover:bg-white/15 text-brand-primary border-white/10'
+              }`}
+              title={`Listen to "${v}"`}
+            >
+              <span className="text-sm">🔊</span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+
+    <button
+      id="cs-warmup-ready"
+      onClick={onReady}
+      className="w-full rounded-2xl bg-brand-primary py-4 font-bold text-brand-dark shadow-lg shadow-brand-primary/20 hover:brightness-110 active:scale-[0.99] transition-all flex items-center justify-center gap-2"
     >
-      <div className="w-4 h-4 bg-brand-dark rounded-full"></div>
-      {recorderState === 'requesting_permission' ? 'Waiting for microphone permission…' : 'Start speaking'}
+      <span>I'm Ready — Start Reading</span>
+      <span>→</span>
     </button>
   </div>
 );
 
-const RecordingView: React.FC<{
+const GuidedReadAndRecordView: React.FC<{
   content: ClearSpeakSessionContent;
-  recorderState: string;
-  onStop: () => void;
-}> = ({ content, recorderState, onStop }) => (
-  <div className="mx-auto flex w-full max-w-4xl flex-col rounded-[22px] border border-brand-primary/20 bg-brand-dark/85 p-5 shadow-[0_0_50px_rgba(0,0,0,0.45)] backdrop-blur-xl animate-in fade-in duration-300 sm:rounded-[2rem] sm:p-8 md:p-12">
-    <header className="mb-6 flex flex-col items-start justify-between gap-3 border-b border-white/10 pb-5 sm:mb-8 sm:flex-row sm:items-center sm:pb-6">
-      <div className="flex items-center gap-3">
-        {recorderState === 'recording' ? (
-          <>
-            <div className="w-4 h-4 bg-brand-primary rounded-full animate-pulse shadow-[0_0_10px_rgba(255,188,3,0.75)]"></div>
-            <span className="text-brand-primary font-bold tracking-widest uppercase">Listening...</span>
-          </>
-        ) : (
-          <span className="text-white/50 font-bold tracking-widest uppercase">Preparing...</span>
+  recorder: ReturnType<typeof useAudioRecorder>;
+  previewUrl: string;
+  activeWord: string | null;
+  isPlayingCoach: boolean;
+  elapsedSeconds: number;
+  onWordClick: (word: string) => void;
+  onPlayCoach: (slow: boolean) => void;
+  onStopCoach: () => void;
+  onStartRecording: () => void;
+  onPauseRecording: () => void;
+  onResumeRecording: () => void;
+  onStopRecording: () => void;
+  onDiscardRecording: () => void;
+  onSubmitRecording: () => void;
+  onSkipPassage: () => void;
+}> = ({
+  content,
+  recorder,
+  previewUrl,
+  activeWord,
+  isPlayingCoach,
+  elapsedSeconds,
+  onWordClick,
+  onPlayCoach,
+  onStopCoach,
+  onStartRecording,
+  onPauseRecording,
+  onResumeRecording,
+  onStopRecording,
+  onDiscardRecording,
+  onSubmitRecording,
+  onSkipPassage,
+}) => {
+  const isRecording = recorder.state === 'recording';
+  const isPaused = recorder.state === 'paused';
+  const hasPreview = Boolean(previewUrl && recorder.audioBlob && recorder.state === 'preview_ready');
+
+  return (
+    <div className="mx-auto flex w-full max-w-4xl flex-col rounded-3xl border border-white/10 bg-slate-900/90 p-5 shadow-2xl backdrop-blur-xl animate-in fade-in duration-500 sm:p-8">
+      {/* Header Context */}
+      <header className="mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
+        <div>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-brand-primary">
+            Spoken Delivery Practice
+          </span>
+          <h2 className="text-xl sm:text-2xl font-bold text-white mt-0.5">Read Aloud</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-brand-primary/10 border border-brand-primary/20 px-3 py-1 text-xs font-semibold text-brand-primary">
+            Focus: {content.targetSkill}
+          </span>
+          <button
+            type="button"
+            onClick={onSkipPassage}
+            disabled={isRecording || isPaused}
+            className="rounded-lg border border-white/20 bg-white/5 px-2.5 py-1 text-xs font-semibold text-brand-tint hover:text-white hover:bg-white/10 transition-colors disabled:opacity-40"
+          >
+            Next Passage ↻
+          </button>
+        </div>
+      </header>
+
+      {/* Coach Hint */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-black/30 border border-white/5 px-4 py-2.5 text-xs text-brand-tint">
+        <div className="flex items-center gap-2">
+          <span className="text-amber-400 font-bold">💡 Tip:</span>
+          <span>Tap any word to hear its pronunciation. Bold words carry natural phrase stress.</span>
+        </div>
+        <div className="flex items-center gap-3 text-[11px] font-semibold text-slate-300">
+          <span className="flex items-center gap-1">
+            <span className="text-emerald-400 font-bold">Aa</span> Stress
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="text-amber-300">⏸</span> Pause
+          </span>
+        </div>
+      </div>
+
+      {/* Target Passage */}
+      <div className="mb-5 min-h-[160px] rounded-2xl border border-white/10 bg-black/40 p-5 shadow-inner">
+        <PassageRenderer
+          tokens={content.passageData}
+          onWordClick={onWordClick}
+          activeWord={activeWord}
+        />
+      </div>
+
+      {/* Coach Reference Voiceover Controls */}
+      <div className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-3.5 sm:p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-xs font-semibold text-emerald-300">Coach Reference Audio</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onPlayCoach(false)}
+              disabled={isPlayingCoach || isRecording}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 text-xs font-semibold transition-all disabled:opacity-40"
+            >
+              <span>{isPlayingCoach ? '🔊 Speaking…' : '🔊 Listen Normal'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onPlayCoach(true)}
+              disabled={isPlayingCoach || isRecording}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 px-3 py-1.5 text-xs font-semibold transition-all disabled:opacity-40"
+            >
+              <span>🐢 Slow Rhythm (0.8x)</span>
+            </button>
+            {isPlayingCoach && (
+              <button
+                type="button"
+                onClick={onStopCoach}
+                className="rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 px-2.5 py-1.5 text-xs font-semibold"
+              >
+                ⏹ Stop
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Recording Workflow Area */}
+      <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
+        {!isRecording && !isPaused && !hasPreview && (
+          <div className="flex flex-col items-center justify-center text-center gap-4 py-2">
+            <button
+              id="cs-start-recording"
+              onClick={onStartRecording}
+              disabled={recorder.state === 'requesting_permission'}
+              className="px-10 py-4 bg-brand-primary hover:brightness-110 text-brand-dark font-extrabold text-base rounded-2xl shadow-lg shadow-brand-primary/20 transition-all flex items-center gap-3 transform hover:scale-102 active:scale-98 cursor-pointer"
+            >
+              <span className="text-xl">🎤</span>
+              <span>{recorder.state === 'requesting_permission' ? 'Requesting microphone…' : 'Start Speaking'}</span>
+            </button>
+            <p className="text-xs text-brand-tint">
+              Read at a calm, natural pace. Pauses are automatically measured for rhythm feedback.
+            </p>
+          </div>
+        )}
+
+        {(isRecording || isPaused) && (
+          <div className="flex flex-col items-center gap-5 py-2">
+            <div className="flex items-center gap-3">
+              <span className={`inline-flex h-3.5 w-3.5 rounded-full ${isPaused ? 'bg-amber-400' : 'bg-red-500 animate-pulse'}`} />
+              <span className="font-mono text-xl font-bold text-white">
+                {formatDuration(elapsedSeconds)} <span className="text-xs text-brand-tint">/ 02:00</span>
+              </span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-brand-tint ml-2">
+                {isPaused ? '⏸ Paused' : 'Listening…'}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              {isRecording ? (
+                <button
+                  type="button"
+                  onClick={onPauseRecording}
+                  className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-5 py-3 text-sm font-semibold text-amber-300 hover:bg-amber-400/20 transition-colors flex items-center gap-2"
+                >
+                  <span>⏸</span>
+                  <span>Pause</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onResumeRecording}
+                  className="rounded-xl bg-emerald-500/20 border border-emerald-500/40 px-5 py-3 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/30 transition-colors flex items-center gap-2"
+                >
+                  <span>▶</span>
+                  <span>Resume</span>
+                </button>
+              )}
+
+              <button
+                id="cs-stop-recording"
+                type="button"
+                onClick={onStopRecording}
+                className="rounded-xl bg-brand-primary px-7 py-3 font-bold text-brand-dark hover:brightness-110 shadow-md shadow-brand-primary/20 transition-all flex items-center gap-2"
+              >
+                <span>⏹</span>
+                <span>Done, Review Recording</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onDiscardRecording}
+                className="rounded-xl border border-white/20 px-4 py-3 text-xs font-semibold text-brand-tint hover:text-white hover:bg-white/10 transition-colors"
+              >
+                ✕ Discard
+              </button>
+            </div>
+          </div>
+        )}
+
+        {hasPreview && (
+          <div className="flex flex-col gap-4 animate-in fade-in duration-300">
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                <span>✓</span> Recording Captured
+              </span>
+              <span className="text-xs text-brand-tint">Listen back before submitting</span>
+            </div>
+
+            <audio controls src={previewUrl} className="w-full" aria-label="Preview your recording" />
+
+            <div className="flex flex-wrap items-center gap-3 mt-1">
+              <button
+                type="button"
+                onClick={onSubmitRecording}
+                className="flex-1 rounded-xl bg-brand-primary py-3.5 px-6 font-bold text-brand-dark hover:brightness-110 shadow-lg shadow-brand-primary/20 transition-all flex items-center justify-center gap-2"
+              >
+                <span>Evaluate Delivery & Pacing ✨</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onDiscardRecording}
+                className="rounded-xl border border-white/20 px-5 py-3 text-sm font-semibold text-white hover:bg-white/10 transition-colors"
+              >
+                ↺ Record Again
+              </button>
+            </div>
+          </div>
+        )}
+
+        {recorder.errorMessage && (
+          <p role="alert" className="mt-3 text-xs text-red-300 text-center">
+            {recorder.errorMessage}
+          </p>
         )}
       </div>
-      <div className="text-[11px] font-bold text-brand-tint uppercase tracking-[0.16em]">
-        Recording stops automatically after 2 minutes
-      </div>
-    </header>
-    
-    <div className="mb-8 min-h-[150px] rounded-xl border border-white/5 bg-black/30 p-4 shadow-inner sm:mb-10 sm:p-8">
-      <PassageRenderer tokens={content.passageData} />
     </div>
-    
-    <div className="flex items-center justify-center">
-      <button 
-        id="cs-stop-recording" 
-        onClick={onStop} 
-        disabled={recorderState !== 'recording'}
-        className="w-full sm:w-auto self-center px-12 py-5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-extrabold text-lg rounded-full transition-all flex items-center justify-center gap-3 backdrop-blur-md"
-      >
-        <div className="w-4 h-4 bg-white rounded-sm"></div>
-        Done, check my feedback
-      </button>
-    </div>
-  </div>
-);
+  );
+};
 
 const ScoreCard: React.FC<{
   score: ClearSpeakSessionScore;
   progress: ClearSpeakProgress | null;
+  recordedAudioUrl?: string | null;
   onRetry?: () => void;
+  onNextPassage: () => void;
   onContinue: () => void;
-}> = ({ score, progress, onRetry, onContinue }) => (
-  <div className="mx-auto flex w-full max-w-3xl flex-col overflow-hidden rounded-[22px] border border-white/10 bg-brand-dark/90 shadow-[0_0_50px_rgba(0,0,0,0.6)] backdrop-blur-xl animate-in zoom-in-95 duration-500 sm:rounded-[2rem]">
-    <div className="p-8 sm:p-12 flex flex-col items-center text-center border-b border-white/5 relative">
-      
-      <h2 className="text-xl sm:text-2xl font-bold text-white/70 mb-4 z-10 uppercase tracking-widest">Delivery practice score</h2>
-      <div className="text-7xl sm:text-8xl font-black text-white bg-clip-text text-transparent bg-gradient-to-b from-white to-white/60 mb-6 z-10 drop-shadow-2xl">
-        {score.composite}<span className="text-2xl text-brand-tint">/100</span>
-      </div>
-      {progress && (
-        <div className="inline-flex items-center gap-2 px-4 py-2 bg-black/40 rounded-full border border-white/10 z-10">
-          <span className="text-orange-500">🔥</span>
-          <span className="text-sm font-bold text-white/90">{progress.streak}-day habit</span>
-        </div>
-      )}
-    </div>
+}> = ({ score, progress, recordedAudioUrl, onRetry, onNextPassage, onContinue }) => {
+  const isHigh = score.composite >= 80;
+  const isMedium = score.composite >= 65 && score.composite < 80;
 
-    <div className="p-8 sm:p-10 flex flex-col gap-8">
-      <div className="grid grid-cols-3 gap-2 sm:gap-4">
-        {[
-          {l: 'Transcript match', v: score.clarity},
-          {l: 'Pace', v: score.pacing},
-          {l: 'Pause timing', v: score.rhythm}
-        ].map(p => (
-          <div key={p.l} className="flex flex-col items-center p-4 bg-white/5 rounded-xl border border-white/5 group hover:border-brand-primary/20 transition-all">
-            <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-2 text-center leading-tight h-6 flex items-center">{p.l}</span>
-            <span className={`text-2xl sm:text-3xl font-bold ${p.v >= 80 ? 'text-brand-primary' : 'text-amber-400'}`}>{p.v}/100</span>
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-900/90 shadow-2xl backdrop-blur-xl animate-in zoom-in-95 duration-500">
+      {/* Top Banner */}
+      <div className="p-6 sm:p-10 flex flex-col items-center text-center border-b border-white/10 relative bg-gradient-to-b from-white/[0.04] to-transparent">
+        <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold mb-3 border border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+          <span>{isHigh ? '🌟 Outstanding Delivery' : isMedium ? '👍 Solid Delivery' : '🎯 Practice Focus'}</span>
+        </span>
+
+        <h2 className="text-lg sm:text-xl font-bold text-white/70 uppercase tracking-widest">
+          Speaking Delivery Score
+        </h2>
+
+        <div className="text-6xl sm:text-7xl font-black text-brand-primary my-2 drop-shadow-xl">
+          {score.composite}<span className="text-2xl text-brand-tint">/100</span>
+        </div>
+
+        {progress && (
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-black/40 rounded-full border border-white/10 text-xs">
+            <span className="text-orange-400">🔥</span>
+            <span className="font-semibold text-white/90">{progress.streak}-day streak</span>
           </div>
-        ))}
-      </div>
-      
-      {score.hardWordBonus > 0 && (
-        <div className="w-full p-4 bg-brand-primary/10 border border-brand-primary/20 rounded-xl flex items-center justify-center gap-3 text-brand-primary font-bold text-sm">
-          <span>✨</span> +{score.hardWordBonus} practice bonus
-        </div>
-      )}
-
-      <div className="p-6 bg-white/5 border-l-4 border-brand-primary rounded-r-xl">
-        <h3 className="text-[10px] font-bold text-brand-primary uppercase tracking-widest mb-2">Coach's advice</h3>
-        <p className="text-white/80 leading-relaxed italic">"{score.feedbackTip}"</p>
-      </div>
-
-      <p className="text-sm leading-relaxed text-brand-tint">
-        This feedback compares the transcription with the passage and uses word timing for pace and pauses. It does not assess pronunciation, accent, identity, or fluency.
-      </p>
-
-      <div className="flex flex-col sm:flex-row gap-4 mt-4">
-        {onRetry && (
-          <button 
-            id="cs-retry" 
-            onClick={onRetry}
-            className="flex-1 py-4 bg-white/5 hover:bg-white/10 text-white font-bold rounded-xl transition-all border border-white/10"
-          >
-            Fix That Sentence
-          </button>
         )}
-        <button 
-          id="cs-continue" 
-          onClick={onContinue}
-          className="flex-1 py-4 bg-brand-primary hover:bg-brand-primary/90 text-brand-dark font-bold rounded-xl shadow-[0_0_20px_rgba(255,188,3,0.22)] transition-all"
-        >
-          Continue
-        </button>
+      </div>
+
+      <div className="p-6 sm:p-8 flex flex-col gap-6">
+        {/* Metric Cards */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="flex flex-col items-center justify-center p-4 bg-white/5 rounded-2xl border border-white/10 text-center">
+            <span className="text-[10px] font-bold text-brand-tint uppercase tracking-wider mb-1">
+              Transcript Match
+            </span>
+            <span className="text-2xl font-bold text-white">{score.clarity}%</span>
+            <span className="text-[11px] text-emerald-400 mt-0.5">Word accuracy</span>
+          </div>
+
+          <div className="flex flex-col items-center justify-center p-4 bg-white/5 rounded-2xl border border-white/10 text-center">
+            <span className="text-[10px] font-bold text-brand-tint uppercase tracking-wider mb-1">
+              Speaking Pace
+            </span>
+            <span className="text-2xl font-bold text-white">{score.pacing}%</span>
+            <span className="text-[11px] text-brand-tint mt-0.5">
+              {score.measuredWpm ? `${score.measuredWpm} WPM` : 'Optimal tempo'}
+            </span>
+          </div>
+
+          <div className="flex flex-col items-center justify-center p-4 bg-white/5 rounded-2xl border border-white/10 text-center">
+            <span className="text-[10px] font-bold text-brand-tint uppercase tracking-wider mb-1">
+              Pause Adherence
+            </span>
+            <span className="text-2xl font-bold text-white">{score.rhythm}%</span>
+            <span className="text-[11px] text-amber-300 mt-0.5">Breath timing</span>
+          </div>
+        </div>
+
+        {/* Listen Back Player */}
+        {recordedAudioUrl && (
+          <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+            <span className="text-xs font-semibold text-brand-tint block mb-2">
+              🎧 Listen to your evaluated recording:
+            </span>
+            <audio controls src={recordedAudioUrl} className="w-full" />
+          </div>
+        )}
+
+        {/* Coach Advice */}
+        <div className="p-5 bg-gradient-to-r from-brand-primary/10 to-transparent border-l-4 border-brand-primary rounded-r-2xl">
+          <h3 className="text-xs font-bold text-brand-primary uppercase tracking-wider mb-1 flex items-center gap-1.5">
+            <span>💡</span>
+            <span>Coach's Delivery Advice</span>
+          </h3>
+          <p className="text-slate-200 text-sm leading-relaxed italic">
+            "{score.feedbackTip}"
+          </p>
+        </div>
+
+        <p className="text-xs text-brand-tint leading-relaxed">
+          This scoring measures transcript alignment, speaking pace, and breath pauses. Raw audio stays strictly memory-only.
+        </p>
+
+        {/* Action CTAs */}
+        <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-white/10">
+          <button
+            type="button"
+            onClick={onNextPassage}
+            className="flex-1 rounded-xl bg-brand-primary py-3.5 px-5 font-bold text-brand-dark hover:brightness-110 shadow-lg shadow-brand-primary/20 transition-all flex items-center justify-center gap-2"
+          >
+            <span>Practice Another Passage ↻</span>
+          </button>
+
+          {onRetry && (
+            <button
+              id="cs-retry"
+              type="button"
+              onClick={onRetry}
+              className="rounded-xl border border-white/20 py-3.5 px-5 text-sm font-semibold text-white hover:bg-white/10 transition-colors"
+            >
+              Fix Tricky Sentence
+            </button>
+          )}
+
+          <button
+            id="cs-continue"
+            type="button"
+            onClick={onContinue}
+            className="rounded-xl border border-white/20 py-3.5 px-5 text-sm font-semibold text-brand-tint hover:text-white hover:bg-white/10 transition-colors"
+          >
+            Continue →
+          </button>
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 const RetryView: React.FC<{
   sentence: string;
   recorder: ReturnType<typeof useAudioRecorder>;
+  previewUrl: string;
+  activeWord: string | null;
+  isPlayingCoach: boolean;
+  onWordClick: (word: string) => void;
+  onPlayCoach: (slow: boolean) => void;
+  onStopCoach: () => void;
   onSubmit: () => void;
-}> = ({ sentence, recorder, onSubmit }) => (
-  <div className="mx-auto flex w-full max-w-3xl flex-col rounded-[22px] border border-brand-primary/20 bg-brand-dark/85 p-5 text-center shadow-[0_0_40px_rgba(0,0,0,0.45)] backdrop-blur-xl animate-in slide-in-from-bottom-8 duration-500 sm:rounded-[2rem] sm:p-10">
-    <div className="w-16 h-16 bg-brand-primary/10 border border-brand-primary/20 rounded-full flex items-center justify-center mx-auto mb-6">
-      <svg className="w-8 h-8 text-brand-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+  onCancel: () => void;
+}> = ({
+  sentence,
+  recorder,
+  previewUrl,
+  activeWord,
+  isPlayingCoach,
+  onWordClick,
+  onPlayCoach,
+  onStopCoach,
+  onSubmit,
+  onCancel,
+}) => {
+  const words = sentence.split(/\s+/).filter(Boolean);
+  const isRecording = recorder.state === 'recording';
+  const hasPreview = Boolean(previewUrl && recorder.audioBlob && recorder.state === 'preview_ready');
+
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col rounded-3xl border border-brand-primary/30 bg-slate-900/90 p-6 text-center shadow-2xl backdrop-blur-xl animate-in slide-in-from-bottom-6 duration-500 sm:p-10">
+      <div className="flex items-center justify-between border-b border-white/10 pb-4 mb-6">
+        <span className="text-xs font-bold text-amber-400 uppercase tracking-wider">Targeted Sentence Fix</span>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="text-xs text-brand-tint hover:text-white transition-colors"
+        >
+          ← Back
+        </button>
+      </div>
+
+      <h2 className="text-2xl font-bold text-white mb-2">Let's refine this sentence</h2>
+      <p className="text-xs text-brand-tint mb-6">Tap words to hear pronunciation, listen to the coach, then speak.</p>
+
+      {/* Interactive Sentence Card */}
+      <div className="mb-6 rounded-2xl border border-white/10 bg-black/40 p-6 flex flex-wrap items-center justify-center gap-1.5 leading-relaxed">
+        {words.map((w, idx) => {
+          const clean = w.toLowerCase().replace(/[^a-z]/g, '');
+          const isSpeaking = activeWord === clean;
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => onWordClick(w)}
+              className={`rounded px-1.5 py-0.5 text-lg font-medium transition-all ${
+                isSpeaking
+                  ? 'bg-brand-primary text-brand-dark font-bold scale-105 ring-2 ring-brand-primary'
+                  : 'text-white hover:bg-white/10 hover:text-brand-primary'
+              }`}
+            >
+              {w}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Audio Reference */}
+      <div className="flex items-center justify-center gap-3 mb-8">
+        <button
+          type="button"
+          onClick={() => onPlayCoach(false)}
+          disabled={isPlayingCoach || isRecording}
+          className="rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 text-xs font-semibold"
+        >
+          {isPlayingCoach ? '🔊 Playing…' : '🔊 Listen Normal'}
+        </button>
+        <button
+          type="button"
+          onClick={() => onPlayCoach(true)}
+          disabled={isPlayingCoach || isRecording}
+          className="rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 px-3 py-1.5 text-xs font-semibold"
+        >
+          🐢 Slow Rhythm (0.8x)
+        </button>
+        {isPlayingCoach && (
+          <button
+            type="button"
+            onClick={onStopCoach}
+            className="rounded-lg bg-red-500/20 text-red-300 border border-red-500/30 px-2 py-1.5 text-xs font-semibold"
+          >
+            ⏹ Stop
+          </button>
+        )}
+      </div>
+
+      {/* Recording Area */}
+      {!isRecording && !hasPreview && (
+        <button
+          id="cs-retry-record"
+          onClick={async () => {
+            onStopCoach();
+            try {
+              await recorder.startRecording();
+            } catch (err: any) {
+              alert(err.message);
+            }
+          }}
+          className="w-full sm:w-auto self-center px-10 py-4 bg-brand-primary hover:brightness-110 text-brand-dark font-bold text-base rounded-2xl shadow-lg shadow-brand-primary/20 transition-all flex items-center gap-2"
+        >
+          <span>🎤</span>
+          <span>Start Speaking Again</span>
+        </button>
+      )}
+
+      {isRecording && (
+        <button
+          id="cs-retry-stop"
+          onClick={() => recorder.stopRecording()}
+          className="w-full sm:w-auto self-center px-10 py-4 bg-red-500 hover:bg-red-600 text-white font-bold text-base rounded-2xl shadow-lg transition-all flex items-center gap-2 animate-pulse"
+        >
+          <span>⏹</span>
+          <span>Done Recording</span>
+        </button>
+      )}
+
+      {hasPreview && (
+        <div className="flex flex-col gap-4 max-w-md mx-auto w-full">
+          <audio controls src={previewUrl} className="w-full" />
+          <div className="flex gap-2">
+            <button
+              onClick={onSubmit}
+              className="flex-1 rounded-xl bg-brand-primary py-3 font-bold text-brand-dark hover:brightness-110 shadow-md"
+            >
+              Evaluate Fix ✨
+            </button>
+            <button
+              onClick={() => recorder.clearAudio()}
+              className="rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold hover:bg-white/10"
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      )}
     </div>
-    
-    <h2 className="text-2xl font-extrabold text-white mb-6">Let's fix this one</h2>
-    
-    <div className="mb-8 rounded-xl border border-white/5 bg-black/40 p-5 sm:mb-10 sm:p-8">
-      <p className="text-2xl text-white/90 leading-relaxed font-medium">"{sentence}"</p>
-    </div>
-    
-    {recorder.state === 'idle' && (
-      <button 
-        id="cs-retry-record" 
-        onClick={async () => {
-          try {
-            await recorder.startRecording();
-          } catch (err: any) {
-            alert(err.message);
-          }
-        }}
-        className="w-full sm:w-auto self-center px-12 py-5 bg-brand-primary hover:bg-brand-primary/90 text-brand-dark font-extrabold text-lg rounded-full shadow-[0_0_30px_rgba(255,188,3,0.22)] transition-all flex items-center gap-3 transform hover:scale-105 active:scale-95"
-      >
-        <div className="w-4 h-4 bg-brand-dark rounded-full"></div>
-        Start speaking again
-      </button>
-    )}
-    
-    {recorder.state === 'recording' && (
-      <button 
-        id="cs-retry-stop" 
-        onClick={() => recorder.stopRecording()}
-        className="w-full sm:w-auto self-center px-12 py-5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-extrabold text-lg rounded-full transition-all flex items-center gap-3 backdrop-blur-md"
-      >
-        <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,1)]"></div>
-        Done, send
-      </button>
-    )}
-  </div>
-);
+  );
+};
 
 const BridgePrompt: React.FC<{
   question: string;
@@ -704,45 +1132,37 @@ const BridgePrompt: React.FC<{
   onAccept: () => void;
   onDecline: () => void;
 }> = ({ question, topicTag, onAccept, onDecline }) => (
-  <div className="relative mx-auto flex w-full max-w-3xl flex-col overflow-hidden rounded-[22px] border border-brand-primary/20 bg-brand-dark/90 p-6 shadow-[0_0_60px_rgba(0,0,0,0.45)] animate-in zoom-in-95 duration-700 sm:rounded-[2rem] sm:p-12">
-    {/* Decorative background element */}
-    <div className="absolute top-0 right-0 p-12 opacity-5 pointer-events-none">
-      <svg className="w-48 h-48" fill="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+  <div className="relative mx-auto flex w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-brand-primary/20 bg-slate-900/90 p-6 shadow-2xl animate-in zoom-in-95 duration-700 sm:p-10">
+    <div className="flex flex-col items-center text-center mb-8 z-10">
+      <div className="px-3.5 py-1 bg-brand-primary/10 border border-brand-primary/20 text-brand-primary text-xs font-bold uppercase tracking-wider rounded-full mb-4">
+        Ready for live interview test
+      </div>
+      <h2 className="text-2xl sm:text-3xl font-extrabold text-white mb-2">Test in Mock Interview</h2>
+      <p className="text-sm sm:text-base text-brand-tint max-w-lg leading-relaxed">
+        Your delivery and pause timing around <strong className="text-white">"{topicTag}"</strong> is consistent. Want to practice an interview question on it?
+      </p>
     </div>
 
-    <div className="flex flex-col items-center text-center mb-10 z-10">
-      <div className="px-4 py-1 bg-brand-primary/10 border border-brand-primary/20 text-brand-primary text-xs font-bold uppercase tracking-widest rounded-full mb-6">
-        Ready for interview practice
-      </div>
-      <h2 className="text-3xl sm:text-4xl font-extrabold text-white mb-4">You're Ready to Test This</h2>
-      <p className="text-lg text-white/70 max-w-lg">
-        Your recent transcript-match and pause-timing practice has been consistent around <strong className="text-white">"{topicTag}"</strong>. Want to answer a live interview question about it?
+    <blockquote className="relative bg-black/40 p-6 sm:p-8 rounded-2xl border border-white/10 mb-8 z-10 text-center">
+      <p className="text-lg sm:text-xl text-white/95 font-medium italic relative z-10">
+        "{question}"
       </p>
-    </div>
-    
-    <blockquote className="relative bg-black/40 p-8 sm:p-10 rounded-2xl border border-white/10 mb-10 z-10 text-center">
-      <span className="absolute top-4 left-6 text-6xl text-white/10 font-serif leading-none">"</span>
-      <p className="text-xl sm:text-2xl text-white/90 font-medium italic relative z-10">
-        {question}
-      </p>
-      <span className="absolute bottom-[-1rem] right-6 text-6xl text-white/10 font-serif leading-none">"</span>
     </blockquote>
-    
-    <div className="flex flex-col sm:flex-row gap-4 z-10">
-      <button 
-        id="cs-bridge-decline" 
+
+    <div className="flex flex-col sm:flex-row gap-3 z-10">
+      <button
+        id="cs-bridge-decline"
         onClick={onDecline}
-        className="flex-1 py-4 bg-white/5 hover:bg-white/10 text-white font-bold rounded-xl transition-all border border-white/10"
+        className="flex-1 py-3.5 bg-white/5 hover:bg-white/10 text-white font-semibold rounded-xl transition-all border border-white/10 text-sm"
       >
         Not Now
       </button>
-      <button 
-        id="cs-bridge-accept" 
+      <button
+        id="cs-bridge-accept"
         onClick={onAccept}
-      className="flex-[2] py-4 bg-brand-primary hover:bg-brand-primary/90 text-brand-dark font-bold rounded-xl shadow-[0_0_25px_rgba(255,188,3,0.22)] transition-all flex items-center justify-center gap-2 transform hover:scale-[1.02] active:scale-[0.98]"
+        className="flex-[2] py-3.5 bg-brand-primary hover:brightness-110 text-brand-dark font-bold rounded-xl shadow-lg shadow-brand-primary/20 transition-all flex items-center justify-center gap-2 text-sm"
       >
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-        Practice this question
+        <span>Practice this question →</span>
       </button>
     </div>
   </div>

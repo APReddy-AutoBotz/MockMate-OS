@@ -11,13 +11,31 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 
-export type RecorderState = 'preflight' | 'requesting_permission' | 'recording' | 'preview_ready' | 'scoring_uploading' | 'canceled' | 'permission_denied' | 'permission_revoked' | 'device_lost' | 'offline' | 'unsupported' | 'error' | 'result' | 'idle' | 'stopped';
+export type RecorderState =
+  | 'preflight'
+  | 'requesting_permission'
+  | 'recording'
+  | 'preview_ready'
+  | 'scoring_uploading'
+  | 'canceled'
+  | 'permission_denied'
+  | 'permission_revoked'
+  | 'device_lost'
+  | 'offline'
+  | 'unsupported'
+  | 'error'
+  | 'result'
+  | 'idle'
+  | 'stopped'
+  | 'paused';
 
 export interface UseAudioRecorderResult {
   state: RecorderState;
   durationMs: number;
   startRecording: (limits?: { maxDurationMs?: number; maxBytes?: number }) => Promise<void>;
   stopRecording: () => void;
+  pauseRecording: () => void;
+  resumeRecording: () => void;
   abortRecording: () => void;
   audioBlob: Blob | null;
   /** Call after scoreSession() to release the blob from memory */
@@ -59,7 +77,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       recorder.ondataavailable = null;
       recorder.onstop = null;
       recorder.onerror = null;
-      if (recorder.state === 'recording') recorder.stop();
+      if (recorder.state === 'recording' || recorder.state === 'paused') recorder.stop();
     }
     streamRef.current?.getTracks().forEach(track => { track.onended = null; track.stop(); });
     streamRef.current = null;
@@ -78,8 +96,18 @@ export function useAudioRecorder(): UseAudioRecorderResult {
     maxChunksRef.current = Math.ceil(maxDurationMs / 250) + 2;
     maxBytesRef.current = Math.max(1, Math.min(limits?.maxBytes ?? 5 * 1024 * 1024, 5 * 1024 * 1024));
 
-    if (!navigator.onLine) { const message='You are offline. Recording cannot be submitted.'; setState('offline'); setErrorMessage(message); throw new Error(message); }
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') { const message='Microphone recording is not supported in this browser.'; setState('unsupported'); setErrorMessage(message); throw new Error(message); }
+    if (!navigator.onLine) {
+      const message = 'You are offline. Recording cannot be submitted.';
+      setState('offline');
+      setErrorMessage(message);
+      throw new Error(message);
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      const message = 'Microphone recording is not supported in this browser.';
+      setState('unsupported');
+      setErrorMessage(message);
+      throw new Error(message);
+    }
     setState('requesting_permission');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -88,7 +116,16 @@ export function useAudioRecorder(): UseAudioRecorderResult {
         throw new Error('Microphone request was canceled.');
       }
       streamRef.current = stream;
-      stream.getAudioTracks().forEach(track => { track.onended = () => { if (generation !== generationRef.current) return; releaseRecorder(); setAudioBlob(null); setDurationMs(0); setState('device_lost'); setErrorMessage('Microphone access was revoked or the device was disconnected. Please reconnect it and retry.'); }; });
+      stream.getAudioTracks().forEach(track => {
+        track.onended = () => {
+          if (generation !== generationRef.current) return;
+          releaseRecorder();
+          setAudioBlob(null);
+          setDurationMs(0);
+          setState('device_lost');
+          setErrorMessage('Microphone access was revoked or the device was disconnected. Please reconnect it and retry.');
+        };
+      });
 
       const mimeType = PREFERRED_MIME_TYPES.find(t => MediaRecorder.isTypeSupported(t)) ?? '';
 
@@ -134,7 +171,9 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       recorder.start(250); // Collect chunks every 250ms
       startTimeRef.current = Date.now();
       stopTimerRef.current = setTimeout(() => {
-        if (generation === generationRef.current && recorder.state === 'recording') recorder.stop();
+        if (generation === generationRef.current && (recorder.state === 'recording' || recorder.state === 'paused')) {
+          recorder.stop();
+        }
       }, maxDurationMs);
       setState('recording');
     } catch (err: any) {
@@ -142,16 +181,38 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       releaseRecorder();
       setState(err?.name === 'NotAllowedError' ? 'permission_denied' : err?.name === 'NotFoundError' ? 'device_lost' : 'error');
       const msg = err?.name === 'NotAllowedError'
-          ? 'Microphone access denied. Please allow microphone in your browser settings.'
-          : 'Could not access microphone. Please try again.';
+        ? 'Microphone access denied. Please allow microphone in your browser settings.'
+        : 'Could not access microphone. Please try again.';
       setErrorMessage(msg);
       throw new Error(msg);
     }
   }, [releaseRecorder]);
 
   const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current?.state === 'recording') {
+    if (mediaRecorderRef.current && (mediaRecorderRef.current.state === 'recording' || mediaRecorderRef.current.state === 'paused')) {
       mediaRecorderRef.current.stop();
+    }
+  }, []);
+
+  const pauseRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      try {
+        mediaRecorderRef.current.pause();
+        setState('paused');
+      } catch (e) {
+        console.warn('pause error', e);
+      }
+    }
+  }, []);
+
+  const resumeRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
+      try {
+        mediaRecorderRef.current.resume();
+        setState('recording');
+      } catch (e) {
+        console.warn('resume error', e);
+      }
     }
   }, []);
 
@@ -178,6 +239,8 @@ export function useAudioRecorder(): UseAudioRecorderResult {
     durationMs,
     startRecording,
     stopRecording,
+    pauseRecording,
+    resumeRecording,
     abortRecording,
     audioBlob,
     clearAudio,
