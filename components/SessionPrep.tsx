@@ -42,10 +42,10 @@ const withSetupTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, time
 };
 
 const SessionPrep: React.FC<SessionPrepProps> = ({ onContextReady, draft, onGoBack }) => {
-  const [currentDraft, setCurrentDraft] = useState<InterviewSetupDraft>(draft);
-  const [selectedPanelIDs, setSelectedPanelIDs] = useState<string[]>(draft.selectedPanelIDs?.length ? draft.selectedPanelIDs : DEFAULT_PANEL_IDS);
-  const [sessionControls, setSessionControls] = useState<SessionControls>(draft.controls || defaultControls);
-  const [jdText, setJdText] = useState<string>(draft.jdText || '');
+  const [currentDraft, setCurrentDraft] = useState<InterviewSetupDraft>((draft || {}) as InterviewSetupDraft);
+  const [selectedPanelIDs, setSelectedPanelIDs] = useState<string[]>(draft?.selectedPanelIDs?.length ? draft.selectedPanelIDs : DEFAULT_PANEL_IDS);
+  const [sessionControls, setSessionControls] = useState<SessionControls>(draft?.controls || defaultControls);
+  const [jdText, setJdText] = useState<string>(draft?.jdText || '');
   const [plan, setPlan] = useState<InterviewPlan | null>(null);
   const [isPlanReady, setIsPlanReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);

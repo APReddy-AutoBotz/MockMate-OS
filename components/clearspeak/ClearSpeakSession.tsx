@@ -897,7 +897,9 @@ const ScoreCard: React.FC<{
               Transcript Match
             </span>
             <span className="text-2xl font-bold text-white">{score.clarity}%</span>
-            <span className="text-[11px] text-emerald-400 mt-0.5">Word accuracy</span>
+            <span className="text-[11px] text-emerald-400 mt-0.5 font-medium">
+              {score.clarity >= 90 ? '✓ Crisp enunciation' : score.clarity >= 75 ? 'Good word accuracy' : 'Check tricky words'}
+            </span>
           </div>
 
           <div className="flex flex-col items-center justify-center p-4 bg-white/5 rounded-2xl border border-white/10 text-center">
@@ -905,8 +907,8 @@ const ScoreCard: React.FC<{
               Speaking Pace
             </span>
             <span className="text-2xl font-bold text-white">{score.pacing}%</span>
-            <span className="text-[11px] text-brand-tint mt-0.5">
-              {score.measuredWpm ? `${score.measuredWpm} WPM` : 'Optimal tempo'}
+            <span className="text-[11px] text-brand-tint mt-0.5 font-medium">
+              {score.measuredWpm ? `${score.measuredWpm} WPM • ${score.pacing >= 85 ? '🎯 Sweet spot' : score.measuredWpm > 140 ? '⚡ Brisk' : '🐢 Measured'}` : 'Optimal tempo'}
             </span>
           </div>
 
@@ -915,7 +917,9 @@ const ScoreCard: React.FC<{
               Pause Adherence
             </span>
             <span className="text-2xl font-bold text-white">{score.rhythm}%</span>
-            <span className="text-[11px] text-amber-300 mt-0.5">Breath timing</span>
+            <span className="text-[11px] text-amber-300 mt-0.5 font-medium">
+              {score.rhythm >= 80 ? '✓ Natural phrasing' : score.rhythm >= 60 ? 'Developing cadence' : 'Practice pauses (⏸)'}
+            </span>
           </div>
         </div>
 
@@ -930,13 +934,18 @@ const ScoreCard: React.FC<{
         )}
 
         {/* Coach Advice */}
-        <div className="p-5 bg-gradient-to-r from-brand-primary/10 to-transparent border-l-4 border-brand-primary rounded-r-2xl">
-          <h3 className="text-xs font-bold text-brand-primary uppercase tracking-wider mb-1 flex items-center gap-1.5">
-            <span>💡</span>
-            <span>Coach's Delivery Advice</span>
-          </h3>
-          <p className="text-slate-200 text-sm leading-relaxed italic">
-            "{score.feedbackTip}"
+        <div className="p-5 bg-gradient-to-r from-brand-primary/10 via-brand-primary/5 to-transparent border-l-4 border-brand-primary rounded-2xl border border-white/10 shadow-inner">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xs font-bold text-brand-primary uppercase tracking-wider flex items-center gap-2">
+              <span className="text-base">🎓</span>
+              <span>Executive Speech Coach Insights</span>
+            </h3>
+            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-brand-primary/20 text-brand-primary border border-brand-primary/30">
+              Personalized Feedback
+            </span>
+          </div>
+          <p className="text-slate-200 text-sm leading-relaxed font-normal">
+            {score.feedbackTip}
           </p>
         </div>
 

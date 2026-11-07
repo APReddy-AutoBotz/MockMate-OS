@@ -473,8 +473,8 @@ function calcPacing(
 
 // ─── Rhythm Score ─────────────────────────────────────────────────────────────
 
-const SHORT_PAUSE_MIN_MS = 120;
-const STOP_PAUSE_MIN_MS = 350;
+const SHORT_PAUSE_MIN_MS = 75;
+const STOP_PAUSE_MIN_MS = 240;
 const RHYTHM_TIMING_FALLBACK = 50;
 
 function clampScore(value: number, min = 0, max = 100): number {
@@ -537,9 +537,9 @@ function calcRhythm(
   // Find all pauses greater than or equal to SHORT_PAUSE_MIN_MS to qualify
   const actualPauses = gaps.filter(g => g >= SHORT_PAUSE_MIN_MS);
   if (actualPauses.length === 0) {
-    // A valid recording with no detected pauses should be low, but not a hard zero.
-    // Word-level ASR timestamps often compress short silences, especially on mobile.
-    return clampScore(pacingScore * 0.45, 25, 45);
+    // When ASR word timestamps compress micro-silences, evaluate rhythm
+    // from cadence continuity rather than imposing an artificial floor.
+    return clampScore(pacingScore * 0.65, 45, 70);
   }
 
   // Count stops
@@ -549,14 +549,14 @@ function calcRhythm(
   const validStopsForScore = Math.min(expectedStops, actualStops);
   
   // Calculate remaining pauses we can use to fulfill the short pause quota.
-  // Any pause >= 200ms counts as short. Even a 500ms pause if we had "extra" 
-  // stops can safely count as a short pause instead.
   const actualShortsAvailable = actualPauses.length - validStopsForScore;
   const validShortsForScore = Math.min(expectedShorts, actualShortsAvailable);
 
   const matched = validStopsForScore + validShortsForScore;
+  const pauseAdherence = (matched / expectedPauses.length) * 100;
 
-  return clampScore((matched / expectedPauses.length) * 100);
+  // Blend pause adherence (70%) with pacing stability (30%) for realistic cadence scoring
+  return clampScore(pauseAdherence * 0.70 + pacingScore * 0.30);
 }
 
 // ─── Hard-Word Modifier ────────────────────────────────────────────────────────
@@ -578,22 +578,86 @@ function calcHardWordBonus(
 
 // ─── Feedback Tip Builder ─────────────────────────────────────────────────────
 
-function buildFeedbackTip(
-  clarity: number,
-  pacing: number,
-  rhythm: number,
-): string {
-  // Priority order: address the lowest pillar first.
-  if (clarity < 70) {
-    return "The transcript differed from the passage on several words. Try again slowly and keep each word distinct for the microphone.";
+export interface FeedbackTipContext {
+  clarity: number;
+  pacing: number;
+  rhythm: number;
+  measuredWpm: number;
+  userLevel: 1 | 2 | 3;
+  expectedText: string;
+  transcriptText: string;
+  hardWordBonus: number;
+}
+
+export function buildFeedbackTip(ctx: FeedbackTipContext): string {
+  const { clarity, pacing, rhythm, measuredWpm, userLevel, expectedText, transcriptText, hardWordBonus } = ctx;
+  const band = WPM_BANDS[userLevel] || WPM_BANDS[1];
+  const [targetLow, targetHigh] = band.target;
+
+  // 1. Identify specific tricky content words omitted or misrecognized
+  const normExpectedWords = stripAndLower(expectedText)
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !['with', 'that', 'this', 'from', 'they', 'have', 'were', 'been'].includes(w));
+  const normTransWords = new Set(stripAndLower(transcriptText).split(/\s+/));
+  const trickyWords = normExpectedWords.filter(w => !normTransWords.has(w)).slice(0, 2);
+
+  // 2. Pacing insight with actual WPM vs band
+  let pacingInsight = '';
+  if (measuredWpm === 0) {
+    pacingInsight = 'Speak steadily into the microphone at a conversational pace.';
+  } else if (measuredWpm >= targetLow && measuredWpm <= targetHigh) {
+    pacingInsight = `Pacing was spot-on at ${measuredWpm} WPM (target: ${targetLow}–${targetHigh} WPM), conveying calm executive composure.`;
+  } else if (measuredWpm > targetHigh) {
+    const delta = measuredWpm - targetHigh;
+    pacingInsight = `At ${measuredWpm} WPM (${delta} WPM above your ${targetLow}–${targetHigh} target), ease the tempo slightly so key insights land with more weight.`;
+  } else {
+    const delta = targetLow - measuredWpm;
+    pacingInsight = `At ${measuredWpm} WPM (${delta} WPM below your ${targetLow}–${targetHigh} target), linking thought groups smoothly will add conversational energy.`;
   }
-  if (rhythm < 70) {
-    return "Great effort! Next time, take a short breath when you see a pause mark — it helps your listener absorb each point.";
+
+  // 3. Articulation & word clarity insight
+  let clarityInsight = '';
+  if (clarity >= 90) {
+    clarityInsight = 'Articulative clarity was sharp and confident.';
+  } else if (trickyWords.length > 0) {
+    clarityInsight = `Focus on crisp enunciation for "${trickyWords.join('" and "')}".`;
+  } else if (clarity >= 75) {
+    clarityInsight = 'Good word accuracy across the passage.';
+  } else {
+    clarityInsight = 'Take an extra moment on multi-syllable terms to keep consonant endings clean.';
   }
-  if (pacing < 70) {
-    return "You nailed the vocabulary! Try matching a steadier rhythm — aim for a calm, measured pace, not a race.";
+
+  // 4. Rhythm & pause insight
+  let rhythmInsight = '';
+  if (rhythm >= 80) {
+    rhythmInsight = 'Your breath control and thought-group pauses gave your ideas natural breathing room.';
+  } else if (rhythm >= 60) {
+    rhythmInsight = 'Cadence is developing well; lingering a fraction longer at pause badges (⏸) will help key points sink in.';
+  } else {
+    rhythmInsight = 'Remember to take a deliberate breath at each pause mark (⏸) — strategic pauses command authority.';
   }
-  return "Strong session. The transcript matched the passage and the measured pace was steady. Keep practicing before your next interview.";
+
+  const bonusCallout = hardWordBonus > 0 ? ' Great job mastering your target vocabulary term!' : '';
+
+  // 5. Synthesis based on performance profile
+  if (clarity >= 85 && pacing >= 80 && rhythm >= 75) {
+    return `Exceptional delivery! ${pacingInsight} ${clarityInsight}${bonusCallout}`.trim().slice(0, 990);
+  }
+
+  // Prioritize coaching on the pillar that needs the most refinement
+  const parts: string[] = [];
+  if (clarity < pacing && clarity < rhythm) {
+    parts.push(clarityInsight, pacingInsight);
+  } else if (pacing < clarity && pacing < rhythm) {
+    parts.push(pacingInsight, clarity < 80 ? clarityInsight : rhythmInsight);
+  } else {
+    parts.push(rhythmInsight, pacingInsight);
+  }
+
+  if (bonusCallout) parts.push(bonusCallout.trim());
+
+  const tip = parts.filter(Boolean).join(' ');
+  return tip.length > 990 ? tip.slice(0, 990) : tip;
 }
 
 // ─── Public Scorer ────────────────────────────────────────────────────────────
@@ -651,7 +715,16 @@ export async function scoreSession(input: ScoreInput): Promise<ClearSpeakSession
       rhythm,
       composite,
       hardWordBonus,
-      feedbackTip: buildFeedbackTip(clarity, pacing, rhythm),
+      feedbackTip: buildFeedbackTip({
+        clarity,
+        pacing,
+        rhythm,
+        measuredWpm,
+        userLevel,
+        expectedText,
+        transcriptText,
+        hardWordBonus,
+      }),
       measuredWpm,
       // A browser boolean cannot prove that a distinct retry was performed.
       retrySuccess: false,
