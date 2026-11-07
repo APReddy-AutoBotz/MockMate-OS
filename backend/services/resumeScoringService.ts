@@ -1,10 +1,15 @@
 import { ResumeData } from 'mockmate-shared';
 import type { GovernedJDMatchResult } from 'mockmate-shared/resume-integrity';
 import Groq from 'groq-sdk';
+import OpenAI from 'openai';
 
-const providerClient = (): Groq | null => {
+const providerClient = (): { client: any; model: string } | null => {
+    const openaiKey = process.env.OPENAI_API_KEY?.trim();
+    if (openaiKey) {
+        return { client: new OpenAI({ apiKey: openaiKey }), model: 'gpt-4o-mini' };
+    }
     const apiKey = process.env.GROQ_API_KEY?.trim();
-    return apiKey ? new Groq({ apiKey }) : null;
+    return apiKey ? { client: new Groq({ apiKey }), model: 'llama-3.1-8b-instant' } : null;
 };
 
 export interface ATSDiagnosticsResult {
@@ -158,8 +163,9 @@ export const runJDMatch = async (resume: ResumeData, jdText: string): Promise<Go
     const missingSkills = requiredTaxonomy.filter(skill => !containsRequirement(resumeText, skill));
     const deterministic = buildJDResult(matchedSkills, missingSkills);
 
-    const groq = providerClient();
-    if (!groq) return deterministic;
+    const provider = providerClient();
+    if (!provider) return deterministic;
+    const { client: groq, model: jdModel } = provider;
 
     const prompt = `You are a JD requirement classifier. The server owns scoring; you only identify additional requirements that are explicitly written in the supplied job description and absent from the candidate resume.
 
@@ -177,7 +183,7 @@ KNOWN MISSING TAXONOMY TERMS: ${missingSkills.join(', ')}`;
 
     try {
         const response = await groq.chat.completions.create({
-            model: 'llama-3.1-8b-instant',
+            model: jdModel,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.1,
             response_format: { type: 'json_object' },

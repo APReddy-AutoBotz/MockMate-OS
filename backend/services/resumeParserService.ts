@@ -2,6 +2,7 @@ import { CanvasFactory } from 'pdf-parse/worker';
 import { PDFParse } from 'pdf-parse';
 import * as mammoth from 'mammoth';
 import Groq from 'groq-sdk';
+import OpenAI from 'openai';
 import { ResumeData, ResumeDataSchema } from 'mockmate-shared';
 import { assessResumeExtraction } from './resumeRewriteIntegrityService';
 
@@ -14,10 +15,14 @@ export class ResumeProviderUnavailableError extends Error {
     }
 }
 
-const providerClient = (): Groq => {
+const providerClient = (): { client: any; model: string } => {
+    const openaiKey = process.env.OPENAI_API_KEY?.trim();
+    if (openaiKey) {
+        return { client: new OpenAI({ apiKey: openaiKey }), model: 'gpt-4o-mini' };
+    }
     const apiKey = process.env.GROQ_API_KEY?.trim();
     if (!apiKey) throw new ResumeProviderUnavailableError();
-    return new Groq({ apiKey });
+    return { client: new Groq({ apiKey }), model: 'llama-3.1-8b-instant' };
 };
 
 const extractJson = (text: string): unknown => {
@@ -467,8 +472,9 @@ OUTPUT SHAPE:
 
     let response: any;
     try {
-        response = await providerClient().chat.completions.create({
-            model: 'llama-3.1-8b-instant',
+        const { client, model } = providerClient();
+        response = await client.chat.completions.create({
+            model,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.1,
             response_format: { type: 'json_object' },

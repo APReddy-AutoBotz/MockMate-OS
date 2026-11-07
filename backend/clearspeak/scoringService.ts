@@ -42,7 +42,7 @@ export class ClearSpeakScoringUnavailableError extends Error {
 export function isClearSpeakScoringAvailable(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return Boolean(env.GROQ_API_KEY?.trim());
+  return Boolean(env.GROQ_API_KEY?.trim() || env.OPENAI_API_KEY?.trim());
 }
 
 /**
@@ -123,20 +123,26 @@ export function validateTranscriptEvidence(input: unknown): TranscriptResult {
  * Response format: verbose_json (required for word timestamps)
  */
 async function transcribeAudio(audioBuffer: Buffer): Promise<TranscriptResult> {
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
   const apiKey = process.env.GROQ_API_KEY?.trim();
-  if (!apiKey) {
+  if (!apiKey && !openaiKey) {
     throw new ClearSpeakScoringUnavailableError();
   }
 
-  const client = new OpenAI({
-    apiKey,
-    baseURL: 'https://api.groq.com/openai/v1',
-    // Grounded scoring reservations use a two-minute takeover lease. Keep the
-    // only external operation strictly below that boundary and disable SDK
-    // retries, which otherwise apply the timeout independently per attempt.
-    timeout: 90_000,
-    maxRetries: 0,
-  });
+  const client = openaiKey
+    ? new OpenAI({
+        apiKey: openaiKey,
+        timeout: 90_000,
+        maxRetries: 0,
+      })
+    : new OpenAI({
+        apiKey: apiKey!,
+        baseURL: 'https://api.groq.com/openai/v1',
+        timeout: 90_000,
+        maxRetries: 0,
+      });
+
+  const model = openaiKey ? 'whisper-1' : 'whisper-large-v3';
 
   // Node Buffer.buffer is ArrayBufferLike (potentially SharedArrayBuffer).
   // Slice to a plain ArrayBuffer via Uint8Array to satisfy the File constructor's
@@ -146,7 +152,7 @@ async function transcribeAudio(audioBuffer: Buffer): Promise<TranscriptResult> {
     const audioFile = new File([uint8], 'recording.webm', { type: 'audio/webm' });
 
     const response = await client.audio.transcriptions.create({
-      model: 'whisper-large-v3',
+      model,
       file: audioFile,
       response_format: 'verbose_json',
       timestamp_granularities: ['word'],

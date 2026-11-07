@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import Groq from 'groq-sdk';
+import OpenAI from 'openai';
 import { ResumeDataSchema } from 'mockmate-shared';
 import {
   GovernedResumeScoreResponseSchema,
@@ -36,9 +37,13 @@ const upload = multer({
   },
 });
 
-const providerClient = (): Groq | null => {
+const providerClient = (): { client: any; bulletModel: string; summaryModel: string } | null => {
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
+  if (openaiKey) {
+    return { client: new OpenAI({ apiKey: openaiKey }), bulletModel: 'gpt-4o-mini', summaryModel: 'gpt-4o-mini' };
+  }
   const apiKey = process.env.GROQ_API_KEY?.trim();
-  return apiKey ? new Groq({ apiKey }) : null;
+  return apiKey ? { client: new Groq({ apiKey }), bulletModel: 'llama-3.3-70b-versatile', summaryModel: 'llama-3.1-8b-instant' } : null;
 };
 
 const providerUnavailable = (res: express.Response) => res.status(503).json({
@@ -201,8 +206,9 @@ router.post('/suggest', enforceUsageLimit('resume_suggestion'), async (req, res)
   const userId = (req as any).user?.uid;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-  const groq = providerClient();
-  if (!groq) return providerUnavailable(res);
+  const provider = providerClient();
+  if (!provider) return providerUnavailable(res);
+  const { client: groq, bulletModel, summaryModel } = provider;
 
   try {
     const { resumeData, jdText } = request.data;
@@ -264,7 +270,7 @@ BULLETS:\n${bulletBlock}`;
     const [bulletResponse, summaryResponse] = await Promise.all([
       allBullets.length
         ? groq.chat.completions.create({
-            model: 'llama-3.3-70b-versatile',
+            model: bulletModel,
             messages: [{ role: 'user', content: bulletPrompt }],
             temperature: 0.1,
             response_format: { type: 'json_object' },
@@ -272,7 +278,7 @@ BULLETS:\n${bulletBlock}`;
         : Promise.resolve(null),
       summaryPrompt
         ? groq.chat.completions.create({
-            model: 'llama-3.1-8b-instant',
+            model: summaryModel,
             messages: [{ role: 'user', content: summaryPrompt }],
             temperature: 0.1,
             response_format: { type: 'json_object' },

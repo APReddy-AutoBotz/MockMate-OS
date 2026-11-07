@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import OpenAI from 'openai';
 
 export function extractJson(raw: string): any {
   const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -19,8 +20,31 @@ export async function callWithFallback(prompt: string): Promise<{
   model: string;
   fallbackTriggered: boolean;
 }> {
+  const openaiKey = process.env.OPENAI_API_KEY;
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
+
+  if (openaiKey) {
+    try {
+      const openai = new OpenAI({ apiKey: openaiKey });
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+      });
+      const text = response.choices?.[0]?.message?.content;
+      if (text) {
+        return {
+          text,
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          fallbackTriggered: false,
+        };
+      }
+    } catch (e: any) {
+      console.warn('[LLM Gateway] OpenAI call failed, trying next fallback...', e.message);
+    }
+  }
 
   if (geminiKey) {
     try {
@@ -35,7 +59,7 @@ export async function callWithFallback(prompt: string): Promise<{
           text: response.text,
           provider: 'gemini',
           model: 'gemini-2.5-flash',
-          fallbackTriggered: false,
+          fallbackTriggered: Boolean(openaiKey),
         };
       }
     } catch (e: any) {

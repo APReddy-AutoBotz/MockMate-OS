@@ -233,9 +233,59 @@ class GroqAdapter implements ClearSpeakAdapter {
   }
 }
 
+// ─── OpenAI Adapter ──────────────────────────────────────────────────────────
+
+class OpenAIAdapter implements ClearSpeakAdapter {
+  readonly id = 'openai';
+  private modelId = process.env.AI_GEN_MODEL_OPENAI || 'gpt-4o-mini';
+
+  async call(prompt: string): Promise<AdapterResult> {
+    const start = Date.now();
+    try {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
+
+      const client = new OpenAI({ apiKey });
+
+      const response = await client.chat.completions.create({
+        model: this.modelId,
+        messages: [
+          { role: 'system', content: 'Respond strictly in JSON format matching the schema provided.' },
+          { role: 'user', content: prompt }
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.5,
+      });
+
+      const text = response.choices[0]?.message?.content;
+      if (!text) throw new Error('Empty response from OpenAI');
+
+      const content = JSON.parse(text);
+
+      return {
+        content,
+        latency: Date.now() - start,
+        model: this.modelId,
+        tokens: {
+          prompt: response.usage?.prompt_tokens || 0,
+          completion: response.usage?.completion_tokens || 0,
+        },
+      };
+    } catch (err: any) {
+      return {
+        content: null,
+        error: err.message || 'OpenAI error',
+        latency: Date.now() - start,
+        model: this.modelId,
+      };
+    }
+  }
+}
+
 // ─── Resiliency Orchestrator ──────────────────────────────────────────────────
 
 const adapters: Record<string, ClearSpeakAdapter> = {
+  openai: new OpenAIAdapter(),
   gemini: new GeminiAdapter(),
   groq: new GroqAdapter(),
 };
@@ -246,8 +296,8 @@ async function generateWithResilience(
   recentTopics: string[],
   grounding?: { summary: string; vocabulary: string[] },
 ): Promise<ClearSpeakSessionContent | null> {
-  const primaryId = process.env.AI_GEN_PRIMARY || 'gemini';
-  const fallbackId = process.env.AI_GEN_FALLBACK || 'groq';
+  const primaryId = process.env.AI_GEN_PRIMARY || (process.env.OPENAI_API_KEY ? 'openai' : 'gemini');
+  const fallbackId = process.env.AI_GEN_FALLBACK || (process.env.OPENAI_API_KEY ? (process.env.GEMINI_API_KEY ? 'gemini' : 'groq') : 'groq');
 
   // 1. Caching Check
   const cacheKey = getClearSpeakGenerationCacheKey(profile, systemPrompt, recentTopics, grounding);

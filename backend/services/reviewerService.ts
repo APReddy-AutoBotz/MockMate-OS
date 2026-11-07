@@ -2,12 +2,15 @@
 import OpenAI from 'openai';
 import { FinalReport, InterviewTurn } from 'mockmate-shared';
 
-// Use Groq for the Reviewer to ensure provider independence from Gemini (Primary Scorer)
+// Independent Synthetic Reviewer supporting OpenAI and Groq
+const openaiApiKey = process.env.OPENAI_API_KEY;
 const groqApiKey = process.env.GROQ_API_KEY;
-const groq = groqApiKey ? new OpenAI({
-    apiKey: groqApiKey,
-    baseURL: 'https://api.groq.com/openai/v1'
-}) : null;
+const groq = openaiApiKey
+  ? new OpenAI({ apiKey: openaiApiKey })
+  : groqApiKey
+  ? new OpenAI({ apiKey: groqApiKey, baseURL: 'https://api.groq.com/openai/v1' })
+  : null;
+const reviewerModel = openaiApiKey ? 'gpt-4o-mini' : 'llama-3.3-70b-versatile';
 
 export interface SyntheticReview {
     synthetic_proxy_trustworthiness_score: number; // 1-5
@@ -24,7 +27,7 @@ export const runSyntheticReview = async (
     transcript: InterviewTurn[]
 ): Promise<SyntheticReview | null> => {
     if (!groq) {
-        console.warn("Synthetic Reviewer skipped: Missing GROQ_API_KEY");
+        console.warn("Synthetic Reviewer skipped: Missing OPENAI_API_KEY or GROQ_API_KEY");
         return null;
     }
 
@@ -64,7 +67,7 @@ export const runSyntheticReview = async (
 
     try {
         const response = await groq.chat.completions.create({
-            model: "llama-3.3-70b-versatile",
+            model: reviewerModel,
             messages: [
                 { role: "system", content: "You are an independent auditor. Analyze the report against the raw transcript. Be extremely critical." },
                 { role: "user", content: reviewerPrompt }

@@ -1,13 +1,8 @@
-# Environment variables
-.env
-.env.local
-.env.*.local
-.env.production
-.env.development
-
 # Logs
 logs
 *.log
+*.txt
+verify_output*.txt
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -15,42 +10,56 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.DS_Store
 dist
 dist_*
 dist-ssr
 *.local
+supabase/.temp/
 
-# Local credentials and generated diagnostics
-backend/service-account.json
-backend/build_log.txt
-backend/push_log.txt
-verify_output*.txt
-.agent/
-test-results/
-_skill-sources/
-status_output.txt
-git_status.txt
-branch_output.txt
-v.txt
-*.tsbuildinfo
+# Secrets & Environment variables
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+service-account*.json
+*service-account*.json
 
-# Mobile build output
-mobile/.expo/
-mobile/dist/
-mobile/build/
-mobile/android/
-mobile/ios/
-mobile/*.aab
-mobile/*.apk
+shared/dist/
+shared/dist-cjs/
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
-.DS_Store
+.fleet
 *.suo
 *.ntvs*
+coverage
+.nyc_output
+.agent/
+
+# mobile
+mobile/.expo/
+mobile/android/
+mobile/ios/
+mobile/web-build/
+mobile/dist/
+mobile/.env
+mobile/*.jks
+mobile/*.p8
+mobile/*.p12
+mobile/*.key
+mobile/*.mobileprovision
+mobile/*.orig.*
+mobile/*.apk
+
 *.njsproj
 *.sln
 *.sw?
+
+# Local Netlify & build outputs
+.netlify
+outputs/
 artifacts/

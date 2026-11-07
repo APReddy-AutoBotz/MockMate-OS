@@ -499,8 +499,52 @@ export const transcribeAudio = async (
     });
   }
 
+  const openaiKey = process.env.OPENAI_API_KEY;
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
+
+  if (openaiKey) {
+    let tmpFilePath: string | null = null;
+    try {
+      const ext = mimeType.includes('wav') ? '.wav' : mimeType.includes('mp3') ? '.mp3' : mimeType.includes('m4a') ? '.m4a' : '.webm';
+      tmpFilePath = path.join(os.tmpdir(), `mockmate_audio_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
+      const buffer = Buffer.from(audioBase64, 'base64');
+      fs.writeFileSync(tmpFilePath, buffer);
+
+      const formData = new FormData();
+      const fileBlob = new Blob([buffer], { type: mimeType });
+      formData.append('file', fileBlob, path.basename(tmpFilePath));
+      formData.append('model', 'whisper-1');
+      formData.append('response_format', 'json');
+
+      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openaiKey}`,
+        },
+        body: formData,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const text = (data.text || '').trim();
+        if (text) {
+          return TranscribeAudioResponseSchema.parse({
+            status: 'transcribed',
+            transcript: text,
+          });
+        }
+      }
+    } catch (err: any) {
+      console.warn('[AI Service] OpenAI Whisper audio transcription failed...', err.message);
+    } finally {
+      if (tmpFilePath && fs.existsSync(tmpFilePath)) {
+        try {
+          fs.unlinkSync(tmpFilePath);
+        } catch (_) {}
+      }
+    }
+  }
 
   if (geminiKey) {
     try {
