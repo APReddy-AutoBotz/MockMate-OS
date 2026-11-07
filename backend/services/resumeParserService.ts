@@ -428,7 +428,11 @@ export const extractTextFromFile = async (fileBuffer: Buffer, mimetype: string):
                 await parser.destroy();
             }
         }
-        if (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        if (
+            mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+            mimetype === 'application/msword' ||
+            (fileBuffer && fileBuffer.length > 4 && fileBuffer.slice(0, 4).toString('hex') === '504b0304')
+        ) {
             const result = await mammoth.extractRawText({ buffer: fileBuffer });
             return result.value;
         }
@@ -455,7 +459,7 @@ NON-NEGOTIABLE RULES:
 
 RAW RESUME TEXT:
 """
-${source.substring(0, 30000)}
+${source.substring(0, 16000)}
 """
 
 OUTPUT SHAPE:

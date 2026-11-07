@@ -6,6 +6,7 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
   external_node_modules = ["express", "pdf-parse", "@napi-rs/canvas"]
+  timeout = 26
 
 [[redirects]]
   from = "/api/*"
