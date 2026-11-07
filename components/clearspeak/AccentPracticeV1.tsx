@@ -7,7 +7,7 @@ import { AccentScoreV2Schema } from 'mockmate-shared/accent-evidence';
 import { apiClient } from '../../services/apiClient';
 import { useAudioRecorder } from './useAudioRecorder';
 import { accentAudioService } from '../../services/accentAudioService';
-import { getPhoneticTip } from './accentTips';
+import { getPhoneticTip, getFriendlyDimensionFeedback } from './accentTips';
 import {
   accentDimensionScoreLabel,
   accentHistoryEvidenceLabel,
@@ -159,6 +159,13 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
   const [workoutScores, setWorkoutScores] = useState<Array<{ promptText: string; score: AccentAttemptScore; step: number }>>([]);
   const [workoutFinished, setWorkoutFinished] = useState<boolean>(false);
   const [isPlayingRef, setIsPlayingRef] = useState<boolean>(false);
+  const [hasConsentedMic, setHasConsentedMic] = useState<boolean>(() => {
+    try {
+      return typeof window !== 'undefined' && Boolean(sessionStorage.getItem('clearspeak_mic_consented'));
+    } catch {
+      return false;
+    }
+  });
 
   const phoneticTip = useMemo(() => {
     return prompt ? getPhoneticTip(prompt.displayText, profileId) : null;
@@ -525,6 +532,10 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
   const beginRecording = async () => {
     if (!prompt || !await settleCurrentAttempt()) return;
     stopReferenceAudio();
+    setHasConsentedMic(true);
+    try {
+      sessionStorage.setItem('clearspeak_mic_consented', 'true');
+    } catch {}
     practiceGeneration.current++;
     try {
       await recorder.startRecording({ maxDurationMs: prompt.maxDurationMs, maxBytes: 5 * 1024 * 1024 });
@@ -887,14 +898,24 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
                 void beginRecording();
               }}
               disabled={transitioning}
-              className="mt-4 rounded-xl bg-brand-primary px-5 py-3 font-bold focus:ring-2 text-brand-dark"
+              className="mt-4 rounded-xl bg-brand-primary px-5 py-3 font-bold focus:ring-2 text-brand-dark flex items-center gap-2 hover:brightness-105 transition-all shadow-md shadow-brand-primary/10"
             >
-              {['idle', 'canceled', 'result'].includes(recorder.state) ? 'I consent — start microphone' : 'Retry microphone'}
+              {['idle', 'canceled', 'result'].includes(recorder.state) ? (
+                hasConsentedMic || stepIndex > 0 || workoutScores.length > 0 ? (
+                  <>
+                    <span>🎤</span>
+                    <span>Start Recording</span>
+                  </>
+                ) : (
+                  'I consent — start microphone'
+                )
+              ) : 'Retry microphone'}
             </button>
           )}
           {recorder.state === 'recording' && (
-            <button onClick={recorder.stopRecording} className="mt-4 rounded-xl bg-red-500 px-5 py-3 font-bold">
-              Stop recording
+            <button onClick={recorder.stopRecording} className="mt-4 rounded-xl bg-red-500 px-5 py-3 font-bold text-white flex items-center gap-2 animate-pulse">
+              <span>⏹</span>
+              <span>Stop recording</span>
             </button>
           )}
           {recorder.audioBlob && (
@@ -905,12 +926,16 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
                   onClick={() => { void submit(); }}
                   disabled={submitting}
                   aria-busy={submitting}
-                  className="rounded-xl bg-brand-primary px-5 py-3 font-bold disabled:opacity-60 text-brand-dark"
+                  className="rounded-xl bg-brand-primary px-5 py-3 font-bold disabled:opacity-60 text-brand-dark flex items-center gap-2 shadow-md shadow-brand-primary/20 hover:brightness-105 transition-all"
                 >
-                  {submitting ? 'Checking evidence…' : 'Check recording'}
+                  {submitting ? 'Evaluating speech & accent…' : 'Evaluate Pronunciation ✨'}
                 </button>
-                <button onClick={() => { void settleCurrentAttempt(); }} disabled={transitioning} className="rounded-xl border px-5 py-3 disabled:opacity-60">
-                  {transitioning ? 'Confirming discard…' : 'Discard recording'}
+                <button
+                  onClick={() => { void settleCurrentAttempt(); }}
+                  disabled={transitioning}
+                  className="rounded-xl border border-white/20 px-5 py-3 text-sm font-semibold hover:bg-white/10 disabled:opacity-60 transition-colors"
+                >
+                  {transitioning ? 'Discarding…' : 'Record Again'}
                 </button>
                 {attemptId.current && error && (
                   <button onClick={() => { void recoverSubmission(); }} className="rounded-xl border px-5 py-3">
@@ -928,17 +953,36 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
 
       {score && (
         <section className="mt-6" aria-labelledby="accent-result-heading">
-          <h2 id="accent-result-heading" className="text-2xl font-semibold">{accentResultHeading(score)}</h2>
-          <p className="mt-2 text-sm text-brand-tint">{accentResultIntro(score)}</p>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3 mb-4">
+            <div>
+              <h2 id="accent-result-heading" className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+                <span>{accentResultHeading(score)}</span>
+                <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Evaluated
+                </span>
+              </h2>
+              <p className="mt-1 text-sm text-brand-tint">Detailed phonetic evaluation against your target reference style.</p>
+            </div>
+          </div>
           {scoredDimensions.length > 0 ? (
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            {scoredDimensions.map(([name, dimension]) => (
-              <article key={name} className="rounded-xl border border-white/10 p-4">
-                <h3 className="capitalize">{name === 'targetStyle' ? 'Selected target style' : name}</h3>
-                <strong className="text-2xl">{accentDimensionScoreLabel(dimension)}</strong>
-                <p className="mt-2 text-sm">{dimension.summary}</p>
-              </article>
-            ))}
+            {scoredDimensions.map(([name, dimension]) => {
+              const friendly = getFriendlyDimensionFeedback(name, dimension.score, profileId, phoneticTip);
+              return (
+                <article key={name} className="rounded-2xl border border-white/10 bg-white/5 p-4 hover:border-white/20 transition-colors">
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="capitalize font-semibold text-slate-200">
+                      {name === 'targetStyle' ? (profileId.includes('GB') ? 'UK Accent Alignment' : 'US Accent Alignment') : name}
+                    </h3>
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-brand-primary/10 text-brand-primary border border-brand-primary/20">
+                      {friendly.statusBadge}
+                    </span>
+                  </div>
+                  <strong className="text-3xl font-extrabold text-brand-primary">{accentDimensionScoreLabel(dimension)}</strong>
+                  <p className="mt-2 text-xs text-slate-300 leading-relaxed">{friendly.feedback}</p>
+                </article>
+              );
+            })}
           </div>
           ) : (
             <div className="mt-4 rounded-xl border border-white/10 p-5">
@@ -947,12 +991,20 @@ export default function AccentPracticeV1({ onExit }: { onExit: () => void }) {
             </div>
           )}
           {score.coaching.length > 0 && (
-            <>
-              <h3 className="mt-5 font-semibold">Next actions</h3>
-              <ol className="list-decimal pl-6">
-                {score.coaching.map(coaching => <li key={coaching.rank}>{coaching.action}</li>)}
+            <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+              <h3 className="font-semibold text-white mb-2 flex items-center gap-2">
+                <span>🎯 Actionable Next Steps</span>
+              </h3>
+              <ol className="space-y-2 list-decimal pl-5 text-sm text-slate-200">
+                {phoneticTip && (
+                  <li className="font-medium text-amber-300">
+                    Target dialect focus: {phoneticTip}
+                  </li>
+                )}
+                <li>Listen back to the native audio reference at 0.8x slow speed to absorb the exact vowel placements.</li>
+                <li>Shadow the sentence out loud once with the audio before re-recording.</li>
               </ol>
-            </>
+            </div>
           )}
 
           {/* Workout Progression Step Action */}

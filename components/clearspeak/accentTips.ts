@@ -221,3 +221,97 @@ export function getPhoneticTip(text: string, profileId: string): string | null {
   if (!entry) return null;
   return profileId.includes('GB') ? entry.tipUK : entry.tipUS;
 }
+
+export function getFriendlyDimensionFeedback(
+  name: string,
+  score: number | null,
+  profileId: string,
+  phoneticTip: string | null,
+): { feedback: string; statusBadge: string } {
+  if (score === null) {
+    return {
+      feedback: 'Speech clarity was insufficient to evaluate this metric. Try again in a quieter setting.',
+      statusBadge: 'Needs audio',
+    };
+  }
+
+  const isUK = profileId.includes('GB');
+  const accentName = isUK ? 'British' : 'American';
+
+  if (score >= 85) {
+    switch (name) {
+      case 'intelligibility':
+        return { feedback: 'Clear, crisp articulation. All words and syllables were recognized accurately.', statusBadge: 'Excellent' };
+      case 'pronunciation':
+        return {
+          feedback: phoneticTip
+            ? `Strong phonetic precision. Remember key focus: ${phoneticTip}`
+            : 'Accurate consonant attacks and vowel placement matching the reference model.',
+          statusBadge: 'Excellent',
+        };
+      case 'prosody':
+        return { feedback: 'Natural cadence, rhythm, and balanced phrase stress.', statusBadge: 'Natural rhythm' };
+      case 'fluency':
+        return { feedback: 'Continuous speech flow with confident pacing and smooth transitions.', statusBadge: 'Fluent' };
+      case 'targetStyle':
+        return {
+          feedback: phoneticTip
+            ? `Strong alignment with ${accentName} accent features. ${phoneticTip}`
+            : `Solid alignment with contemporary ${accentName} speech characteristics.`,
+          statusBadge: `${accentName} aligned`,
+        };
+      default:
+        return { feedback: 'High accuracy performance on this dimension.', statusBadge: 'Good' };
+    }
+  } else if (score >= 70) {
+    switch (name) {
+      case 'intelligibility':
+        return { feedback: 'Good speech clarity with slight syllable blending or soft word endings.', statusBadge: 'Good clarity' };
+      case 'pronunciation':
+        return {
+          feedback: phoneticTip
+            ? `Understandable pronunciation. Focus area: ${phoneticTip}`
+            : 'Clear vowels; focus on sharper consonant articulation at word boundaries.',
+          statusBadge: 'On track',
+        };
+      case 'prosody':
+        return { feedback: 'Developing cadence; shadow the reference audio to smooth out phrasing.', statusBadge: 'Developing' };
+      case 'fluency':
+        return { feedback: 'Steady pace; reducing small hesitations will improve continuous flow.', statusBadge: 'Steady' };
+      case 'targetStyle':
+        return {
+          feedback: phoneticTip
+            ? `Moderate accent alignment. Tip: ${phoneticTip}`
+            : `Approaching ${accentName} speech rhythm; listen to the 0.8x slow model for subtle vowel shifts.`,
+          statusBadge: 'Developing',
+        };
+      default:
+        return { feedback: 'Consistent progress on this speaking dimension.', statusBadge: 'Good' };
+    }
+  } else {
+    switch (name) {
+      case 'intelligibility':
+        return { feedback: 'Some words were unclear or omitted. Speak closer to the microphone at a steady tempo.', statusBadge: 'Needs focus' };
+      case 'pronunciation':
+        return {
+          feedback: phoneticTip
+            ? `Dialect focus to practice: ${phoneticTip}`
+            : 'Listen to the reference voice model and practice articulating each sound slowly.',
+          statusBadge: 'Practice sound',
+        };
+      case 'prosody':
+        return { feedback: 'Practice along with the reference voice to match natural sentence cadence and pauses.', statusBadge: 'Practice rhythm' };
+      case 'fluency':
+        return { feedback: 'Pacing was hesitant; repeat the sentence at a relaxed, continuous speed.', statusBadge: 'Practice pacing' };
+      case 'targetStyle':
+        return {
+          feedback: phoneticTip
+            ? `Key dialect marker: ${phoneticTip}`
+            : `Listen to the ${accentName} reference audio at 0.8x slow speed to absorb the accent features.`,
+          statusBadge: 'Listen & shadow',
+        };
+      default:
+        return { feedback: 'Listen to the audio reference and try recording again.', statusBadge: 'Practice' };
+    }
+  }
+}

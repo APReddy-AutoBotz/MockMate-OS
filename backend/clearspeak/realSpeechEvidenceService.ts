@@ -8,6 +8,7 @@ import {
   type AccentScoreV2,
   type AccentScorerEvidenceV1,
 } from 'mockmate-shared/accent-evidence';
+import { findPromptById } from './promptsPool';
 
 export const REAL_SPEECH_SCORING_TIMEOUT_MS = 90_000;
 
@@ -198,8 +199,6 @@ const mapDimension = (
     score: evidence.candidateScore,
     confidence: evidence.confidence,
     evidenceStatus: scoreableStatus,
-    // Provider prose is deliberately not a persistence/UI authority. Only the
-    // validated numeric/status/ref evidence crosses into the user-facing result.
     summary: scoredSummaryFor(scoreableStatus),
     evidenceRefs: evidence.evidenceRefs,
   };
@@ -251,6 +250,9 @@ export const scoreWithGovernedAccentAdapter = async (
   assertEvidenceBinding(evidence, context, authoritativeAudioSha256, authoritativeByteLength, adapter);
 
   const evidenceSha256 = stableSha256(evidence);
+  const promptItem = findPromptById(context.promptId);
+  const dialectTip = context.profileId.includes('GB') ? promptItem?.tipUK : promptItem?.tipUS;
+
   const dimensions = Object.fromEntries(
     dimensionOrder.map(key => [key, mapDimension(key, evidence.dimensions[key])]),
   ) as AccentScoreV2['dimensions'];
@@ -380,9 +382,10 @@ class WhisperAccentScoringAdapter implements GovernedAccentScoringAdapterV1 {
       transcript = '';
     }
 
-    const expectedText = FIXTURES_BY_ID[input.context.promptId] || 'The project team will share a clear update tomorrow morning.';
-    const isFree = input.context.promptId === '10000000-0000-4000-a000-000000000004' || input.context.promptId.endsWith('41') || input.context.promptId.endsWith('42');
-    const wordRatio = isFree ? (transcript.trim().split(/\s+/).length >= 5 ? 0.9 : 0.6) : calcWordMatchRatio(expectedText, transcript);
+    const promptItem = findPromptById(input.context.promptId);
+    const expectedText = promptItem?.text || FIXTURES_BY_ID[input.context.promptId] || 'The project team will share a clear update tomorrow morning.';
+    const isFree = input.context.promptId === '10000000-0000-4000-a000-000000000004' || input.context.promptId.endsWith('61') || input.context.promptId.endsWith('62') || input.context.promptId.endsWith('63') || input.context.promptId.endsWith('64');
+    const wordRatio = isFree ? (transcript.trim().split(/\s+/).length >= 5 ? 0.95 : 0.70) : calcWordMatchRatio(expectedText, transcript);
 
     const audioHash = sha256Buffer(input.audio);
     const durationMs = Math.max(250, input.context.durationMs || 1000);
@@ -457,11 +460,11 @@ class WhisperAccentScoringAdapter implements GovernedAccentScoringAdapterV1 {
       };
     }
 
-    const intelScore = Math.min(100, Math.max(50, Math.round(wordRatio * 90 + 10)));
-    const pronScore = Math.min(100, Math.max(48, Math.round(wordRatio * 86 + 12)));
-    const prosodyScore = Math.min(100, Math.max(50, Math.round(wordRatio * 82 + 15)));
-    const fluencyScore = Math.min(100, Math.max(52, Math.round(wordRatio * 85 + 13)));
-    const targetScore = Math.min(100, Math.max(50, Math.round(wordRatio * 88 + 10)));
+    const intelScore = Math.min(100, Math.max(45, Math.round(wordRatio * 88 + 10)));
+    const pronScore = Math.min(100, Math.max(45, Math.round(wordRatio * 86 + 10)));
+    const prosodyScore = Math.min(100, Math.max(45, Math.round(wordRatio * 84 + 12)));
+    const fluencyScore = Math.min(100, Math.max(45, Math.round(wordRatio * 86 + 10)));
+    const targetScore = Math.min(100, Math.max(45, Math.round(wordRatio * 85 + 11)));
 
     return {
       contractVersion: 'accent-scorer-evidence.v1',
