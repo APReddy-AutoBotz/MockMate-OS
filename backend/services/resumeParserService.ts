@@ -1,5 +1,3 @@
-import { CanvasFactory } from 'pdf-parse/worker';
-import { PDFParse } from 'pdf-parse';
 import * as mammoth from 'mammoth';
 import Groq from 'groq-sdk';
 import OpenAI from 'openai';
@@ -286,7 +284,34 @@ const assertRecordSourceExcerpt = (
     }
 
     const candidateSpans = normalizedPhraseSpans(source, excerpt);
-    const span = candidateSpans.find(candidate => occupied.every(existing => !overlaps(candidate, existing)));
+    if (candidateSpans.length === 0) {
+        throw new Error(`Resume provider ${kind}[${index}] source excerpt is missing from the source text`);
+    }
+    let span = candidateSpans.find(candidate => occupied.every(existing => !overlaps(candidate, existing)));
+    if (!span) {
+        for (const candidate of candidateSpans) {
+            let adjustedStart = candidate.start;
+            let adjustedEnd = candidate.end;
+            for (const occ of occupied) {
+                if (overlaps({ start: adjustedStart, end: adjustedEnd }, occ)) {
+                    if (occ.end > adjustedStart && occ.end < adjustedEnd) {
+                        adjustedStart = occ.end;
+                    }
+                    if (occ.start > adjustedStart && occ.start < adjustedEnd) {
+                        adjustedEnd = occ.start;
+                    }
+                }
+            }
+            if (adjustedEnd > adjustedStart) {
+                const adjustedSlice = normalizeGrounding(source).slice(adjustedStart, adjustedEnd);
+                const hasAllFacts = facts.map(sanitizeStr).filter(Boolean).every(fact => containsGroundedPhrase(adjustedSlice, fact));
+                if (hasAllFacts) {
+                    span = { start: adjustedStart, end: adjustedEnd };
+                    break;
+                }
+            }
+        }
+    }
     if (!span) throw new Error(`Resume provider ${kind}[${index}] source excerpt is missing or overlaps another ${kind} record`);
 
     for (const fact of facts.map(sanitizeStr).filter(Boolean)) {
@@ -428,6 +453,8 @@ export const validateProviderExtraction = (raw: unknown, sourceText: string): Re
 export const extractTextFromFile = async (fileBuffer: Buffer, mimetype: string): Promise<string> => {
     try {
         if (mimetype === 'application/pdf') {
+            const { PDFParse } = await import('pdf-parse');
+            const { CanvasFactory } = await import('pdf-parse/worker');
             const parser = new PDFParse({ data: fileBuffer, CanvasFactory });
             try {
                 const data = await parser.getText();
@@ -500,8 +527,10 @@ OUTPUT SHAPE:
 
             const promptExperience = `Extract professional experience records as JSON from this resume text.
 RULES:
-1. For each role include company, position, startDate, endDate, bullets (extract the most impactful 4-6 key bullets per role), and exact sourceExcerpt covering that role.
-2. Never shorten or paraphrase sourceExcerpt; copy the exact substring from the resume text covering that entire role.
+1. For each role include company, position, startDate, endDate, bullets (extract up to 3 key impactful bullets per role), and exact sourceExcerpt covering that role.
+2. For sourceExcerpt, copy the exact continuous substring from the resume text covering that role from its header to its last bullet.
+3. If a role has no bullets under it, its sourceExcerpt MUST only contain its title, company and dates—never include text from subsequent roles.
+4. Never overlap sourceExcerpts between different roles.
 RESUME:
 """
 ${source.substring(0, 16000)}
@@ -511,7 +540,7 @@ OUTPUT SHAPE:
   "experience":[{"company":"","position":"","startDate":"","endDate":"","bullets":[],"sourceExcerpt":""}]
 }`;
 
-            const promptProjects = `Extract projects as JSON from this resume text (up to 6 key projects).
+            const promptProjects = `Extract projects as JSON from this resume text (up to 4 key projects).
 RULES:
 1. For each project include name, description, tools, url, and exact sourceExcerpt covering that project.
 2. Never shorten or paraphrase sourceExcerpt; copy the exact substring from the resume text covering that entire project.
@@ -526,7 +555,9 @@ OUTPUT SHAPE:
 
             const promptEduCerts = `Extract education, certifications, and awards as JSON from this resume text.
 RULES:
-1. For each record include its fields and exact sourceExcerpt covering that record from the resume text.
+1. For each record include its fields and exact sourceExcerpt copied from the resume text.
+2. For certifications and awards, sourceExcerpt MUST only be the item name itself as written in the resume (do NOT prepend section headers like "Certifications:").
+3. For education, sourceExcerpt MUST be the degree and institution text itself (do NOT prepend section headers like "Education").
 RESUME:
 """
 ${source.substring(0, 16000)}
@@ -543,28 +574,28 @@ OUTPUT SHAPE:
                     model,
                     messages: [{ role: 'user', content: promptBasics }],
                     temperature: 0.0,
-                    max_tokens: 1200,
+                    max_tokens: 800,
                     response_format: { type: 'json_object' },
                 }),
                 client.chat.completions.create({
                     model,
                     messages: [{ role: 'user', content: promptExperience }],
                     temperature: 0.0,
-                    max_tokens: 3000,
+                    max_tokens: 2000,
                     response_format: { type: 'json_object' },
                 }),
                 client.chat.completions.create({
                     model,
                     messages: [{ role: 'user', content: promptProjects }],
                     temperature: 0.0,
-                    max_tokens: 1800,
+                    max_tokens: 1200,
                     response_format: { type: 'json_object' },
                 }),
                 client.chat.completions.create({
                     model,
                     messages: [{ role: 'user', content: promptEduCerts }],
                     temperature: 0.0,
-                    max_tokens: 1200,
+                    max_tokens: 800,
                     response_format: { type: 'json_object' },
                 }),
             ]);
