@@ -169,16 +169,32 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
             )}
 
             {suggestionState === 'reviewing' && (
-                <div className="px-6 sm:px-8 py-3 bg-brand-primary/5 border-b border-brand-primary/15 flex-shrink-0">
-                    <p className="text-xs text-brand-primary font-semibold flex items-center gap-2">
-                        <Sparkles className="w-3.5 h-3.5" />
-                        {jdUsed ? 'The target role influenced emphasis only.' : 'Suggestions focus on clearer resume wording.'} Each proposal passed MockMate's factual-integrity checks, but you still decide whether to use it.
+                <div className="px-6 sm:px-8 py-3.5 bg-brand-primary/5 border-b border-brand-primary/15 flex-shrink-0">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <p className="text-xs text-brand-primary font-semibold flex items-center gap-2">
+                            <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                            <span>
+                                {bulletSuggestions.length + (summarySuggestion ? 1 : 0)} verified wording suggestion{bulletSuggestions.length + (summarySuggestion ? 1 : 0) === 1 ? '' : 's'} ready for review
+                                {jdUsed && ' (tailored for target role emphasis)'}
+                            </span>
+                        </p>
+                        {filteredSuggestionCount > 0 && (
+                            <span className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 px-2.5 py-0.5 rounded-full self-start sm:self-auto font-medium">
+                                🛡️ {filteredSuggestionCount} AI draft{filteredSuggestionCount === 1 ? '' : 's'} withheld by Factual Integrity Shield
+                            </span>
+                        )}
+                    </div>
+                    <p className="mt-1 text-[11px] text-brand-tint">
+                        {filteredSuggestionCount > 0 ? (
+                            <>
+                                MockMate verified each proposal against your actual resume facts. <strong>{filteredSuggestionCount} AI draft{filteredSuggestionCount === 1 ? ' was' : 's were'} withheld</strong> because the model attempted to invent numbers, placeholders (like [X%]), or unevidenced claims. Only factually grounded suggestions appear below.
+                            </>
+                        ) : (
+                            "Suggestions focus on clearer resume wording. Each proposal passed MockMate's factual-integrity checks, but you still decide whether to use it."
+                        )}
                     </p>
-                    {filteredSuggestionCount > 0 && (
-                        <p className="mt-1 text-[10px] text-brand-tint">{filteredSuggestionCount} provider suggestion{filteredSuggestionCount === 1 ? ' was' : 's were'} withheld because it did not pass the integrity policy.</p>
-                    )}
                     {pending === 0 && (
-                        <p className="mt-1 text-[10px] text-brand-tint">No unreviewed safe suggestions remain.</p>
+                        <p className="mt-1.5 text-[11px] text-emerald-400 font-medium">All safe suggestions have been reviewed.</p>
                     )}
                 </div>
             )}
@@ -186,12 +202,17 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
             <div className="flex-1 overflow-y-auto px-6 sm:px-8 py-6 space-y-8 custom-scrollbar">
                 <EditorSection title="Professional Summary">
                     {suggestionState === 'reviewing' && summarySuggestion && summaryAccepted === null ? (
-                        <SuggestionBox
-                            original={summarySuggestion.original}
-                            suggested={summarySuggestion.suggested}
-                            onAccept={() => acceptSummary(summarySuggestion)}
-                            onReject={() => setSummaryAccepted(false)}
-                        />
+                        <div className="space-y-2">
+                            <span className="text-[10px] font-semibold text-brand-primary bg-brand-primary/10 border border-brand-primary/20 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                                <Sparkles className="w-2.5 h-2.5" /> 1 suggestion to review
+                            </span>
+                            <SuggestionBox
+                                original={summarySuggestion.original}
+                                suggested={summarySuggestion.suggested}
+                                onAccept={() => acceptSummary(summarySuggestion)}
+                                onReject={() => setSummaryAccepted(false)}
+                            />
+                        </div>
                     ) : (
                         <div className="relative">
                             <textarea value={data.summary || ''} onChange={e => update(d => ({ ...d, summary: e.target.value }))}
@@ -202,10 +223,23 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
                 </EditorSection>
 
                 <EditorSection title="Experience">
-                    {(data.experience || []).map((exp, expIdx) => (
+                    {(data.experience || []).map((exp, expIdx) => {
+                        const rolePendingCount = (exp.bullets || []).filter((_, bIdx) => {
+                            const key = bulletKey(expIdx, bIdx);
+                            return bulletSuggestions.some(s => s.expIdx === expIdx && s.bulletIdx === bIdx) && !acceptedBullets.has(key) && !rejectedBullets.has(key);
+                        }).length;
+
+                        return (
                         <div key={expIdx} className="mb-6 bg-white/[0.02] border border-white/5 rounded-2xl p-5">
                             <div className="flex justify-between items-center mb-4">
-                                <span className="text-[10px] font-bold text-brand-tint uppercase tracking-[0.12em]">Role {expIdx + 1}</span>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-bold text-brand-tint uppercase tracking-[0.12em]">Role {expIdx + 1}</span>
+                                    {rolePendingCount > 0 && suggestionState === 'reviewing' && (
+                                        <span className="text-[10px] font-semibold text-brand-primary bg-brand-primary/10 border border-brand-primary/20 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                            <Sparkles className="w-2.5 h-2.5" /> {rolePendingCount} suggestion{rolePendingCount === 1 ? '' : 's'} to review
+                                        </span>
+                                    )}
+                                </div>
                                 {expIdx > 0 && <button onClick={() => update(d => ({ ...d, experience: (d.experience || []).filter((_, i) => i !== expIdx) }))}
                                     className="text-brand-tint hover:text-red-300 transition-colors"><Trash2 className="w-4 h-4" /></button>}
                             </div>
@@ -254,7 +288,8 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
                                 <Plus className="w-3.5 h-3.5" /> Add bullet
                             </button>
                         </div>
-                    ))}
+                        );
+                    })}
                     <button onClick={() => update(d => ({ ...d, experience: [...(d.experience || []), { company: '', position: '', startDate: '', endDate: '', bullets: [''] }] }))}
                         className="w-full border border-dashed border-white/10 hover:border-brand-primary/30 rounded-2xl py-3 text-xs text-brand-tint hover:text-white transition-all flex items-center justify-center gap-2">
                         <Plus className="w-3.5 h-3.5" /> Add role

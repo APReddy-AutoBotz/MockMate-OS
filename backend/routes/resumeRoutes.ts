@@ -248,14 +248,15 @@ router.post('/suggest', enforceUsageLimit('resume_suggestion'), async (req, res)
     const bulletBlock = allBullets.map((item, i) => `${i + 1}. ${item.original}`).join('\n');
     const resumeEvidence = JSON.stringify(resumeData).substring(0, 12_000);
 
-    const bulletPrompt = `You are a resume wording assistant. You propose wording only; the candidate remains the authority over facts.
+    const bulletPrompt = `You are a resume wording assistant. You propose phrasing improvements only; the candidate remains the sole authority over facts.
 
-NON-NEGOTIABLE RULES:
-- Never add a metric, percentage, number, employer, client, technology, certification, skill, responsibility, outcome, scope, or achievement that is not evidenced in the supplied resume.
-- A target job description may influence emphasis only. Never convert a JD requirement into candidate experience.
-- Never use placeholders such as [X%], [N users], TBD, or invented estimates.
-- Preserve every factual number and named technology already present in each bullet.
-- Keep the meaning of each bullet unchanged and improve only clarity, action verbs, concision, and ATS readability.
+STRICT INTEGRITY RULES (MANDATORY):
+- FACTUAL INTEGRITY SHIELD: MockMate enforces an automated factual-integrity filter. Suggestions that introduce words, skills, or claims not present in the original bullet will be automatically rejected.
+- VOCABULARY RULE: Use only the vocabulary and concepts already present in that specific bullet (morphological variations such as 'managing' -> 'managed' or 'support' -> 'supporting' are allowed). Do NOT introduce new verbs or adjectives (e.g., do NOT invent 'spearheaded', 'orchestrated', 'streamlined', 'pioneered', 'exponentially' unless that word was already in the bullet).
+- NO INVENTED NUMBERS OR METRICS: Never add or alter numbers, percentages, dollar amounts, team sizes, or dates. If a bullet contains no numbers, do NOT add any.
+- NO PLACEHOLDERS: Never use placeholders like [X%], [N users], [metric], or TBD.
+- NO NEW TECHNOLOGIES: Never introduce tools or technologies not mentioned in that bullet.
+- SELECTIVE IMPROVEMENTS: Only propose a rewrite when you can genuinely improve sentence structure, conciseness, grammar, or flow using the candidate's existing words. If a bullet is already strong or cannot be improved without adding new unverified vocabulary, omit it from suggestions.
 - Return a JSON object exactly shaped as {"suggestions":[{"idx":1,"suggested":"..."}]}.
 
 CANDIDATE RESUME EVIDENCE:\n${resumeEvidence}
@@ -264,7 +265,12 @@ ${hasJD ? `\nTARGET JD FOR EMPHASIS ONLY:\n${jdText.substring(0, 4_000)}` : ''}
 BULLETS:\n${bulletBlock}`;
 
     const summaryPrompt = (resumeData.summary || '').trim()
-      ? `You are a resume wording assistant. Rewrite the professional summary using only facts already evidenced in the candidate resume below. Do not add technologies, years of experience, metrics, job titles, certifications, industries, achievements, or JD requirements unless they are already present in the resume. Do not use placeholders. Return JSON exactly as {"suggested":"..."}.\n\nRESUME EVIDENCE:\n${resumeEvidence}${hasJD ? `\n\nTARGET JD FOR EMPHASIS ONLY:\n${jdText.substring(0, 2_000)}` : ''}\n\nORIGINAL SUMMARY:\n${resumeData.summary}`
+      ? `You are a resume wording assistant. Rewrite the professional summary using only facts and vocabulary already evidenced in the candidate resume below.
+STRICT INTEGRITY RULES:
+- Do not add technologies, years of experience, metrics, job titles, certifications, industries, achievements, or JD requirements unless they are already present in the resume.
+- Do not use placeholders (like [X years] or [metric]).
+- Improve conciseness, flow, and professional tone using the candidate's actual qualifications.
+- Return JSON exactly as: {"suggested":"..."}.\n\nRESUME EVIDENCE:\n${resumeEvidence}${hasJD ? `\n\nTARGET JD FOR EMPHASIS ONLY:\n${jdText.substring(0, 2_000)}` : ''}\n\nORIGINAL SUMMARY:\n${resumeData.summary}`
       : null;
 
     const [bulletResponse, summaryResponse] = await Promise.all([
