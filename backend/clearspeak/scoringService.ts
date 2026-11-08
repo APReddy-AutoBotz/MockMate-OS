@@ -42,7 +42,7 @@ export class ClearSpeakScoringUnavailableError extends Error {
 export function isClearSpeakScoringAvailable(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return Boolean(env.GROQ_API_KEY?.trim() || env.OPENAI_API_KEY?.trim());
+  return Boolean(env.OPENAI_API_KEY?.trim() || env.GROQ_API_KEY?.trim());
 }
 
 /**
