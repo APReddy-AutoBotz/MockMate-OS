@@ -281,6 +281,7 @@ const App: React.FC = () => {
     const handleLogout = async () => {
         if (!canLeaveClearSpeak()) return;
         setAuthActionError('');
+        clearActiveInterviewReference();
         try {
             await signOutPreservingLocalPracticeData(() => signOut(auth));
         } catch (error) {
@@ -351,6 +352,8 @@ const App: React.FC = () => {
     const handleRestart = () => {
         if (!canLeaveClearSpeak()) return;
         audioService.playConfirm();
+        clearActiveInterviewReference();
+        setRestoredInterview(null);
         setAppState('HUB');
         setSetupDraft(null);
         setSessionContext(null);
@@ -367,6 +370,8 @@ const App: React.FC = () => {
 
     const handleCancelSession = () => {
         audioService.playEnd();
+        clearActiveInterviewReference();
+        setRestoredInterview(null);
         if (appState === 'SESSION_ACTIVE') {
             if (sessionContext?.sessionType === 'structured') {
                 setAppState('CONTEXT_UPLOAD');

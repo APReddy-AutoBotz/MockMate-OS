@@ -144,4 +144,44 @@ describe('InterviewReport Frontend UI Component Tests', () => {
     expect(screen.getByText('N/A')).toBeInTheDocument();
     expect(screen.queryByText('100', { selector: 'span.text-6xl' })).not.toBeInTheDocument();
   });
+
+  it('8. Renders AI coaching suggestions and how-to-answer prompts', () => {
+    const reportWithCoaching: FinalReport = {
+      ...mockReport,
+      coachPack: {
+        title: 'Targeted Drill Pack',
+        redoNow: {
+          question: 'How do you handle network partitions?',
+          instruction: 'Use the STAR approach: define the cluster topology, isolation detection, and partition recovery.',
+        },
+        micro_drills: [
+          { weakness: 'Network resilience', drill_prompt: 'Explain split-brain mitigation.', focus_point: 'Quorum consensus' }
+        ],
+      },
+      quickWins: ['Explicitly state metrics upfront.'],
+      prioritizedActions: [{ action: 'Practice consensus algorithms', impact: 'high' }],
+      questionPerformance: [
+        {
+          question_text: 'How do you handle network partitions?',
+          user_transcript: 'We employ circuit breakers.',
+          feedback: 'Address quorum consensus.',
+          max_impact_response: 'Situation: When a cross-region network partition occurred...\nTask: Maintain write consistency...',
+          strengths: ['Clear terminology'],
+          improvements: ['Quorum consensus protocols'],
+        },
+      ],
+    };
+
+    render(<InterviewReport report={reportWithCoaching} onRestart={() => {}} />);
+
+    expect(screen.getByText('AI Coaching & Next Steps')).toBeInTheDocument();
+    expect(screen.getByText(/Recommended Drill: Redo Now/i)).toBeInTheDocument();
+    expect(screen.getByText(/Use the STAR approach/i)).toBeInTheDocument();
+    expect(screen.getByText('Quick Wins')).toBeInTheDocument();
+    expect(screen.getByText('Explicitly state metrics upfront.')).toBeInTheDocument();
+    expect(screen.getByText(/AI Suggestion: How to Answer/i)).toBeInTheDocument();
+    expect(screen.getByText(/When a cross-region network partition occurred/i)).toBeInTheDocument();
+    expect(screen.getByText('✓ Clear terminology')).toBeInTheDocument();
+    expect(screen.getByText('• Quorum consensus protocols')).toBeInTheDocument();
+  });
 });

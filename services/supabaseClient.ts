@@ -26,12 +26,22 @@ const notify = (user: any) => subscribers.forEach(cb => cb(user));
 
 let devMockUser: any = null;
 
-const createMockUser = (email: string, pass: string) => ({
-  id: `mock_${Date.now()}`,
-  email,
-  pass, // Keep in memory, do not store in localStorage
-  user_metadata: { full_name: email.split('@')[0] }
-});
+const createMockUser = (email: string, pass: string) => {
+  const cleanEmail = email.toLowerCase().trim();
+  let hash = 0;
+  for (let i = 0; i < cleanEmail.length; i++) {
+    hash = ((hash << 5) - hash) + cleanEmail.charCodeAt(i);
+    hash |= 0;
+  }
+  const cleanSuffix = cleanEmail.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 24);
+  const stableId = `mock_${cleanSuffix}_${Math.abs(hash)}`;
+  return {
+    id: stableId,
+    email: cleanEmail,
+    pass, // Keep in memory, do not store in localStorage
+    user_metadata: { full_name: cleanEmail.split('@')[0] }
+  };
+};
 
 const browserOrigin = () => {
   if (typeof window === 'undefined') return undefined;

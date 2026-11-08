@@ -198,14 +198,17 @@ const normalizedPhraseSpans = (source: string, phrase: string): SourceSpan[] => 
 
 const overlaps = (a: SourceSpan, b: SourceSpan) => Math.max(a.start, b.start) < Math.min(a.end, b.end);
 const excerptLines = (excerpt: string) => excerpt
-    .split(/\r?\n|[•▪◦·]/)
+    .split(/\r?\n/)
+    .flatMap(line => line.split(/(?<=\s)[•▪◦](?=\s)/))
     .map(line => line.trim())
     .filter(Boolean);
 
 const lineIndexContaining = (lines: string[], fact: string): number => {
     const cleanFact = sanitizeStr(fact);
     if (!cleanFact) return -1;
-    return lines.findIndex(line => containsGroundedPhrase(line, cleanFact));
+    const direct = lines.findIndex(line => containsGroundedPhrase(line, cleanFact));
+    if (direct >= 0) return direct;
+    return lines.findIndex(line => containsGroundedPhrase(cleanFact, line));
 };
 
 const looksLikeStandaloneDateLine = (line: string): boolean => {
@@ -252,7 +255,12 @@ const assertExperienceHeaderAssociation = (
 
     for (const bullet of bullets.map(sanitizeStr).filter(Boolean)) {
         const bulletLine = lineIndexContaining(lines, bullet);
-        if (bulletLine < 0) throw new Error(`Resume provider mixed ${kind}[${index}] bullet outside its source record`);
+        if (bulletLine < 0) {
+            if (!containsGroundedPhrase(excerpt, bullet)) {
+                throw new Error(`Resume provider mixed ${kind}[${index}] bullet outside its source record`);
+            }
+            continue;
+        }
         const intervening = lines.slice(headerEndLine + 1, bulletLine);
         const foreignDateBoundary = intervening.some(line => {
             if (!looksLikeStandaloneDateLine(line)) return false;
@@ -491,7 +499,9 @@ OUTPUT SHAPE:
 }`;
 
             const promptRecords = `Extract experience, projects, education, certifications, and awards as JSON from this resume text.
-RULES: For each record include exact sourceExcerpt from text containing that record's facts.
+RULES:
+1. For each record include exact sourceExcerpt from text containing that record's facts (header, title, company/institution/name, dates, and bullets/descriptions).
+2. Never shorten or paraphrase sourceExcerpt; copy the exact substring from the resume text covering that entire record.
 RESUME:
 """
 ${source.substring(0, 16000)}
@@ -510,29 +520,32 @@ OUTPUT SHAPE:
                     model,
                     messages: [{ role: 'user', content: promptBasics }],
                     temperature: 0.0,
-                    max_tokens: 800,
+                    max_tokens: 1500,
                     response_format: { type: 'json_object' },
                 }),
                 client.chat.completions.create({
                     model,
                     messages: [{ role: 'user', content: promptRecords }],
                     temperature: 0.0,
-                    max_tokens: 1500,
+                    max_tokens: 5000,
                     response_format: { type: 'json_object' },
                 }),
             ]);
 
             const p1 = extractJson(getResponseText(res1)) as any;
             const p2 = extractJson(getResponseText(res2)) as any;
+            if (!p1 || typeof p1 !== 'object' || !p2 || typeof p2 !== 'object') {
+                throw new Error('Resume provider returned invalid or incomplete JSON');
+            }
             parsed = {
-                basics: p1?.basics || { name: '', email: '', phone: '', location: '', linkedinUrl: '', portfolioUrl: '' },
-                summary: p1?.summary || '',
-                skills: Array.isArray(p1?.skills) ? p1.skills : [],
-                experience: Array.isArray(p2?.experience) ? p2.experience : [],
-                projects: Array.isArray(p2?.projects) ? p2.projects : [],
-                education: Array.isArray(p2?.education) ? p2.education : [],
-                certifications: Array.isArray(p2?.certifications) ? p2.certifications : [],
-                awards: Array.isArray(p2?.awards) ? p2.awards : [],
+                basics: p1.basics || { name: '', email: '', phone: '', location: '', linkedinUrl: '', portfolioUrl: '' },
+                summary: p1.summary || '',
+                skills: Array.isArray(p1.skills) ? p1.skills : [],
+                experience: Array.isArray(p2.experience) ? p2.experience : [],
+                projects: Array.isArray(p2.projects) ? p2.projects : [],
+                education: Array.isArray(p2.education) ? p2.education : [],
+                certifications: Array.isArray(p2.certifications) ? p2.certifications : [],
+                awards: Array.isArray(p2.awards) ? p2.awards : [],
             };
         } else {
             const response = await client.chat.completions.create({

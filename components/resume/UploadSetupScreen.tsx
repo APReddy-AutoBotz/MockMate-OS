@@ -108,6 +108,8 @@ export const UploadSetupScreen: React.FC<UploadSetupScreenProps> = ({ onComplete
                 experience: experience.map(role => ({ ...role, bullets: role.bullets.filter(Boolean) })),
                 education,
                 projects: [],
+                certifications: [],
+                awards: [],
             };
             const score = await apiClient.post('resume/score', GovernedResumeScoreResponseSchema, {
                 resumeData: builtData,

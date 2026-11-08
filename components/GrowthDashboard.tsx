@@ -22,7 +22,7 @@ export const journalScoreLabel = (score: number | null) => score === null ? 'Not
 
 const GrowthDashboard: React.FC<GrowthDashboardProps> = React.memo(({ onBack, onViewReport }) => {
     const isMobile = useIsMobile();
-    const history = useMemo(() => getSessionHistory().reverse(), []);
+    const history = useMemo(() => [...getSessionHistory()].reverse(), []);
 
     const chartData = useMemo(() => history.map(h => ({
         date: new Date(h.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),

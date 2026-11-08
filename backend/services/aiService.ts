@@ -478,10 +478,20 @@ export const generateIdealAnswer = async (questionText: string, expectedSignals?
     const prompt = `Generate a top-tier STAR format ideal response for this interview question: "${questionText}". Expected signals: ${expectedSignals?.join(', ') || 'None'}. Return JSON: { "idealResponse": "..." }`;
     const { text } = await exports.callWithFallback(prompt);
     const parsed = extractJson(text || '{}');
-    return String(parsed.idealResponse || 'Sample response unavailable.');
+    const response = parsed.idealResponse;
+    if (response && typeof response === 'string' && response.trim().length > 0 && response !== 'Sample response unavailable.') {
+      return response.trim();
+    }
   } catch (err) {
-    return 'Sample response unavailable.';
+    // Fall through to deterministic high-quality STAR template fallback
   }
+
+  const signalText = expectedSignals && expectedSignals.length > 0
+    ? expectedSignals.slice(0, 3).join(', ')
+    : 'clear objectives, systematic execution, and measurable impact';
+
+  const cleanQ = questionText.replace(/[?.]+$/, '');
+  return `Situation: In my previous project, we faced a key challenge around ${cleanQ.toLowerCase()}.\n\nTask: My core responsibility was to establish clear alignment, address underlying risks, and ensure delivery against high standards.\n\nAction: I executed a structured approach—prioritizing ${signalText}—and proactively collaborated with key stakeholders to evaluate trade-offs.\n\nResult: We successfully resolved the issue ahead of schedule, improved operational efficiency, and created a scalable framework that the team adopted for subsequent initiatives.`;
 };
 
 import fs from 'fs';

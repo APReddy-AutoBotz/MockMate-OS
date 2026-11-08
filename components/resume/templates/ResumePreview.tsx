@@ -66,6 +66,22 @@ const ClassicTemplate: React.FC<{ d: ResumeData }> = ({ d }) => {
                     </div>
                 ))}
             </>}
+            {d.projects && d.projects.length > 0 && <>
+                {secTitle('Key Projects')}
+                {d.projects.map((proj, i) => (
+                    <div key={i} style={{ ...expStyle, marginBottom: '12px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1px' }}>
+                            <span style={{ fontWeight: 700, fontSize: '10.5pt' }}>{s(proj.name)}</span>
+                            {proj.tools && proj.tools.length > 0 && (
+                                <span style={{ fontSize: '9pt', color: '#555', fontStyle: 'italic', flexShrink: 0 }}>
+                                    {proj.tools.map(s).filter(Boolean).join(', ')}
+                                </span>
+                            )}
+                        </div>
+                        {s(proj.description) && <p style={{ margin: '2px 0 0', fontSize: '10pt', color: '#333' }}>{s(proj.description)}</p>}
+                    </div>
+                ))}
+            </>}
             {d.skills?.length > 0 && <>
                 {secTitle('Core Competencies')}
                 {d.skills.map((sg, i) => sg.items.filter(s).length > 0 && (
@@ -80,6 +96,27 @@ const ClassicTemplate: React.FC<{ d: ResumeData }> = ({ d }) => {
                     <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
                         <div><span style={{ fontWeight: 700 }}>{s(edu.institution)}</span>{s(edu.degree) && <span style={{ fontStyle: 'italic', color: '#444' }}> — {s(edu.degree)}</span>}</div>
                         {s(edu.year) && <span style={{ fontSize: '9.5pt', color: '#555', flexShrink: 0 }}>{s(edu.year)}</span>}
+                    </div>
+                ))}
+            </>}
+            {d.certifications && d.certifications.length > 0 && <>
+                {secTitle('Certifications')}
+                {d.certifications.map((cert, i) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '5px' }}>
+                        <div>
+                            <span style={{ fontWeight: 700 }}>{s(cert.name)}</span>
+                            {s(cert.issuer) && <span style={{ fontStyle: 'italic', color: '#444' }}> — {s(cert.issuer)}</span>}
+                        </div>
+                        {s(cert.year) && <span style={{ fontSize: '9pt', color: '#555', flexShrink: 0 }}>{s(cert.year)}</span>}
+                    </div>
+                ))}
+            </>}
+            {d.awards && d.awards.length > 0 && <>
+                {secTitle('Honors & Awards')}
+                {d.awards.map((award, i) => (
+                    <div key={i} style={{ marginBottom: '5px' }}>
+                        <span style={{ fontWeight: 700 }}>{s(award.title)}</span>
+                        {s(award.description) && <span style={{ color: '#444' }}> — {s(award.description)}</span>}
                     </div>
                 ))}
             </>}
@@ -121,6 +158,22 @@ const ModernTemplate: React.FC<{ d: ResumeData }> = ({ d }) => {
                     </div>
                 ))}
             </>}
+            {d.projects && d.projects.length > 0 && <>
+                {secTitle('Projects')}
+                {d.projects.map((proj, i) => (
+                    <div key={i} style={{ ...expStyle, marginBottom: '14px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '2px' }}>
+                            <span style={{ fontWeight: 700, fontSize: '10.5pt' }}>{s(proj.name)}</span>
+                            {proj.tools && proj.tools.length > 0 && (
+                                <span style={{ fontSize: '8.5pt', color: '#666', flexShrink: 0 }}>
+                                    {proj.tools.map(s).filter(Boolean).join(', ')}
+                                </span>
+                            )}
+                        </div>
+                        {s(proj.description) && <p style={{ margin: '2px 0 0', fontSize: '9.5pt', color: '#333' }}>{s(proj.description)}</p>}
+                    </div>
+                ))}
+            </>}
             {d.skills?.length > 0 && <>
                 {secTitle('Skills')}
                 <div style={{ marginBottom: '16px' }}>
@@ -138,6 +191,27 @@ const ModernTemplate: React.FC<{ d: ResumeData }> = ({ d }) => {
                     <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                         <div><span style={{ fontWeight: 700 }}>{s(edu.institution)}</span>{s(edu.degree) && <span style={{ color: '#444' }}> — {s(edu.degree)}</span>}</div>
                         {s(edu.year) && <span style={{ fontSize: '9pt', color: '#666', flexShrink: 0 }}>{s(edu.year)}</span>}
+                    </div>
+                ))}
+            </>}
+            {d.certifications && d.certifications.length > 0 && <>
+                {secTitle('Certifications')}
+                {d.certifications.map((cert, i) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                        <div>
+                            <span style={{ fontWeight: 700 }}>{s(cert.name)}</span>
+                            {s(cert.issuer) && <span style={{ color: '#444' }}> — {s(cert.issuer)}</span>}
+                        </div>
+                        {s(cert.year) && <span style={{ fontSize: '9pt', color: '#666', flexShrink: 0 }}>{s(cert.year)}</span>}
+                    </div>
+                ))}
+            </>}
+            {d.awards && d.awards.length > 0 && <>
+                {secTitle('Awards')}
+                {d.awards.map((award, i) => (
+                    <div key={i} style={{ marginBottom: '5px' }}>
+                        <span style={{ fontWeight: 700 }}>{s(award.title)}</span>
+                        {s(award.description) && <span style={{ color: '#444' }}> — {s(award.description)}</span>}
                     </div>
                 ))}
             </>}
@@ -176,6 +250,22 @@ const MinimalTemplate: React.FC<{ d: ResumeData }> = ({ d }) => {
                     </div>
                 ))}
             </>}
+            {d.projects && d.projects.length > 0 && <>
+                {secTitle('Projects')}
+                {d.projects.map((proj, i) => (
+                    <div key={i} style={{ ...expStyle, marginBottom: '16px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1px' }}>
+                            <span style={{ fontWeight: 600, fontSize: '11pt' }}>{s(proj.name)}</span>
+                            {proj.tools && proj.tools.length > 0 && (
+                                <span style={{ fontSize: '8.5pt', color: '#aaa', flexShrink: 0 }}>
+                                    {proj.tools.map(s).filter(Boolean).join(', ')}
+                                </span>
+                            )}
+                        </div>
+                        {s(proj.description) && <p style={{ margin: '2px 0 0', fontWeight: 300, color: '#444', fontSize: '9.5pt' }}>{s(proj.description)}</p>}
+                    </div>
+                ))}
+            </>}
             {d.skills?.length > 0 && <>
                 {secTitle('Skills')}
                 <div style={{ marginBottom: '24px' }}>
@@ -192,6 +282,27 @@ const MinimalTemplate: React.FC<{ d: ResumeData }> = ({ d }) => {
                     <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '7px' }}>
                         <div><span style={{ fontWeight: 500 }}>{s(edu.institution)}</span>{s(edu.degree) && <span style={{ fontWeight: 300, color: '#666' }}> — {s(edu.degree)}</span>}</div>
                         {s(edu.year) && <span style={{ fontSize: '8.5pt', color: '#aaa', flexShrink: 0 }}>{s(edu.year)}</span>}
+                    </div>
+                ))}
+            </>}
+            {d.certifications && d.certifications.length > 0 && <>
+                {secTitle('Certifications')}
+                {d.certifications.map((cert, i) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                        <div>
+                            <span style={{ fontWeight: 500 }}>{s(cert.name)}</span>
+                            {s(cert.issuer) && <span style={{ fontWeight: 300, color: '#666' }}> — {s(cert.issuer)}</span>}
+                        </div>
+                        {s(cert.year) && <span style={{ fontSize: '8.5pt', color: '#aaa' }}>{s(cert.year)}</span>}
+                    </div>
+                ))}
+            </>}
+            {d.awards && d.awards.length > 0 && <>
+                {secTitle('Awards')}
+                {d.awards.map((award, i) => (
+                    <div key={i} style={{ marginBottom: '6px', fontWeight: 300 }}>
+                        <span style={{ fontWeight: 500 }}>{s(award.title)}</span>
+                        {s(award.description) && <span style={{ color: '#666' }}> — {s(award.description)}</span>}
                     </div>
                 ))}
             </>}
@@ -255,6 +366,43 @@ const GraduateTemplate: React.FC<{ d: ResumeData }> = ({ d }) => {
                     </p>
                 ))}
             </>}
+            {d.projects && d.projects.length > 0 && <>
+                {secTitle('Projects')}
+                {d.projects.map((proj, i) => (
+                    <div key={i} style={{ ...expStyle, marginBottom: '12px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontWeight: 700, fontSize: '10.5pt' }}>{s(proj.name)}</span>
+                            {proj.tools && proj.tools.length > 0 && (
+                                <span style={{ fontSize: '8.5pt', color: '#666', flexShrink: 0 }}>
+                                    {proj.tools.map(s).filter(Boolean).join(', ')}
+                                </span>
+                            )}
+                        </div>
+                        {s(proj.description) && <p style={{ margin: '2px 0 0', fontSize: '9.5pt', color: '#444' }}>{s(proj.description)}</p>}
+                    </div>
+                ))}
+            </>}
+            {d.certifications && d.certifications.length > 0 && <>
+                {secTitle('Certifications')}
+                {d.certifications.map((cert, i) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                        <div>
+                            <span style={{ fontWeight: 700 }}>{s(cert.name)}</span>
+                            {s(cert.issuer) && <span style={{ fontStyle: 'italic', color: '#555' }}> — {s(cert.issuer)}</span>}
+                        </div>
+                        {s(cert.year) && <span style={{ fontSize: '9pt', color: '#666' }}>{s(cert.year)}</span>}
+                    </div>
+                ))}
+            </>}
+            {d.awards && d.awards.length > 0 && <>
+                {secTitle('Honors & Awards')}
+                {d.awards.map((award, i) => (
+                    <div key={i} style={{ marginBottom: '5px' }}>
+                        <span style={{ fontWeight: 700 }}>{s(award.title)}</span>
+                        {s(award.description) && <span style={{ color: '#555' }}> — {s(award.description)}</span>}
+                    </div>
+                ))}
+            </>}
         </div>
     );
 };
@@ -267,7 +415,7 @@ const StrategyTemplate: React.FC<{ d: ResumeData }> = ({ d }) => {
     const DARK = '#0f172a';
     const TEAL = '#14b8a6';
     return (
-        <div id="resume-preview-container" style={{ fontFamily: "'Arial','Helvetica Neue',sans-serif", display: 'flex', maxWidth: '210mm', margin: '0 auto', background: '#fff', overflow: 'hidden' }}>
+        <div id="resume-preview-container" style={{ fontFamily: "'Arial','Helvetica Neue',sans-serif", display: 'flex', maxWidth: '210mm', margin: '0 auto', background: '#fff', minHeight: '297mm' }}>
             {/* Left sidebar */}
             <div style={{ width: '36%', background: DARK, color: '#e2e8f0', padding: '36px 22px', flexShrink: 0 }}>
                 <div style={{ fontSize: '17pt', fontWeight: 900, color: '#fff', lineHeight: 1.1, marginBottom: '20px', letterSpacing: '-0.5px', textTransform: 'uppercase' }}>{s(d.basics.name) || 'Your Name'}</div>
@@ -294,6 +442,25 @@ const StrategyTemplate: React.FC<{ d: ResumeData }> = ({ d }) => {
                         </div>
                     ))}
                 </>}
+                {d.certifications && d.certifications.length > 0 && <>
+                    <SideSecTitle color={TEAL}>Certifications</SideSecTitle>
+                    {d.certifications.map((cert, i) => (
+                        <div key={i} style={{ marginBottom: '8px' }}>
+                            <p style={{ fontSize: '8.5pt', fontWeight: 700, color: '#e2e8f0', marginBottom: '1px' }}>{s(cert.name)}</p>
+                            {s(cert.issuer) && <p style={{ fontSize: '7.5pt', color: '#94a3b8', marginBottom: '1px' }}>{s(cert.issuer)}</p>}
+                            {s(cert.year) && <p style={{ fontSize: '7pt', color: '#64748b', margin: 0 }}>{s(cert.year)}</p>}
+                        </div>
+                    ))}
+                </>}
+                {d.awards && d.awards.length > 0 && <>
+                    <SideSecTitle color={TEAL}>Awards</SideSecTitle>
+                    {d.awards.map((award, i) => (
+                        <div key={i} style={{ marginBottom: '8px' }}>
+                            <p style={{ fontSize: '8.5pt', fontWeight: 700, color: '#e2e8f0', marginBottom: '1px' }}>{s(award.title)}</p>
+                            {s(award.description) && <p style={{ fontSize: '7.5pt', color: '#94a3b8', margin: 0 }}>{s(award.description)}</p>}
+                        </div>
+                    ))}
+                </>}
             </div>
             {/* Main area */}
             <div style={{ flex: 1, padding: '36px 28px', background: '#fff', color: '#111' }}>
@@ -313,6 +480,22 @@ const StrategyTemplate: React.FC<{ d: ResumeData }> = ({ d }) => {
                             <ul style={{ margin: 0, paddingLeft: '15px' }}>
                                 {exp.bullets.map(s).filter(Boolean).map((b, j) => <li key={j} style={{ marginBottom: '3px', fontSize: '9.5pt', color: '#222', lineHeight: 1.5 }}>{b}</li>)}
                             </ul>
+                        </div>
+                    ))}
+                </>}
+                {d.projects && d.projects.length > 0 && <>
+                    <MainSecTitle>Projects</MainSecTitle>
+                    {d.projects.map((proj, i) => (
+                        <div key={i} style={{ ...expStyle, marginBottom: '14px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '2px' }}>
+                                <span style={{ fontWeight: 700, fontSize: '10.5pt', color: '#000' }}>{s(proj.name)}</span>
+                                {proj.tools && proj.tools.length > 0 && (
+                                    <span style={{ fontSize: '8pt', color: '#666', flexShrink: 0 }}>
+                                        {proj.tools.map(s).filter(Boolean).join(' · ')}
+                                    </span>
+                                )}
+                            </div>
+                            {s(proj.description) && <p style={{ margin: '2px 0 0', fontSize: '9pt', color: '#333', lineHeight: 1.5 }}>{s(proj.description)}</p>}
                         </div>
                     ))}
                 </>}

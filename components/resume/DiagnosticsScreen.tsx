@@ -91,6 +91,8 @@ export const DiagnosticsScreen: React.FC<DiagnosticsScreenProps> = ({ resumeData
                             <ParsedRow label="Experience" value={resumeData.experience?.length > 0 ? `${resumeData.experience.length} role${resumeData.experience.length > 1 ? 's' : ''}` : undefined} />
                             <ParsedRow label="Skills" value={resumeData.skills?.length > 0 ? resumeData.skills.map(s => s.category).join(', ') : undefined} />
                             <ParsedRow label="Education" value={resumeData.education?.length > 0 ? `${resumeData.education.length} entry` : undefined} />
+                            <ParsedRow label="Projects" value={resumeData.projects?.length > 0 ? `${resumeData.projects.length} project${resumeData.projects.length > 1 ? 's' : ''}` : undefined} optional />
+                            <ParsedRow label="Certifications" value={resumeData.certifications?.length > 0 ? `${resumeData.certifications.length} certification${resumeData.certifications.length > 1 ? 's' : ''}` : undefined} optional />
                         </div>
                     </div>
 
@@ -117,11 +119,13 @@ const IssueList: React.FC<{ title: string; tone: 'error' | 'warning'; issues: an
     </div>
 );
 
-const ParsedRow: React.FC<{ label: string; value?: string }> = ({ label, value }) => (
+const ParsedRow: React.FC<{ label: string; value?: string; optional?: boolean }> = ({ label, value, optional }) => (
     <div className="flex justify-between items-start gap-4 py-1.5 border-b border-[var(--color-paper-border)] last:border-0">
         <span className="text-xs font-semibold text-[var(--color-paper-muted)] flex-shrink-0">{label}</span>
         {value
             ? <span className="text-xs text-brand-dark text-right font-medium">{value}</span>
+            : optional
+            ? <span className="text-xs text-[var(--color-paper-muted)] font-medium">None added</span>
             : <span className="text-xs text-red-600 font-medium">Missing. Add this.</span>}
     </div>
 );

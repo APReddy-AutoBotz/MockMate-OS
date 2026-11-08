@@ -53,7 +53,9 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
             skills: (prev.skills || []).map(s => ({ ...s, items: [...s.items] })),
             experience: (prev.experience || []).map(e => ({ ...e, bullets: [...e.bullets] })),
             education: (prev.education || []).map(e => ({ ...e })),
-            projects: prev.projects ? prev.projects.map(p => ({ ...p })) : []
+            projects: prev.projects ? prev.projects.map(p => ({ ...p, tools: [...(p.tools || [])] })) : [],
+            certifications: prev.certifications ? prev.certifications.map(c => ({ ...c })) : [],
+            awards: prev.awards ? prev.awards.map(a => ({ ...a })) : [],
         }));
         if (suggestionState === 'reviewing') {
             clearSuggestionReview('Your resume changed while suggestions were open, so the old suggestions were discarded. Request fresh suggestions to continue.');
@@ -306,6 +308,53 @@ export const RewriteEditorScreen: React.FC<RewriteEditorScreenProps> = ({ resume
                     <button onClick={() => update(d => ({ ...d, education: [...(d.education || []), { institution: '', degree: '', year: '' }] }))}
                         className="text-xs text-brand-primary/80 hover:text-brand-primary flex items-center gap-1.5 transition-colors mt-1">
                         <Plus className="w-3.5 h-3.5" /> Add education
+                    </button>
+                </EditorSection>
+
+                <EditorSection title="Projects">
+                    {(data.projects || []).map((project, i) => (
+                        <div key={i} className="mb-4 bg-white/[0.02] border border-white/5 rounded-2xl p-4">
+                            <div className="flex justify-between items-center mb-3">
+                                <span className="text-xs font-bold text-brand-tint uppercase tracking-[0.12em]">Project {i + 1}</span>
+                                <button onClick={() => update(d => ({ ...d, projects: (d.projects || []).filter((_, idx) => idx !== i) }))}
+                                    className="text-brand-tint hover:text-red-300 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-2">
+                                <div><label className={labelCls}>Project Name</label>
+                                    <input value={project.name} onChange={e => update(d => { d.projects![i].name = e.target.value; return d; })} className={inputCls} placeholder="Project name" /></div>
+                                <div><label className={labelCls}>Tools & Technologies</label>
+                                    <input value={(project.tools || []).join(', ')} onChange={e => update(d => { d.projects![i].tools = e.target.value.split(',').map(t => t.trim()).filter(Boolean); return d; })} className={inputCls} placeholder="e.g. UiPath, Python, SAP" /></div>
+                            </div>
+                            <div>
+                                <label className={labelCls}>Description</label>
+                                <textarea rows={2} value={project.description} onChange={e => update(d => { d.projects![i].description = e.target.value; return d; })} className={inputCls} placeholder="Describe the project objective, your role, and results" />
+                            </div>
+                        </div>
+                    ))}
+                    <button onClick={() => update(d => ({ ...d, projects: [...(d.projects || []), { name: '', description: '', tools: [] }] }))}
+                        className="text-xs text-brand-primary/80 hover:text-brand-primary flex items-center gap-1.5 transition-colors mt-1">
+                        <Plus className="w-3.5 h-3.5" /> Add project
+                    </button>
+                </EditorSection>
+
+                <EditorSection title="Certifications">
+                    {(data.certifications || []).map((cert, i) => (
+                        <div key={i} className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3 items-center">
+                            <div><label className={labelCls}>Certification Name</label>
+                                <input value={cert.name} onChange={e => update(d => { d.certifications![i].name = e.target.value; return d; })} className={inputCls} placeholder="e.g. UiPath Associate" /></div>
+                            <div><label className={labelCls}>Issuer / Organization</label>
+                                <input value={cert.issuer} onChange={e => update(d => { d.certifications![i].issuer = e.target.value; return d; })} className={inputCls} placeholder="e.g. UiPath, SAS" /></div>
+                            <div className="flex gap-2 items-end">
+                                <div className="flex-1"><label className={labelCls}>Year</label>
+                                    <input value={cert.year || ''} onChange={e => update(d => { d.certifications![i].year = e.target.value; return d; })} className={inputCls} placeholder="e.g. 2023" /></div>
+                                <button onClick={() => update(d => ({ ...d, certifications: (d.certifications || []).filter((_, idx) => idx !== i) }))}
+                                    className="text-brand-tint hover:text-red-300 transition-colors pb-3"><Trash2 className="w-4 h-4" /></button>
+                            </div>
+                        </div>
+                    ))}
+                    <button onClick={() => update(d => ({ ...d, certifications: [...(d.certifications || []), { name: '', issuer: '', year: '' }] }))}
+                        className="text-xs text-brand-primary/80 hover:text-brand-primary flex items-center gap-1.5 transition-colors mt-1">
+                        <Plus className="w-3.5 h-3.5" /> Add certification
                     </button>
                 </EditorSection>
             </div>

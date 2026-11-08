@@ -71,6 +71,26 @@ const buildClassic = (d: ResumeData): Paragraph[] => {
         });
     }
 
+    // Projects
+    if (d.projects?.length) {
+        children.push(sectionTitle('Key Projects'));
+        d.projects.forEach(proj => {
+            children.push(new Paragraph({
+                spacing: { before: 120, after: 30 },
+                children: [
+                    new TextRun({ text: s(proj.name), bold: true, size: 21, font: 'Georgia' }),
+                    ...((proj.tools?.length) ? [new TextRun({ text: `  ·  ${proj.tools.map(s).filter(Boolean).join(', ')}`, size: 18, font: 'Georgia', color: '666666', italics: true })] : [])
+                ]
+            }));
+            if (s(proj.description)) {
+                children.push(new Paragraph({
+                    spacing: { after: 60 },
+                    children: [new TextRun({ text: s(proj.description), size: 19, font: 'Georgia' })]
+                }));
+            }
+        });
+    }
+
     // Skills
     if (d.skills?.length) {
         children.push(sectionTitle('Core Competencies'));
@@ -97,6 +117,35 @@ const buildClassic = (d: ResumeData): Paragraph[] => {
                     new TextRun({ text: s(edu.institution), bold: true, size: 20, font: 'Georgia' }),
                     ...(s(edu.degree) ? [new TextRun({ text: ` — ${s(edu.degree)}`, italics: true, size: 19, font: 'Georgia', color: '444444' })] : []),
                     ...(s(edu.year) ? [new TextRun({ text: `  ${s(edu.year)}`, size: 18, font: 'Georgia', color: '666666' })] : [])
+                ]
+            }));
+        });
+    }
+
+    // Certifications
+    if (d.certifications?.length) {
+        children.push(sectionTitle('Certifications'));
+        d.certifications.forEach(cert => {
+            children.push(new Paragraph({
+                spacing: { after: 50 },
+                children: [
+                    new TextRun({ text: s(cert.name), bold: true, size: 20, font: 'Georgia' }),
+                    ...(s(cert.issuer) ? [new TextRun({ text: ` — ${s(cert.issuer)}`, italics: true, size: 19, font: 'Georgia', color: '444444' })] : []),
+                    ...(s(cert.year) ? [new TextRun({ text: `  ${s(cert.year)}`, size: 18, font: 'Georgia', color: '666666' })] : [])
+                ]
+            }));
+        });
+    }
+
+    // Awards
+    if (d.awards?.length) {
+        children.push(sectionTitle('Honors & Awards'));
+        d.awards.forEach(award => {
+            children.push(new Paragraph({
+                spacing: { after: 50 },
+                children: [
+                    new TextRun({ text: s(award.title), bold: true, size: 20, font: 'Georgia' }),
+                    ...(s(award.description) ? [new TextRun({ text: ` — ${s(award.description)}`, size: 19, font: 'Georgia', color: '444444' })] : [])
                 ]
             }));
         });
@@ -155,6 +204,25 @@ const buildModern = (d: ResumeData): Paragraph[] => {
         });
     }
 
+    if (d.projects?.length) {
+        children.push(secTitle('Projects'));
+        d.projects.forEach(proj => {
+            children.push(new Paragraph({
+                spacing: { before: 120, after: 30 },
+                children: [
+                    new TextRun({ text: s(proj.name), bold: true, size: 21, font: 'Arial' }),
+                    ...((proj.tools?.length) ? [new TextRun({ text: `  ·  ${proj.tools.map(s).filter(Boolean).join(', ')}`, size: 18, font: 'Arial', color: '666666' })] : [])
+                ]
+            }));
+            if (s(proj.description)) {
+                children.push(new Paragraph({
+                    spacing: { after: 60 },
+                    children: [new TextRun({ text: s(proj.description), size: 19, font: 'Arial', color: '333333' })]
+                }));
+            }
+        });
+    }
+
     if (d.skills?.length) {
         children.push(secTitle('Skills'));
         d.skills.forEach(sg => {
@@ -179,6 +247,33 @@ const buildModern = (d: ResumeData): Paragraph[] => {
                     new TextRun({ text: s(edu.institution), bold: true, size: 20, font: 'Arial' }),
                     ...(s(edu.degree) ? [new TextRun({ text: ` — ${s(edu.degree)}`, size: 19, font: 'Arial', color: '555555' })] : []),
                     ...(s(edu.year) ? [new TextRun({ text: `   ${s(edu.year)}`, size: 18, font: 'Arial', color: '777777' })] : [])
+                ]
+            }));
+        });
+    }
+
+    if (d.certifications?.length) {
+        children.push(secTitle('Certifications'));
+        d.certifications.forEach(cert => {
+            children.push(new Paragraph({
+                spacing: { after: 60 },
+                children: [
+                    new TextRun({ text: s(cert.name), bold: true, size: 20, font: 'Arial' }),
+                    ...(s(cert.issuer) ? [new TextRun({ text: ` — ${s(cert.issuer)}`, size: 19, font: 'Arial', color: '555555' })] : []),
+                    ...(s(cert.year) ? [new TextRun({ text: `   ${s(cert.year)}`, size: 18, font: 'Arial', color: '777777' })] : [])
+                ]
+            }));
+        });
+    }
+
+    if (d.awards?.length) {
+        children.push(secTitle('Awards'));
+        d.awards.forEach(award => {
+            children.push(new Paragraph({
+                spacing: { after: 60 },
+                children: [
+                    new TextRun({ text: s(award.title), bold: true, size: 20, font: 'Arial' }),
+                    ...(s(award.description) ? [new TextRun({ text: ` — ${s(award.description)}`, size: 19, font: 'Arial', color: '555555' })] : [])
                 ]
             }));
         });
@@ -235,6 +330,25 @@ const buildMinimal = (d: ResumeData): Paragraph[] => {
         });
     }
 
+    if (d.projects?.length) {
+        children.push(secTitle('Projects'));
+        d.projects.forEach(proj => {
+            children.push(new Paragraph({
+                spacing: { before: 120, after: 20 },
+                children: [
+                    new TextRun({ text: s(proj.name), bold: true, size: 21, font: 'Arial' }),
+                    ...((proj.tools?.length) ? [new TextRun({ text: `   ${proj.tools.map(s).filter(Boolean).join(' · ')}`, size: 17, color: 'aaaaaa', font: 'Arial' })] : [])
+                ]
+            }));
+            if (s(proj.description)) {
+                children.push(new Paragraph({
+                    spacing: { after: 60 },
+                    children: [new TextRun({ text: s(proj.description), size: 19, font: 'Arial', color: '444444' })]
+                }));
+            }
+        });
+    }
+
     if (d.skills?.length) {
         children.push(secTitle('Skills'));
         d.skills.forEach(sg => {
@@ -259,6 +373,33 @@ const buildMinimal = (d: ResumeData): Paragraph[] => {
                     new TextRun({ text: s(edu.institution), bold: true, size: 20, font: 'Arial', color: '111111' }),
                     ...(s(edu.degree) ? [new TextRun({ text: ` — ${s(edu.degree)}`, size: 19, font: 'Arial', color: '666666' })] : []),
                     ...(s(edu.year) ? [new TextRun({ text: `   ${s(edu.year)}`, size: 18, font: 'Arial', color: 'aaaaaa' })] : [])
+                ]
+            }));
+        });
+    }
+
+    if (d.certifications?.length) {
+        children.push(secTitle('Certifications'));
+        d.certifications.forEach(cert => {
+            children.push(new Paragraph({
+                spacing: { after: 60 },
+                children: [
+                    new TextRun({ text: s(cert.name), bold: true, size: 20, font: 'Arial', color: '111111' }),
+                    ...(s(cert.issuer) ? [new TextRun({ text: ` — ${s(cert.issuer)}`, size: 19, font: 'Arial', color: '666666' })] : []),
+                    ...(s(cert.year) ? [new TextRun({ text: `   ${s(cert.year)}`, size: 18, font: 'Arial', color: 'aaaaaa' })] : [])
+                ]
+            }));
+        });
+    }
+
+    if (d.awards?.length) {
+        children.push(secTitle('Awards'));
+        d.awards.forEach(award => {
+            children.push(new Paragraph({
+                spacing: { after: 60 },
+                children: [
+                    new TextRun({ text: s(award.title), bold: true, size: 20, font: 'Arial', color: '111111' }),
+                    ...(s(award.description) ? [new TextRun({ text: ` — ${s(award.description)}`, size: 19, font: 'Arial', color: '666666' })] : [])
                 ]
             }));
         });
@@ -352,6 +493,52 @@ const buildGraduate = (d: ResumeData): Paragraph[] => {
         });
     }
 
+    if (d.projects?.length) {
+        children.push(secTitle('Projects'));
+        d.projects.forEach(proj => {
+            children.push(new Paragraph({
+                spacing: { before: 100, after: 30 },
+                children: [
+                    new TextRun({ text: s(proj.name), bold: true, size: 21, font: 'Georgia' }),
+                    ...((proj.tools?.length) ? [new TextRun({ text: `  ·  ${proj.tools.map(s).filter(Boolean).join(', ')}`, size: 18, color: '666666', font: 'Georgia' })] : [])
+                ]
+            }));
+            if (s(proj.description)) {
+                children.push(new Paragraph({
+                    spacing: { after: 60 },
+                    children: [new TextRun({ text: s(proj.description), size: 19, font: 'Georgia' })]
+                }));
+            }
+        });
+    }
+
+    if (d.certifications?.length) {
+        children.push(secTitle('Certifications'));
+        d.certifications.forEach(cert => {
+            children.push(new Paragraph({
+                spacing: { after: 50 },
+                children: [
+                    new TextRun({ text: s(cert.name), bold: true, size: 20, font: 'Georgia' }),
+                    ...(s(cert.issuer) ? [new TextRun({ text: ` — ${s(cert.issuer)}`, italics: true, size: 19, font: 'Georgia', color: '555555' })] : []),
+                    ...(s(cert.year) ? [new TextRun({ text: `  ${s(cert.year)}`, size: 18, font: 'Georgia', color: '777777' })] : [])
+                ]
+            }));
+        });
+    }
+
+    if (d.awards?.length) {
+        children.push(secTitle('Honors & Awards'));
+        d.awards.forEach(award => {
+            children.push(new Paragraph({
+                spacing: { after: 50 },
+                children: [
+                    new TextRun({ text: s(award.title), bold: true, size: 20, font: 'Georgia' }),
+                    ...(s(award.description) ? [new TextRun({ text: ` — ${s(award.description)}`, size: 19, font: 'Georgia', color: '555555' })] : [])
+                ]
+            }));
+        });
+    }
+
     return children;
 };
 
@@ -423,6 +610,25 @@ const buildStrategy = (d: ResumeData): Paragraph[] => {
         });
     }
 
+    if (d.projects?.length) {
+        children.push(secTitle('Projects'));
+        d.projects.forEach(proj => {
+            children.push(new Paragraph({
+                spacing: { before: 120, after: 30 },
+                children: [
+                    new TextRun({ text: s(proj.name), bold: true, size: 21, font: 'Arial', color: '000000' }),
+                    ...((proj.tools?.length) ? [new TextRun({ text: `   ${proj.tools.map(s).filter(Boolean).join(' · ')}`, size: 17, color: '666666', font: 'Arial' })] : [])
+                ]
+            }));
+            if (s(proj.description)) {
+                children.push(new Paragraph({
+                    spacing: { after: 60 },
+                    children: [new TextRun({ text: s(proj.description), size: 19, font: 'Arial', color: '333333' })]
+                }));
+            }
+        });
+    }
+
     if (d.education?.length) {
         children.push(secTitle('Education'));
         d.education.forEach(edu => {
@@ -432,6 +638,33 @@ const buildStrategy = (d: ResumeData): Paragraph[] => {
                     new TextRun({ text: s(edu.institution), bold: true, size: 21, font: 'Arial', color: '0f172a' }),
                     ...(s(edu.degree) ? [new TextRun({ text: `  —  ${s(edu.degree)}`, size: 19, font: 'Arial', color: '555555' })] : []),
                     ...(s(edu.year) ? [new TextRun({ text: `   ${s(edu.year)}`, size: 17, font: 'Arial', color: '888888' })] : [])
+                ]
+            }));
+        });
+    }
+
+    if (d.certifications?.length) {
+        children.push(secTitle('Certifications'));
+        d.certifications.forEach(cert => {
+            children.push(new Paragraph({
+                spacing: { after: 50 },
+                children: [
+                    new TextRun({ text: s(cert.name), bold: true, size: 20, font: 'Arial', color: '0f172a' }),
+                    ...(s(cert.issuer) ? [new TextRun({ text: `  —  ${s(cert.issuer)}`, size: 19, font: 'Arial', color: '555555' })] : []),
+                    ...(s(cert.year) ? [new TextRun({ text: `   ${s(cert.year)}`, size: 17, font: 'Arial', color: '888888' })] : [])
+                ]
+            }));
+        });
+    }
+
+    if (d.awards?.length) {
+        children.push(secTitle('Awards'));
+        d.awards.forEach(award => {
+            children.push(new Paragraph({
+                spacing: { after: 50 },
+                children: [
+                    new TextRun({ text: s(award.title), bold: true, size: 20, font: 'Arial', color: '0f172a' }),
+                    ...(s(award.description) ? [new TextRun({ text: `  —  ${s(award.description)}`, size: 19, font: 'Arial', color: '555555' })] : [])
                 ]
             }));
         });
