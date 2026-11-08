@@ -498,42 +498,82 @@ OUTPUT SHAPE:
   "skills":[{"category":"","items":[]}]
 }`;
 
-            const promptRecords = `Extract experience, projects, education, certifications, and awards as JSON from this resume text.
+            const promptExperience = `Extract professional experience records as JSON from this resume text.
 RULES:
-1. For each record include exact sourceExcerpt from text containing that record's facts (header, title, company/institution/name, dates, and bullets/descriptions).
-2. Never shorten or paraphrase sourceExcerpt; copy the exact substring from the resume text covering that entire record.
+1. For each role include company, position, startDate, endDate, bullets (extract the most impactful 4-6 key bullets per role), and exact sourceExcerpt covering that role.
+2. Never shorten or paraphrase sourceExcerpt; copy the exact substring from the resume text covering that entire role.
 RESUME:
 """
 ${source.substring(0, 16000)}
 """
 OUTPUT SHAPE:
 {
-  "experience":[{"company":"","position":"","startDate":"","endDate":"","bullets":[],"sourceExcerpt":""}],
-  "projects":[{"name":"","description":"","tools":[],"url":"","sourceExcerpt":""}],
+  "experience":[{"company":"","position":"","startDate":"","endDate":"","bullets":[],"sourceExcerpt":""}]
+}`;
+
+            const promptProjects = `Extract projects as JSON from this resume text (up to 6 key projects).
+RULES:
+1. For each project include name, description, tools, url, and exact sourceExcerpt covering that project.
+2. Never shorten or paraphrase sourceExcerpt; copy the exact substring from the resume text covering that entire project.
+RESUME:
+"""
+${source.substring(0, 16000)}
+"""
+OUTPUT SHAPE:
+{
+  "projects":[{"name":"","description":"","tools":[],"url":"","sourceExcerpt":""}]
+}`;
+
+            const promptEduCerts = `Extract education, certifications, and awards as JSON from this resume text.
+RULES:
+1. For each record include its fields and exact sourceExcerpt covering that record from the resume text.
+RESUME:
+"""
+${source.substring(0, 16000)}
+"""
+OUTPUT SHAPE:
+{
   "education":[{"institution":"","degree":"","year":"","sourceExcerpt":""}],
   "certifications":[{"name":"","issuer":"","year":"","sourceExcerpt":""}],
   "awards":[{"title":"","description":"","sourceExcerpt":""}]
 }`;
 
-            const [res1, res2] = await Promise.all([
+            const [res1, res2, res3, res4] = await Promise.all([
                 client.chat.completions.create({
                     model,
                     messages: [{ role: 'user', content: promptBasics }],
                     temperature: 0.0,
-                    max_tokens: 1500,
+                    max_tokens: 1200,
                     response_format: { type: 'json_object' },
                 }),
                 client.chat.completions.create({
                     model,
-                    messages: [{ role: 'user', content: promptRecords }],
+                    messages: [{ role: 'user', content: promptExperience }],
                     temperature: 0.0,
-                    max_tokens: 5000,
+                    max_tokens: 3000,
+                    response_format: { type: 'json_object' },
+                }),
+                client.chat.completions.create({
+                    model,
+                    messages: [{ role: 'user', content: promptProjects }],
+                    temperature: 0.0,
+                    max_tokens: 1800,
+                    response_format: { type: 'json_object' },
+                }),
+                client.chat.completions.create({
+                    model,
+                    messages: [{ role: 'user', content: promptEduCerts }],
+                    temperature: 0.0,
+                    max_tokens: 1200,
                     response_format: { type: 'json_object' },
                 }),
             ]);
 
             const p1 = extractJson(getResponseText(res1)) as any;
             const p2 = extractJson(getResponseText(res2)) as any;
+            const p3 = extractJson(getResponseText(res3)) as any;
+            const p4 = extractJson(getResponseText(res4)) as any;
+
             if (!p1 || typeof p1 !== 'object' || !p2 || typeof p2 !== 'object') {
                 throw new Error('Resume provider returned invalid or incomplete JSON');
             }
@@ -542,10 +582,10 @@ OUTPUT SHAPE:
                 summary: p1.summary || '',
                 skills: Array.isArray(p1.skills) ? p1.skills : [],
                 experience: Array.isArray(p2.experience) ? p2.experience : [],
-                projects: Array.isArray(p2.projects) ? p2.projects : [],
-                education: Array.isArray(p2.education) ? p2.education : [],
-                certifications: Array.isArray(p2.certifications) ? p2.certifications : [],
-                awards: Array.isArray(p2.awards) ? p2.awards : [],
+                projects: Array.isArray(p3?.projects) ? p3.projects : [],
+                education: Array.isArray(p4?.education) ? p4.education : [],
+                certifications: Array.isArray(p4?.certifications) ? p4.certifications : [],
+                awards: Array.isArray(p4?.awards) ? p4.awards : [],
             };
         } else {
             const response = await client.chat.completions.create({

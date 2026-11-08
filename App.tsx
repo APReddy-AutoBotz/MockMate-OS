@@ -764,13 +764,16 @@ const App: React.FC = () => {
                     </motion.div>
                 );
             case 'CONTEXT_UPLOAD':
+                if (!setupDraft) {
+                    return null;
+                }
                 return (
                     <motion.div key="context" {...pageAnimation} className="w-full max-w-5xl px-0 sm:px-4">
                         <AppContainer>
                             <ErrorBoundary>
                                 <SessionPrep
                                     onContextReady={handleContextReady}
-                                    draft={setupDraft!}
+                                    draft={setupDraft}
                                     onGoBack={handleGoBack}
                                 />
                             </ErrorBoundary>

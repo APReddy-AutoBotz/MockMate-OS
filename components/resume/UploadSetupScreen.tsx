@@ -21,6 +21,9 @@ const friendlyResumeError = (error: unknown) => {
     if ((error instanceof ApiError && error.status === 429) || /429|quota|too many|rate/i.test(message)) {
         return "You've used today's free resume reviews. You can keep editing your resume here and try another review tomorrow.";
     }
+    if ((error instanceof ApiError && error.status === 504) || /504|timeout/i.test(message)) {
+        return 'The resume analysis timed out. We optimized the processing speed—please try submitting again.';
+    }
     if (error instanceof ApiError && error.status === 503) {
         return 'Resume AI is temporarily unavailable. Your file was not changed or saved; please try again later or build the resume manually.';
     }
